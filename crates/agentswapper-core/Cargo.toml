@@ -42,3 +42,7 @@ windows = { version = "=0.62.2", features = ["Win32_System_Threading"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "linux_custody_probe"
+test = true

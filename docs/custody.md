@@ -32,7 +32,7 @@ The probe never signals a PID read from a file. All fixtures have deadlines.
 | Detached writer survives original group kill | Demonstrated locally on WSL2, Linux 6.18.54.1-microsoft-standard-WSL2, and in CI on Ubuntu kernel 7.0.0-1017-azure, 2026-10-27 |
 | Linux delegated cgroup | Not available to the current user on that host; hierarchy and control files are root-owned |
 | macOS detached-writer probe | Passed on macOS 26.6.2 arm64 / Darwin 25.6.0, Rust 1.98.0, at `11ab437` |
-| Windows strict Job containment | Not implemented or verified |
+| Windows Job fixture | Targeted termination, supervisor crash cleanup and breakaway refusal passed at `c728e58` in [CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40465056279/job/122058337169); not integrated into native launch |
 | Real provider isolation and custody | Unverified for every harness |
 
 Process groups remain useful for interrupt delivery. This probe establishes why
@@ -62,7 +62,8 @@ without kill-on-close, and its wait helper does not distinguish an empty-Job
 notification from other completion messages. The native launcher does not use
 it. A separate Windows-only verification example combines its suspended
 assignment with a process-lifetime root Job and independent membership queries.
-Its runtime evidence is still pending; enabling a feature by name is insufficient.
+Its provider-free runtime probe passed in the CI run linked above; enabling a
+feature by name alone is insufficient. Native launch remains uncontained.
 
 Run that provider-free spike on Windows with:
 
@@ -77,6 +78,46 @@ access-denied, rather than an arbitrary spawn error. The root membership query m
 supervisor after targeted termination. Crash cleanup uses a controlled writer's
 lifetime lock and heartbeat as fixture observations; it does not issue a general
 custody certificate. Helpers have deadlines and use private temporary files.
+
+## Delegated Linux cgroup probe
+
+The `linux_custody_probe` example requires an already delegated cgroup v2 parent
+containing the unprivileged supervisor. It never creates a privileged delegation
+or kills the parent. It refuses ordinary directories, links, a root user,
+wrong ownership, writable-by-others directories and threaded groups.
+
+The supervisor creates a unique run group, places its owned child there, verifies
+membership and releases a trusted shim through a private GO pipe. Missing or
+invalid GO and GO without membership refuse execution for individually checked
+reasons; a file named `go` grants no authority. The cooperative fixture target
+double-forks and changes session. The probe requires continuing heartbeats before
+the targeted `cgroup.kill`, then verifies the group is empty, retires it and reaps
+the killed writer. A writer outside that run group must continue. A separate
+test holds an admission descriptor across retirement and requires late entry to
+fail with ENODEV. Fixture processes have deadlines, and cleanup targets only owned groups.
+
+For manual invocation, explicitly supply an already delegated parent containing
+the supervisor (ownership alone does not prove systemd delegated a scope):
+
+```sh
+cargo build --locked -p agentswapper-core --example linux_custody_probe
+target/debug/examples/linux_custody_probe /sys/fs/cgroup/PATH_TO_EXISTING_DELEGATION
+```
+
+The CI helper only accepts membership in its dedicated `aswp-custody-ID-ATTEMPT`
+system service and invokes the probe. It performs no setup and refuses arbitrary
+terminal scopes. Current WSL delegation remains unavailable, so local results cover
+refusal and compilation only. CI creates a separate transient systemd service
+on disposable GitHub-hosted Linux, delegates it to the runner user and executes
+the probe unprivileged. Privileged setup is confined to that workflow; it is not
+run on the user's host or a self-hosted runner. See systemd's
+[delegation settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html).
+Runtime results remain pending until that CI checkpoint completes.
+
+This tests admission and explicit subtree cleanup, not supervisor-crash recovery,
+credential isolation, a hostile process migrating itself out of the delegation,
+or a production custody certificate. The GO pipe is not an authentication boundary
+against other malicious processes running as the same user. Those remain separate gates.
 
 Containment addresses owned local processes. It is not a filesystem sandbox or
 proof about work delegated to an external service. Credential custody, native
