@@ -43,6 +43,8 @@ Deliverables:
   - Kimi storage-layout detection (`KIMI_CODE_HOME`/`~/.kimi-code` vs legacy
     `~/.kimi`);
   - whether WSL2 and the Windows host keep separate credentials.
+- A provider-free Unix process-group escape probe is implemented. See
+  [custody verification](custody.md) for measured results and remaining gates.
 - Crate spikes on all three OSes: `keyring-core` with native stores, `age`,
   bundled `rusqlite`, `portable-pty`, Job Objects, pidfd and cgroup scopes.
 - A provider-terms review checklist. This is a user/legal decision; the product

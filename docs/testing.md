@@ -16,6 +16,7 @@ them to make failures explicit.
 | Concurrency | Concurrent fresh opens and duplicate registration, stale mapping race rollback, OS leases, unresolved intent blocking, manual recovery refused under a live supervisor |
 | Native subprocess | All three home-variable bindings, exact hostile/empty argv forwarding, POSIX non-UTF-8 arguments, child exit status, spawn-error recovery, foreground-group SIGINT recording, opt-in enforcement |
 | Crash | Kill the supervisor while a fixture agent is running; a second launch remains blocked after the OS lock releases |
+| Process groups | A reparented session writer keeps writing after the original group is killed; bounded provider-free probe with cleanup |
 | Disclosure | Canary auth values and argument contents are absent from wrapper error/preview output; the fixture writes only the chosen profile home |
 | CLI | Both binary names, help without opening state, profile lifecycle, duplicate aliases, JSON shape, bounded run history including retired profiles and conservative custody |
 | Handover | Authenticated encrypted round trip, wrong password and tamper refusal, chunk-boundary truncation, bounded work, concurrent exclusive output, source-link/credential-location checks, invisible-character and fence handling, AltGr/repeat input, actual HEAD drift, and broken-pipe failure |
