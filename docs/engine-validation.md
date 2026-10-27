@@ -81,7 +81,12 @@ frozen from `6112a37`, a rebound gents profile and an observed pending native ru
 On the same local Rust/WSL2 environment, all 105 nextest tests passed (one
 intentionally ignored fixture entry). Formatting, Clippy with warnings denied,
 the doctest and dependency policy passed. No new resolved packages were added.
-Cross-platform results for this slice are recorded separately below when available.
+[CI run 40578435624](https://github.com/shahzadlone/agent-swapper/actions/runs/40578435624)
+passed all four jobs for implementation commit `da6b2d9`: Linux, macOS, Windows
+and dependency policy. Tests and doctests passed on all three platforms;
+Windows journal lifecycle stress (ten iterations), the Windows Job probe and
+the Linux delegated-cgroup probe also passed. No test retries or gate changes
+were needed for this checkpoint.
 
 Local regression coverage includes:
 
