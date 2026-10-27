@@ -10,10 +10,12 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 1;
+const SCHEMA: i64 = 2;
+mod journal;
+pub use journal::VerificationReport;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Event {
     Registered {
         profile: Profile,
@@ -121,40 +123,17 @@ impl Store {
             // A second opener may have migrated while this connection waited.
             let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
             if version == 0 {
-                tx.execute_batch(
-                    "
-                    CREATE TABLE event_log (
-                        sequence INTEGER PRIMARY KEY,
-                        payload TEXT NOT NULL CHECK(json_valid(payload)),
-                        recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                    );
-                    CREATE TRIGGER event_no_update BEFORE UPDATE ON event_log
-                        BEGIN SELECT RAISE(ABORT, 'append-only event log'); END;
-                    CREATE TRIGGER event_no_delete BEFORE DELETE ON event_log
-                        BEGIN SELECT RAISE(ABORT, 'append-only event log'); END;
-                    CREATE TABLE profiles (
-                        id TEXT PRIMARY KEY, alias TEXT NOT NULL,
-                        harness TEXT NOT NULL CHECK(harness IN ('claude','codex','kimi')),
-                        enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
-                        retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0,1))
-                    );
-                    CREATE UNIQUE INDEX unique_alias ON profiles(alias) WHERE retired=0;
-                    CREATE TABLE runs (
-                        id TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id),
-                        kind TEXT NOT NULL, exit_code INTEGER, outcome TEXT,
-                        started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-                    );
-                    CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE exit_code IS NULL;
-                    CREATE TABLE mappings (
-                        directory TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id)
-                    );
-                    PRAGMA user_version=1;
-                ",
-                )?;
+                tx.execute_batch(journal::SCHEMA_SQL)?;
             } else if version > SCHEMA {
                 return Err(Error::NewerSchema);
             }
             tx.commit()?;
+        }
+        let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current == 1 {
+            journal::migrate_v1(&mut db, &root)?;
+        } else if current != SCHEMA {
+            return Err(Error::RegistrySchemaChanged);
         }
         Ok(Self { root, db })
     }
@@ -400,10 +379,13 @@ impl Store {
         Err(Error::NotFound)
     }
 
+    pub fn verify(&self) -> Result<VerificationReport> {
+        journal::verify(&self.db)
+    }
+
     pub fn check(&self) -> Result<()> {
-        let check: String = self.db.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-        if check != "ok" {
-            return Err(Error::CorruptRegistry);
+        if !self.verify()?.consistent {
+            return Err(Error::ProjectionMismatch);
         }
         let violation: Option<String> = self
             .db
@@ -422,9 +404,28 @@ impl Store {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version > SCHEMA {
+            return Err(Error::NewerSchema);
+        }
+        if version != SCHEMA {
+            return Err(Error::RegistrySchemaChanged);
+        }
+        journal::validate_event(&event)?;
+        if !journal::verify_snapshot(&tx)?.consistent {
+            return Err(Error::ProjectionMismatch);
+        }
         let json = serde_json::to_string(&event)?;
+        if json.len() > journal::MAX_EVENT_BYTES {
+            return Err(Error::RegistryEventTooLarge);
+        }
         tx.execute("INSERT INTO event_log(payload) VALUES(?1)", [json])?;
-        apply(&tx, &event)?;
+        let recorded_at: String = tx.query_row(
+            "SELECT recorded_at FROM event_log WHERE sequence=last_insert_rowid()",
+            [],
+            |row| row.get(0),
+        )?;
+        apply(&tx, &event, &recorded_at)?;
         tx.commit()?;
         Ok(())
     }
@@ -471,7 +472,7 @@ fn missing_directory_key(path: &Path) -> Result<String> {
         .ok_or(Error::NonUtf8Path)
 }
 
-fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
+fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
     match event {
         Event::Registered { profile: p } => {
             let duplicate: bool = tx.query_row(
@@ -519,6 +520,14 @@ fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             }
         }
         Event::Removed { id } => {
+            let pending: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE profile=?1 AND exit_code IS NULL)",
+                [id.to_string()],
+                |row| row.get(0),
+            )?;
+            if pending {
+                return Err(Error::Busy);
+            }
             if tx.execute(
                 "UPDATE profiles SET retired=1 WHERE id=?1 AND retired=0",
                 [id.to_string()],
@@ -542,8 +551,8 @@ fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 None => return Err(Error::NotFound),
             }
             tx.execute(
-                "INSERT INTO runs(id,profile,kind) VALUES(?1,?2,?3)",
-                params![id, profile.to_string(), kind],
+                "INSERT INTO runs(id,profile,kind,started_at) VALUES(?1,?2,?3,?4)",
+                params![id, profile.to_string(), kind, recorded_at],
             )?;
         }
         Event::RunFinished {
@@ -825,7 +834,7 @@ mod tests {
                 .query_map([], |r| r.get(0)).unwrap().collect::<std::result::Result<_,_>>().unwrap();
             let tx = s.db.transaction().unwrap();
             tx.execute("DELETE FROM profiles", []).unwrap();
-            for json in events { apply(&tx, &serde_json::from_str(&json).unwrap()).unwrap(); }
+            for json in events { apply(&tx, &serde_json::from_str(&json).unwrap(), "2026-01-01T00:00:00.000Z").unwrap(); }
             tx.commit().unwrap();
             prop_assert_eq!(s.profiles().unwrap(), before);
         }

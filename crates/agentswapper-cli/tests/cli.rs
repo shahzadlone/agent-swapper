@@ -113,6 +113,38 @@ fn help_and_alias_work_without_opening_storage() {
 }
 
 #[test]
+fn registry_verify_reports_full_replay_in_json() {
+    let s = Sandbox::new();
+    let output = s
+        .command()
+        .args(["registry", "verify", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["schemaVersion"], 0);
+    assert_eq!(value["data"]["schemaVersion"], 2);
+    assert_eq!(value["data"]["events"], 0);
+    assert_eq!(value["data"]["consistent"], true);
+    s.add("claude", "work");
+    s.run("work").assert().success();
+    let output = s
+        .command()
+        .args(["registry", "verify", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["data"]["events"], 3);
+    assert_eq!(value["data"]["consistent"], true);
+    assert_eq!(value["data"]["mismatchedTables"], serde_json::json!([]));
+}
+
+#[test]
 fn profile_lifecycle_and_json_contract() {
     let s = Sandbox::new();
     s.add("claude", "work");

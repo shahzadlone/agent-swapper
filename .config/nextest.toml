@@ -17,3 +17,7 @@ max-threads = 1
 filter = 'test(/handover/)'
 test-group = "handover-crypto"
 slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "test(/thousand_event/)"
+slow-timeout = { period = "60s", terminate-after = 3 }

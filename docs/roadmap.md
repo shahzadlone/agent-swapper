@@ -65,7 +65,8 @@ Implemented, unreleased:
 - `aswp` and `agentswapper` binaries sharing a Rust core and CLI library;
 - validated profile aliases and opaque IDs; register, list, show, rename,
   enable, disable, and unregister without deleting vendor files;
-- SQLite append-only events and projections in one transaction;
+- SQLite append-only events and projections in one transaction, full replay
+  verification, and a backed-up schema-1 to schema-2 migration;
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;
@@ -77,8 +78,8 @@ Implemented, unreleased:
 - fixture subprocess/crash tests, proptest, terminal snapshots, nextest config,
   pinned toolchain, Clippy, dependency policy, and cross-platform CI definition.
 
-This does not complete M0, M1, M2, or M5. Real-provider auth, full projection
-replay, process containment, independently verified recovery, config, encryption, secret
+This does not complete M0, M1, M2, or M5. Real-provider auth,
+process containment, independently verified recovery, config, secret
 stores, auto switching, and handover remain open. Secret-store/encryption and
 IPC scaffolding are deferred until a concrete consumer exists. Local tests
 establish fixture behavior only; CI and provider matrix evidence are separate.

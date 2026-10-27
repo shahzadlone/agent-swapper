@@ -36,6 +36,14 @@ pub enum Error {
     NewerSchema,
     #[error("registry contains invalid metadata; restore a known-good backup")]
     CorruptRegistry,
+    #[error(
+        "registry projections disagree with the journal; preserve the state and run `aswp registry verify` before launching"
+    )]
+    ProjectionMismatch,
+    #[error("registry schema changed while this process was open; restart AgentSwapper")]
+    RegistrySchemaChanged,
+    #[error("registry event exceeds the 64 KiB metadata limit")]
+    RegistryEventTooLarge,
     #[error("native CLI was not found; install it or supply --executable with an absolute path")]
     ExecutableNotFound,
     #[error("executable must be a regular native program; shell and batch shims are unsupported")]
@@ -114,6 +122,9 @@ impl Error {
             Self::MissingProfileDirectory => "profile_dir_missing",
             Self::NewerSchema => "newer_schema",
             Self::CorruptRegistry => "corrupt_registry",
+            Self::ProjectionMismatch => "projection_mismatch",
+            Self::RegistrySchemaChanged => "registry_schema_changed",
+            Self::RegistryEventTooLarge => "registry_event_too_large",
             Self::ExecutableNotFound => "executable_not_found",
             Self::UnsafeExecutable => "unsafe_executable",
             Self::EnvironmentConflict(_) => "environment_conflict",

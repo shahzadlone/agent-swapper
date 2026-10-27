@@ -162,6 +162,7 @@ impl FromStr for Harness {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub id: ProfileId,
     pub alias: Alias,

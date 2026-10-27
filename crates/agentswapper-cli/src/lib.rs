@@ -47,6 +47,11 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum RegistryCommands {
+    /// Inspect registry consistency by replaying its journal in memory.
+    Registry {
+        #[command(subcommand)]
+        command: RegistryMaintenance,
+    },
     /// Register and manage profiles. Registration does not authenticate an account.
     Profile {
         #[command(subcommand)]
@@ -90,6 +95,12 @@ enum RegistryCommands {
     Unmap { directory: Option<PathBuf> },
     /// Browse profiles and launch preflight in the terminal dashboard.
     Tui,
+}
+
+#[derive(Subcommand)]
+enum RegistryMaintenance {
+    /// Compare every projection with the event journal without rewriting it.
+    Verify,
 }
 
 #[derive(clap::Args)]
@@ -210,6 +221,24 @@ fn dispatch(cli: Cli) -> Result<i32> {
     let mut store = Store::open(&root)?;
     let cwd = std::env::current_dir()?;
     match command {
+        RegistryCommands::Registry {
+            command: RegistryMaintenance::Verify,
+        } => {
+            let report = store.verify()?;
+            let text = if report.consistent {
+                format!(
+                    "Registry verified: {} events; all projections match.",
+                    report.events
+                )
+            } else {
+                format!(
+                    "Registry mismatch: {}. Preserve the state directory before recovery.",
+                    report.mismatched_tables.join(", ")
+                )
+            };
+            emit(cli.json, &report, &text)?;
+            return Ok(if report.consistent { 0 } else { 125 });
+        }
         RegistryCommands::Profile { command } => match command {
             ProfileCommands::Add { harness, alias } => {
                 let p = store.register(harness, alias)?;

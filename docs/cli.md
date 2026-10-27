@@ -15,6 +15,7 @@ aswp list
 aswp profile show work
 aswp status
 aswp doctor
+aswp registry verify
 aswp tui
 ```
 
@@ -23,6 +24,10 @@ email, inspect credential files, or establish available quota. `doctor` checks
 registry integrity and profile directories and discovers executables on PATH;
 it does not run them or claim they are compatible. Account and isolation status
 are `unverified`; quota is `unknown`.
+
+`registry verify` replays all projections in memory and reports mismatches
+without rewriting them. Schema upgrades save a private database backup first.
+See [registry integrity](registry.md) for upgrade and recovery details.
 
 ```sh
 aswp profile alias personal side-project
