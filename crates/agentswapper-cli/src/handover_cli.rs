@@ -112,8 +112,14 @@ fn hidden_passphrase(prompt: &str) -> Result<SecretString> {
     io::stderr().flush()?;
     let mut value = Zeroizing::new(String::new());
     loop {
-        let Event::Key(key) = event::read()? else {
-            continue;
+        let key = match event::read()? {
+            Event::Key(key) => key,
+            Event::Paste(paste) => {
+                let paste = Zeroizing::new(paste);
+                password_paste(&mut value, &paste)?;
+                continue;
+            }
+            _ => continue,
         };
         match password_key(&mut value, key)? {
             PasswordAction::Submit => {
@@ -131,6 +137,14 @@ enum PasswordAction {
     Continue,
     Submit,
     Cancel,
+}
+
+fn password_paste(value: &mut String, paste: &str) -> Result<()> {
+    if value.len() + paste.len() > 4096 || paste.chars().any(char::is_control) {
+        return Err(Error::InvalidPassphrase);
+    }
+    value.push_str(paste);
+    Ok(())
 }
 
 fn password_key(value: &mut String, key: KeyEvent) -> Result<PasswordAction> {
@@ -303,5 +317,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value, "retaine");
+    }
+
+    #[test]
+    fn handover_password_preserves_pasted_text_and_refuses_pasted_controls() {
+        let mut value = "prefix-".to_owned();
+        password_paste(&mut value, "exact \u{20ac} text").unwrap();
+        assert_eq!(value, "prefix-exact \u{20ac} text");
+        assert!(password_paste(&mut value, "unexpected\nline").is_err());
+        assert_eq!(value, "prefix-exact \u{20ac} text");
     }
 }

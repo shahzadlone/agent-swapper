@@ -20,7 +20,10 @@ aswp handover pickup ../task.age --target codex
 Each command uses a hidden terminal passphrase prompt. Packing asks twice;
 use a long, unique passphrase of at least 16 characters. The passphrase is not
 stored or placed in arguments, environment variables, SQLite, or output. Ctrl-C
-or Esc cancels the prompt and restores terminal input. Losing the passphrase
+or Esc cancels the prompt and restores terminal input. AltGr characters,
+repeated keys, and pasted text are preserved; unsupported editing keys and
+pasted control characters produce an error instead of silently changing the
+password. Losing the passphrase
 makes the pack unrecoverable. Keep encrypted packs outside the repository.
 
 `pack` uses a registered profile as an operator-supplied source label. No login

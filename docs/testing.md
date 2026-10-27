@@ -45,10 +45,13 @@ Never enable snapshot auto-update in CI. Review `.snap.new` files locally and
 accept only intentional UX changes.
 
 The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
-Windows, including Clippy and doctests. New handover checks run locally on
-Linux/WSL and need their own cross-platform CI results. Neither a configured
-job nor a fixture result verifies a real provider. There is no lower, untested
-MSRV promise.
+Windows, including Clippy and doctests. Handover changes run through the same
+matrix; check the [workflow](https://github.com/shahzadlone/agent-swapper/actions/workflows/ci.yml)
+against the exact implementation commit before claiming platform coverage.
+Neither a configured job nor a fixture result verifies a real provider. There
+is no lower, untested MSRV promise. Release binaries also passed a local
+pack/inspect/pickup round trip, and a real POSIX terminal check verified hidden
+entry, confirmation, cancellation, and restoration of terminal settings.
 
 ## Gates still required
 
