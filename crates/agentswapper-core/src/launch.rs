@@ -153,6 +153,10 @@ pub fn discover(harness: crate::Harness) -> Option<PathBuf> {
 }
 
 pub(crate) fn discover_named(name: &str) -> Option<PathBuf> {
+    // A minimal Windows environment may omit PATHEXT. Select native programs
+    // explicitly rather than requiring shell-extension discovery.
+    #[cfg(windows)]
+    let name = format!("{name}.exe");
     let path = std::env::var_os("PATH")?;
     let absolute = std::env::split_paths(&path)
         .filter(|entry| entry.is_absolute())

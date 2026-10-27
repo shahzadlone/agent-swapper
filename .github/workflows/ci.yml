@@ -24,15 +24,24 @@ jobs:
         run: cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
       - name: Restore pinned test runner
         id: nextest-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cargo/bin/cargo-nextest*
           key: nextest-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.150
       - name: Install test runner
         if: steps.nextest-cache.outputs.cache-hit != 'true'
         run: cargo +1.98.0 install cargo-nextest --version 0.9.150 --locked
+      - name: Save pinned test runner
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.150
       - name: Tests
         run: cargo +1.98.0 nextest run --locked --workspace --profile ci
+      - name: Report failing tests
+        if: failure()
+        run: python tools/report_test_failures.py target/nextest/ci/junit.xml
       - name: Documentation examples
         run: cargo +1.98.0 test --locked --workspace --doc
 
@@ -43,10 +52,16 @@ jobs:
       - run: rustup toolchain install 1.98.0 --profile minimal
       - name: Restore pinned dependency checker
         id: deny-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cargo/bin/cargo-deny*
           key: deny-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.20.2
       - if: steps.deny-cache.outputs.cache-hit != 'true'
         run: cargo +1.98.0 install cargo-deny --version 0.20.2 --locked
+      - name: Save pinned dependency checker
+        if: steps.deny-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-deny*
+          key: deny-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.20.2
       - run: cargo +1.98.0 deny --locked check
