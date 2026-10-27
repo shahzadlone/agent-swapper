@@ -242,10 +242,17 @@ mod tests {
         )
         .unwrap();
         std::fs::remove_dir(&directory).unwrap();
+        let expected = plan.command().spawn().unwrap_err();
         // No child can start, and this private entry avoids inspecting real
         // inherited auth variables in an otherwise credential-free unit test.
         let error = plan.execute_prepared(&mut store).unwrap_err();
-        assert!(matches!(error,Error::Io(ref e) if e.kind()==std::io::ErrorKind::NotFound));
+        match error {
+            Error::Io(error) => {
+                assert_eq!(error.kind(), expected.kind());
+                assert_eq!(error.raw_os_error(), expected.raw_os_error());
+            }
+            other => panic!("expected the original spawn error, got {other:?}"),
+        }
         let run = store.runs(1).unwrap().pop().unwrap();
         assert_eq!(run.custody, crate::store::ProcessCustody::NeverStarted);
         assert_eq!(run.observed_pid, None);
