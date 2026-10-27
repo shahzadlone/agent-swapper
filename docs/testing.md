@@ -12,6 +12,7 @@ them to make failures explicit.
 | --- | --- |
 | Domain | Generated valid/invalid aliases, checked deserialization, terminal escape handling |
 | SQLite | Event/projection rollback together, append-only triggers, full 1,102-event projection replay, migration backup with WAL contents, schema-1 through schema-4 upgrades preserving unknown observations and session IDs, failed-upgrade rollback, launch refusal on mismatch, future-schema refusal |
+| Preferences | Read-only defaults, typed/versioned parsing, no secret echo, concurrent setters/readers, exact flag precedence, preserved malformed files, busy locks and injected post-publication sync failure |
 | Filesystem | Missing profile directory refusal, POSIX private modes, trusted parent links, internal symlink and hardlinked lease refusal |
 | Concurrency | Concurrent fresh opens and duplicate registration, stale mapping race rollback, OS leases, unresolved intent blocking, manual recovery refused under a live supervisor |
 | Integrity reuse | Warm writer refuses peer corruption, local edits, temporary shadow objects, and changed pragmas; aborted commit never publishes a successful baseline |

@@ -30,6 +30,13 @@ struct Dashboard {
 }
 
 impl Dashboard {
+    fn new(masked: bool) -> Self {
+        Self {
+            masked,
+            ..Self::default()
+        }
+    }
+
     fn visible(&self) -> Vec<&Profile> {
         self.profiles
             .iter()
@@ -63,8 +70,8 @@ impl Drop for Restore {
     }
 }
 
-pub(crate) fn run(store: &Store) -> Result<()> {
-    let mut app = Dashboard::default();
+pub(crate) fn run(store: &Store, masked: bool) -> Result<()> {
+    let mut app = Dashboard::new(masked);
     app.refresh(store)?;
     let _restore = Restore;
     crossterm::terminal::enable_raw_mode()?;
@@ -363,10 +370,11 @@ mod tests {
         store
             .register(Harness::Codex, "confidential-client".parse().unwrap())
             .unwrap();
-        let mut app = Dashboard {
-            masked: true,
-            ..Dashboard::default()
-        };
+        let config = agentswapper_core::config::ConfigStore::new(store.root()).unwrap();
+        config
+            .set(agentswapper_core::config::ConfigKey::UiMask, "true")
+            .unwrap();
+        let mut app = Dashboard::new(config.load().unwrap().ui_mask());
         app.refresh(&store).unwrap();
         let screen = screenshot(&app, 44, 17);
         assert!(!screen.contains("confidential"));

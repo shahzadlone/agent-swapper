@@ -29,7 +29,7 @@ cargo install cargo-deny --version 0.20.2 --locked
 cargo deny --locked check
 ```
 
-Read [CLI usage](docs/cli.md), [testing](docs/testing.md), and the
+Read [CLI usage](docs/cli.md), [preferences](docs/config.md), [testing](docs/testing.md), and the
 [support matrix](docs/support-matrix.md) before changing launch behavior. Keep
 core domain and storage code independent of clap, Ratatui, and terminal state.
 New auth, routing, or switching behavior requires evidence and failure tests.

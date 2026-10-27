@@ -129,13 +129,15 @@ Implemented, unreleased:
 - native launch plans, argument redaction, direct argv forwarding, known
   inherited-auth conflict refusal, and explicit experimental launch opt-in;
 - nearest-directory mapping and JSON schema v0;
+- typed `config list/get/set/unset/path` for history length and initial dashboard masking,
+  with locked atomic updates and explicit flag precedence;
 - storage/discovery doctor and a searchable, maskable Ratatui dashboard with
   launch preflight;
 - fixture subprocess/crash tests, proptest, terminal snapshots, nextest config,
   pinned toolchain, Clippy, dependency policy, and cross-platform CI definition.
 
 This does not complete M0, M1, M2, or M5. Real-provider auth,
-process containment, independently verified recovery, config, secret
+process containment, independently verified recovery, secret
 stores, auto switching, and handover remain open. Secret-store/encryption and
 IPC scaffolding are deferred until a concrete consumer exists. Local tests
 establish fixture behavior only; CI and provider matrix evidence are separate.

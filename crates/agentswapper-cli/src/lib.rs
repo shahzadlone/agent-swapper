@@ -1,4 +1,5 @@
 //! Shared entry point for both command names. JSON is an unstable v0 contract.
+mod config_cli;
 mod engines;
 mod handover_cli;
 mod tui;
@@ -37,6 +38,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Inspect or change non-secret CLI preferences.
+    Config {
+        #[command(subcommand)]
+        command: Option<config_cli::ConfigCommands>,
+    },
     /// Compare execution engines, ownership, benefits and limitations.
     Engines,
     #[command(flatten)]
@@ -68,8 +74,8 @@ enum RegistryCommands {
     /// Inspect recent runs or one run ID, including process-custody observations.
     Runs {
         id: Option<String>,
-        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=200))]
-        limit: u16,
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..=200))]
+        limit: Option<u16>,
     },
     /// Check local storage and discover native CLIs without executing them.
     Doctor,
@@ -103,7 +109,14 @@ enum RegistryCommands {
     /// Remove the mapping for this directory.
     Unmap { directory: Option<PathBuf> },
     /// Browse profiles and launch preflight in the terminal dashboard.
-    Tui,
+    Tui {
+        /// Start with profile aliases hidden, overriding ui.mask.
+        #[arg(long, conflicts_with = "show_aliases")]
+        mask: bool,
+        /// Start with profile aliases visible, overriding ui.mask.
+        #[arg(long)]
+        show_aliases: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -252,6 +265,9 @@ pub fn main_entry(name: &'static str) -> i32 {
 
 fn dispatch(cli: Cli) -> Result<i32> {
     let command = match cli.command {
+        Some(Commands::Config { command }) => {
+            return config_cli::dispatch(command, cli.state_dir, cli.json);
+        }
         Some(Commands::Engines) => {
             return engines::show(cli.json);
         }
@@ -445,6 +461,12 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 let text = run_line(&record);
                 emit(cli.json, &record, &text)?;
             } else {
+                let limit = match limit {
+                    Some(limit) => limit,
+                    None => agentswapper_core::config::ConfigStore::new(store.root())?
+                        .load()?
+                        .history_limit(),
+                };
                 let records = store.runs(limit)?;
                 let text = if records.is_empty() {
                     "No runs recorded. Inspect a launch with: aswp run PROFILE --dry-run".to_owned()
@@ -464,13 +486,22 @@ fn dispatch(cli: Cli) -> Result<i32> {
             } else {
                 "ok"
             };
+            let preferences_issue = agentswapper_core::config::ConfigStore::new(store.root())
+                .and_then(|config| config.load())
+                .err()
+                .map(|error| json!({"code":error.code(),"message":error.to_string()}));
+            let preferences_health = if preferences_issue.is_some() {
+                "needs_attention"
+            } else {
+                "ok"
+            };
             let executables: Vec<_> = Harness::ALL.into_iter().map(|h| json!({"harness":h,"executable":discover(h),"isolation":"unverified","version":"not_probed"})).collect();
             let pending = store.unfinished()?.len();
             emit(
                 cli.json,
-                &json!({"storage":health,"issue":issue, "profilePermissions": if cfg!(unix) {"posix_checked"} else {"acl_not_verified"},"executables":executables,"unfinishedRuns":pending,"containment":"none"}),
+                &json!({"storage":health,"issue":issue,"preferences":{"status":preferences_health,"issue":preferences_issue}, "profilePermissions": if cfg!(unix) {"posix_checked"} else {"acl_not_verified"},"executables":executables,"unfinishedRuns":pending,"containment":"none"}),
                 &format!(
-                    "Storage integrity: {health}\nAgent CLIs: {}\nProfile isolation: unverified\nVersions: not probed\nProcess containment: none\nUnfinished runs: {pending}\n{}\n{}",
+                    "Storage integrity: {health}\nPreferences: {preferences_health}\nAgent CLIs: {}\nProfile isolation: unverified\nVersions: not probed\nProcess containment: none\nUnfinished runs: {pending}\n{}\n{}",
                     Harness::ALL
                         .into_iter()
                         .map(|h| format!(
@@ -490,11 +521,16 @@ fn dispatch(cli: Cli) -> Result<i32> {
                     },
                     issue
                         .as_ref()
+                        .or(preferences_issue.as_ref())
                         .and_then(|value| value["message"].as_str())
                         .unwrap_or("No local storage issue detected.")
                 ),
             )?;
-            return Ok(if issue.is_some() { 125 } else { 0 });
+            return Ok(if issue.is_some() || preferences_issue.is_some() {
+                125
+            } else {
+                0
+            });
         }
         RegistryCommands::Recover {
             run_id,
@@ -577,11 +613,20 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 "Directory mapping removed.",
             )?;
         }
-        RegistryCommands::Tui => {
+        RegistryCommands::Tui { mask, show_aliases } => {
             if cli.json || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
                 return Err(Error::InteractiveMode);
             }
-            tui::run(&store)?;
+            let masked = if mask {
+                true
+            } else if show_aliases {
+                false
+            } else {
+                agentswapper_core::config::ConfigStore::new(store.root())?
+                    .load()?
+                    .ui_mask()
+            };
+            tui::run(&store, masked)?;
         }
     }
     Ok(0)

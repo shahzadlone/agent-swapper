@@ -18,13 +18,14 @@ aswp status
 aswp runs
 aswp runs RUN_ID --json
 aswp doctor
+aswp config
 aswp registry verify
 aswp tui
 ```
 
 Registration creates an empty profile. It does not authenticate, discover your
 email, inspect credential files, or establish available quota. `doctor` checks
-registry integrity and profile directories and discovers executables on PATH;
+registry integrity, profile directories and CLI preferences, and discovers executables on PATH;
 it does not run them or claim they are compatible. Account and isolation status
 are `unverified`; quota is `unknown`.
 
@@ -92,8 +93,9 @@ profile lease. This is not independently verified custody and never drives
 automatic routing. Preserve state if you are unsure. A normal
 direct-child exit is recorded but does not prove its descendants have stopped.
 
-`aswp runs` shows the 20 most recent runs in journal order, including across
-wall-clock changes; `--limit` accepts 1 through 200.
+`aswp runs` shows recent runs in journal order, including across wall-clock
+changes. The default is 20; `config set history.limit N` saves another default,
+and `--limit` overrides it. Both accept 1 through 200.
 `aswp runs RUN_ID` inspects one run, including retired profiles. Aliases show
 the profile's current label. History includes a PID and spawn time when observed,
 plus a custody state: `unknown`, `exited_uncontained`, `never_started`, or
@@ -150,6 +152,14 @@ aswp unmap /absolute/path/to/project
 Mappings resolve from the current canonical directory to its nearest mapped
 ancestor. Renaming a profile preserves mappings because they reference its ID.
 Mapping selection is printed to stderr. No match produces a refusal.
+
+## Preferences
+
+`aswp config list/get/set/unset/path` manages typed display preferences independently
+of the registry. Save history length with `config set history.limit 50` or start
+masked with `config set ui.mask true`. Explicit `runs --limit`, `tui --mask` and
+`tui --show-aliases` override saved values. See [preferences](config.md) for
+storage, precedence, JSON output and recovery.
 
 ## Dashboard
 

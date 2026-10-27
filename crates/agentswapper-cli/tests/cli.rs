@@ -1057,3 +1057,201 @@ fn resume_rejects_rebinding_and_conflicts_but_native_forwarding_is_untouched() {
         )));
     assert!(run_history(&s)[0]["gentsSession"].is_null());
 }
+
+#[test]
+fn config_read_commands_leave_missing_state_untouched_and_report_defaults() {
+    let s = Sandbox::new();
+    for args in [
+        vec!["config"],
+        vec!["config", "list"],
+        vec!["config", "get", "history.limit"],
+        vec!["config", "path"],
+    ] {
+        s.command().args(args).arg("--json").assert().success();
+        assert!(!s.state().exists());
+    }
+    s.command()
+        .args(["config", "get", "ui.mask", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\":false"))
+        .stdout(predicate::str::contains("\"source\":\"default\""));
+    for args in [
+        vec!["config", "set", "auth.token", "private-canary"],
+        vec!["config", "set", "history.limit", "private-canary"],
+        vec!["config", "set", "ui.mask", "private-canary"],
+    ] {
+        s.command()
+            .args(args)
+            .arg("--json")
+            .assert()
+            .code(125)
+            .stdout(predicate::str::contains("private-canary").not())
+            .stderr(predicate::str::contains("private-canary").not());
+        assert!(!s.state().exists());
+    }
+}
+
+#[test]
+fn config_writes_are_independent_of_registry_and_unset_restores_defaults() {
+    let s = Sandbox::new();
+    s.command()
+        .args(["config", "set", "history.limit", "5", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"source\":\"config\""));
+    s.command()
+        .args(["config", "set", "ui.mask", "true"])
+        .assert()
+        .success();
+    assert!(!s.state().join("registry.sqlite3").exists());
+    assert!(s.state().join("config.json").is_file());
+    s.command()
+        .args(["config", "get", "history.limit", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\":5"));
+    s.command()
+        .args(["config", "unset", "history.limit", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\":20"))
+        .stdout(predicate::str::contains("\"source\":\"default\""));
+    s.command()
+        .args(["config", "get", "ui.mask", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\":true"));
+    // Path inspection remains usable when the preferences need manual repair.
+    let malformed = b"private-canary";
+    std::fs::write(s.state().join("config.json"), malformed).unwrap();
+    s.command().args(["config", "path"]).assert().success();
+    s.command()
+        .args(["config", "set", "ui.mask", "false", "--json"])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("invalid_config"))
+        .stdout(predicate::str::contains("private-canary").not());
+    assert_eq!(
+        std::fs::read(s.state().join("config.json")).unwrap(),
+        malformed
+    );
+}
+
+#[test]
+fn config_history_preference_is_applied_with_explicit_limit_precedence() {
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    for _ in 0..3 {
+        s.run("work").assert().success();
+    }
+    assert_eq!(run_history(&s).len(), 3);
+    s.command()
+        .args(["config", "set", "history.limit", "2"])
+        .assert()
+        .success();
+    assert_eq!(run_history(&s).len(), 2);
+    let explicit_default = s
+        .command()
+        .args(["runs", "--limit", "20", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&explicit_default).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let run_id = run_history(&s)[0]["id"].as_str().unwrap().to_owned();
+    let out = s
+        .command()
+        .args(["runs", "--limit", "1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&out).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    std::fs::write(s.state().join("config.json"), b"invalid").unwrap();
+    s.command()
+        .args(["runs", "--json"])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("invalid_config"));
+    s.command()
+        .args(["runs", "--limit", "1"])
+        .assert()
+        .success();
+    s.command().args(["runs", &run_id]).assert().success();
+    s.command()
+        .args(["doctor", "--json"])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("invalid_config"))
+        .stdout(predicate::str::contains("\"storage\":\"ok\""));
+    s.run("work").arg("--dry-run").assert().success();
+    s.command().args(["registry", "verify"]).assert().success();
+    s.command()
+        .args(["tui", "--mask", "--show-aliases"])
+        .assert()
+        .code(2);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_non_utf8_and_hyphen_values_are_rejected_without_echoing_them() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let s = Sandbox::new();
+    for value in [
+        OsString::from_vec(b"private-canary-\xff".to_vec()),
+        OsString::from("--private-canary"),
+    ] {
+        s.command()
+            .args(["--json", "config", "set", "ui.mask"])
+            .arg(value)
+            .assert()
+            .code(125)
+            .stdout(predicate::str::contains("private-canary").not())
+            .stderr(predicate::str::contains("private-canary").not());
+    }
+    assert!(!s.state().exists());
+}
+
+#[test]
+fn config_setters_in_separate_processes_preserve_both_preferences() {
+    let s = Sandbox::new();
+    let mut first = s
+        .native_command()
+        .args(["config", "set", "history.limit", "31"])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut second = s
+        .native_command()
+        .args(["config", "set", "ui.mask", "true"])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+    s.command()
+        .args(["config", "get", "history.limit", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\":31"));
+    s.command()
+        .args(["config", "get", "ui.mask", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"value\":true"));
+}

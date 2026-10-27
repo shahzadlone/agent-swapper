@@ -1,6 +1,7 @@
 //! Local profile metadata. Vendor credentials remain owned by the native CLI.
 //!
 //! No quota or account identity is inferred from the presence of a directory.
+pub mod config;
 pub mod domain;
 pub mod handover;
 pub mod launch;
@@ -12,6 +13,24 @@ pub use store::Store;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("unknown preference; supported keys: history.limit, ui.mask")]
+    UnknownConfigKey,
+    #[error(
+        "invalid preference value; history.limit accepts integers 1-200 and ui.mask accepts true or false"
+    )]
+    InvalidConfigValue,
+    #[error(
+        "config.json is invalid or exceeds 4 KiB; preserve it and inspect `aswp config path` before editing"
+    )]
+    InvalidConfig,
+    #[error("config.json uses a newer format; update AgentSwapper before changing preferences")]
+    NewerConfig,
+    #[error("preferences are busy; another config writer holds the lock")]
+    ConfigBusy,
+    #[error(
+        "preferences were replaced, but directory synchronization failed; read them back before retrying"
+    )]
+    ConfigDurability,
     #[error(
         "alias must start with a lowercase letter and contain 1-32 lowercase letters, digits, or hyphens"
     )]
@@ -157,6 +176,12 @@ pub enum Error {
 impl Error {
     pub fn code(&self) -> &'static str {
         match self {
+            Self::UnknownConfigKey => "unknown_config_key",
+            Self::InvalidConfigValue => "invalid_config_value",
+            Self::InvalidConfig => "invalid_config",
+            Self::NewerConfig => "newer_config",
+            Self::ConfigBusy => "config_busy",
+            Self::ConfigDurability => "config_durability_uncertain",
             Self::InvalidAlias => "invalid_alias",
             Self::NotFound => "profile_not_found",
             Self::MappingNotFound => "mapping_not_found",

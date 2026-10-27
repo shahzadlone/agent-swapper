@@ -128,7 +128,7 @@ pub(crate) fn validate_file(path: &Path) -> Result<()> {
     validate_file_metadata(&meta)
 }
 
-fn validate_file_metadata(meta: &fs::Metadata) -> Result<()> {
+pub(crate) fn validate_file_metadata(meta: &fs::Metadata) -> Result<()> {
     if !meta.is_file() || meta.file_type().is_symlink() {
         return Err(Error::UnsafePath);
     }
