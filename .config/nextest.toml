@@ -23,6 +23,6 @@ test-group = "handover-crypto"
 slow-timeout = { period = "60s", terminate-after = 2 }
 
 [[profile.default.overrides]]
-filter = "test(/thousand_event|arbitrary_valid_lifecycles/)"
+filter = "test(/thousand_event|arbitrary_valid_lifecycles|gents_lifecycles/)"
 test-group = "registry-io"
 slow-timeout = { period = "60s", terminate-after = 3 }

@@ -1,22 +1,25 @@
 use std::{
     ffi::{OsStr, OsString},
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
 };
 
 use serde::Serialize;
 
-use crate::{Error, Profile, Result, Store, store::RunCompletion};
+use crate::{Error, ExecutionEngine, Harness, Profile, Result, Store, store::RunCompletion};
+use uuid::Uuid;
 
 /// The executable and environment used by execute(). Arguments are deliberately
 /// excluded from Debug and serialization: user-supplied arguments may be secrets.
 pub struct LaunchPlan {
-    pub profile: Profile,
+    profile: Profile,
     program: PathBuf,
     home: PathBuf,
     cwd: PathBuf,
     args: Vec<OsString>,
     login: bool,
+    session: Option<Uuid>,
 }
 
 #[derive(Serialize)]
@@ -24,13 +27,17 @@ pub struct LaunchPreview<'a> {
     pub profile: &'a Profile,
     pub program: &'a Path,
     pub profile_home: &'a Path,
-    pub home_variable: &'static str,
+    pub home_variable: Option<&'static str>,
     pub working_directory: &'a Path,
     pub argument_count: usize,
     pub operation: &'static str,
     pub isolation: &'static str,
     pub quota: &'static str,
     pub containment: &'static str,
+    pub engine: ExecutionEngine,
+    pub runtime_owner: &'static str,
+    pub workspace_owner: &'static str,
+    pub session: Option<Uuid>,
 }
 
 impl LaunchPlan {
@@ -42,6 +49,19 @@ impl LaunchPlan {
         args: Vec<OsString>,
         login: bool,
     ) -> Result<Self> {
+        profile.validate()?;
+        let registered = store
+            .profiles()?
+            .into_iter()
+            .find(|p| p.id == profile.id)
+            .ok_or(Error::NotFound)?;
+        if registered.harness != profile.harness || registered.gents != profile.gents {
+            return Err(Error::EngineMismatch);
+        }
+        let profile = registered;
+        if profile.harness == Harness::Gents && (login || !args.is_empty()) {
+            return Err(Error::UnsupportedGentsOperation);
+        }
         if !profile.enabled {
             return Err(Error::Disabled);
         }
@@ -65,7 +85,16 @@ impl LaunchPlan {
                 }
             }
         }
-        let args = if login {
+        let args = if let Some(binding) = &profile.gents {
+            vec![
+                "chat".into(),
+                "--home".into(),
+                home.as_os_str().to_owned(),
+                "--graphql".into(),
+                binding.graphql_url().into(),
+                format!("--agent-id={}", binding.agent()).into(),
+            ]
+        } else if login {
             profile
                 .harness
                 .login_args()
@@ -82,7 +111,29 @@ impl LaunchPlan {
             cwd: dunce::simplified(cwd).to_owned(),
             args,
             login,
+            session: None,
         })
+    }
+
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+
+    /// Resume only the explicit gents session; native session formats differ.
+    pub fn with_session(mut self, session: Option<Uuid>) -> Result<Self> {
+        if let Some(session) = session {
+            if self.profile.harness != Harness::Gents {
+                return Err(Error::UnsupportedSession);
+            }
+            // Replacing a session cannot leave conflicting duplicate flags.
+            if self.session.is_some() {
+                self.args.truncate(6);
+            }
+            self.args
+                .extend(["--session-id".into(), session.to_string().into()]);
+            self.session = Some(session);
+        }
+        Ok(self)
     }
 
     pub fn preview(&self) -> LaunchPreview<'_> {
@@ -90,13 +141,26 @@ impl LaunchPlan {
             profile: &self.profile,
             program: &self.program,
             profile_home: &self.home,
-            home_variable: self.profile.harness.home_variable(),
+            home_variable: (self.profile.harness != Harness::Gents)
+                .then(|| self.profile.harness.home_variable()),
             working_directory: &self.cwd,
             argument_count: self.args.len(),
             operation: if self.login { "login" } else { "run" },
             isolation: "unverified",
             quota: "unknown",
             containment: "none",
+            engine: self.profile.harness.engine(),
+            runtime_owner: if self.profile.harness == Harness::Gents {
+                "external_gents_runtime"
+            } else {
+                "native_cli"
+            },
+            workspace_owner: if self.profile.harness == Harness::Gents {
+                "gents_agent_configuration"
+            } else {
+                "native_cli_working_directory"
+            },
+            session: self.session,
         }
     }
 
@@ -105,6 +169,9 @@ impl LaunchPlan {
     /// The caller installs a catching interrupt handler before using foreground
     /// mode. The CLI does this without changing the child's exec disposition.
     pub fn execute(&self, store: &mut Store, experimental: bool) -> Result<i32> {
+        if self.profile.harness == Harness::Gents {
+            return Err(Error::UnverifiedGents);
+        }
         if !experimental {
             return Err(Error::UnverifiedNative);
         }
@@ -112,8 +179,33 @@ impl LaunchPlan {
         self.execute_prepared(store)
     }
 
+    /// Opt-in applies only to the attached gents client, never to native launches.
+    pub fn execute_gents(&self, store: &mut Store, experimental: bool) -> Result<i32> {
+        if self.profile.harness != Harness::Gents {
+            return Err(Error::EngineMismatch);
+        }
+        if !experimental {
+            return Err(Error::UnverifiedGents);
+        }
+        self.check_environment(|key| std::env::var_os(key))?;
+        if !self.check_gents_runtime()? {
+            return Err(Error::GentsRuntimeMismatch);
+        }
+        self.execute_prepared(store)
+    }
+
     fn execute_prepared(&self, store: &mut Store) -> Result<i32> {
         let lease = store.lease(self.profile.id)?;
+        // Binding changes take the same lease. Refuse a plan built before a
+        // rebind, even if its original runtime record still matches its old URL.
+        let current = store
+            .profiles()?
+            .into_iter()
+            .find(|p| p.id == self.profile.id)
+            .ok_or(Error::NotFound)?;
+        if current.harness != self.profile.harness || current.gents != self.profile.gents {
+            return Err(Error::EngineMismatch);
+        }
         let id = store.begin_run(&lease, if self.login { "login" } else { "run" })?;
         let child = self.command().spawn();
         let mut child = match child {
@@ -134,12 +226,19 @@ impl LaunchPlan {
         // A wait error or supervisor crash leaves an unfinished intent, blocking reuse.
         let status = child.wait()?;
         let code = exit_code(status);
-        store.finish_run(id, RunCompletion::ChildExited(code))?;
+        let completion = if self.profile.harness == Harness::Gents {
+            RunCompletion::ExternalClientExited(code)
+        } else {
+            RunCompletion::ChildExited(code)
+        };
+        store.finish_run(id, completion)?;
         drop(lease);
         Ok(code)
     }
 
     pub fn check_environment(&self, lookup: impl Fn(&OsStr) -> Option<OsString>) -> Result<()> {
+        // Gents receives an allowlist, so inherited native auth/routing values
+        // cannot reach it. Native clients retain their existing conflict policy.
         for &key in self.profile.harness.conflicts() {
             if lookup(OsStr::new(key)).is_some() {
                 return Err(Error::EnvironmentConflict(key));
@@ -148,15 +247,95 @@ impl LaunchPlan {
         Ok(())
     }
 
+    /// Local consistency only: a matching file does not authenticate the listener.
+    /// Missing state is useful in a setup preview but blocks a real gents launch.
+    pub fn check_gents_runtime(&self) -> Result<bool> {
+        let Some(binding) = &self.profile.gents else {
+            return Ok(true);
+        };
+        let path = self.home.join("runtime.json");
+        crate::private_fs::reject_links(&path).map_err(|_| Error::GentsRuntimeMismatch)?;
+        crate::private_fs::validate_file(&path).map_err(|_| Error::GentsRuntimeMismatch)?;
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err(Error::GentsRuntimeMismatch),
+        };
+        let mut bytes = Vec::new();
+        file.take(65537)
+            .read_to_end(&mut bytes)
+            .map_err(|_| Error::GentsRuntimeMismatch)?;
+        if bytes.len() > 65536 {
+            return Err(Error::GentsRuntimeMismatch);
+        }
+        #[derive(serde::Deserialize)]
+        struct RuntimeState {
+            home: PathBuf,
+            graphql: String,
+        }
+        let state: RuntimeState =
+            serde_json::from_slice(&bytes).map_err(|_| Error::GentsRuntimeMismatch)?;
+        // The reviewed gents 0.21.0 writes unbracketed IPv6 in runtime.json.
+        // Accept only the exact equivalent of our validated binding; argv still
+        // receives the proper bracketed URL. No general malformed-URL fallback.
+        let legacy_ipv6 = binding.address().is_ipv6()
+            && state.graphql
+                == format!(
+                    "http://{}:{}/api/v0/graphql",
+                    binding.address().ip(),
+                    binding.address().port()
+                );
+        if state.graphql != binding.graphql_url() && !legacy_ipv6 {
+            return Err(Error::GentsRuntimeMismatch);
+        }
+        if !state.home.is_absolute()
+            || dunce::canonicalize(&state.home).map_err(|_| Error::GentsRuntimeMismatch)?
+                != self.home
+        {
+            return Err(Error::GentsRuntimeMismatch);
+        }
+        Ok(true)
+    }
+
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
         for harness in crate::Harness::ALL {
             command.env_remove(harness.home_variable());
         }
-        command
-            .args(&self.args)
-            .current_dir(&self.cwd)
-            .env(self.profile.harness.home_variable(), &self.home);
+        command.args(&self.args).current_dir(&self.cwd);
+        if self.profile.harness == Harness::Gents {
+            // Keep only terminal/OS integration. In particular, never inherit
+            // provider secrets, dynamic-loader hooks, proxies or GENTS_* routing.
+            command.env_clear();
+            for key in [
+                "PATH",
+                "HOME",
+                "USERPROFILE",
+                "TERM",
+                "COLORTERM",
+                "TERM_PROGRAM",
+                "LANG",
+                "LC_ALL",
+                "LC_CTYPE",
+                "LC_MESSAGES",
+                "TZ",
+                "NO_COLOR",
+                "TMP",
+                "TEMP",
+                "TMPDIR",
+                "SystemRoot",
+                "WINDIR",
+                "SYSTEMDRIVE",
+                "APPDATA",
+                "LOCALAPPDATA",
+            ] {
+                if let Some(value) = std::env::var_os(key) {
+                    command.env(key, value);
+                }
+            }
+        } else {
+            command.env(self.profile.harness.home_variable(), &self.home);
+        }
         command
     }
 }
@@ -289,5 +468,87 @@ mod tests {
             .check_environment(|key| (key == "ANTHROPIC_API_KEY").then(|| "secret-canary".into()))
             .unwrap_err();
         assert!(!conflict.to_string().contains("secret-canary"));
+    }
+}
+
+#[cfg(test)]
+mod engine_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn core_opt_ins_cannot_authorize_the_other_engine_and_stale_binding_cannot_launch() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let binding = |port| {
+            crate::GentsBinding::new(
+                format!("127.0.0.1:{port}").parse().unwrap(),
+                "worker".parse().unwrap(),
+            )
+            .unwrap()
+        };
+        let p = store
+            .register_gents("relay".parse().unwrap(), binding(9191))
+            .unwrap();
+        let binary = std::env::current_exe().unwrap();
+        let plan = LaunchPlan::build(&store, p.clone(), Some(&binary), temp.path(), vec![], false)
+            .unwrap();
+        assert!(matches!(
+            plan.execute(&mut store, true),
+            Err(Error::UnverifiedGents)
+        ));
+        assert!(matches!(
+            plan.execute_gents(&mut store, false),
+            Err(Error::UnverifiedGents)
+        ));
+        store.bind_gents(&p.alias, binding(9192)).unwrap();
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::EngineMismatch)
+        ));
+        assert!(store.runs(20).unwrap().is_empty());
+        let p = store
+            .register(Harness::Codex, "native".parse().unwrap())
+            .unwrap();
+        let plan = LaunchPlan::build(&store, p, Some(&binary), temp.path(), vec![], false).unwrap();
+        assert!(matches!(
+            plan.execute_gents(&mut store, true),
+            Err(Error::EngineMismatch)
+        ));
+        assert!(store.runs(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn external_failed_spawn_records_only_client_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let p = store
+            .register_gents(
+                "relay".parse().unwrap(),
+                crate::GentsBinding::new(
+                    "127.0.0.1:9191".parse().unwrap(),
+                    "worker".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let cwd = temp.path().join("gone");
+        std::fs::create_dir(&cwd).unwrap();
+        let binary = std::env::current_exe().unwrap();
+        let plan =
+            LaunchPlan::build(&store, p.clone(), Some(&binary), &cwd, vec![], false).unwrap();
+        std::fs::remove_dir(cwd).unwrap();
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::Io(_))
+        ));
+        let run = store.runs(1).unwrap().pop().unwrap();
+        assert_eq!(run.outcome.as_deref(), Some("spawn_failed"));
+        assert_eq!(
+            run.custody,
+            crate::store::ProcessCustody::ExternalRuntimeUnknown
+        );
+        assert_eq!(run.observed_pid, None);
+        assert!(store.lease(p.id).is_ok());
     }
 }

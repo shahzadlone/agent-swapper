@@ -1,6 +1,6 @@
 # AgentSwapper Roadmap
 
-Status: M1a foundations and M1b manual handover packs implemented; full milestones remain
+Status: M1a foundations, M1b manual handover packs, and the G0a attached gents client implemented; full milestones remain
 open. There are no release dates. A
 milestone is complete only when every gate below passes and the evidence (logs,
 traces, fixture results) is recorded with the harness versions and OS builds it
@@ -29,8 +29,22 @@ Run alongside M0/M1, independently of the native adapter sequence. The
 [deep evaluation](gents-evaluation.md) selects a hybrid design: native support
 plus an optional gents process adapter for canonical conversation continuation.
 Provider-free consumer contracts live in
-[`tools/gents-evaluation`](../tools/gents-evaluation/README.md). No production
-gents dependency, engine launch command, or provider support cell is promoted.
+[`tools/gents-evaluation`](../tools/gents-evaluation/README.md). The G0a attached-client slice is implemented behind `--experimental-gents`;
+see [engine setup and comparison](engines.md). No provider support cell is promoted
+and no production gents crate dependency is linked.
+
+G0a implemented:
+
+- `aswp engines` comparison; explicit native/gents profile selection;
+- dedicated home, local address and agent binding, with leased rebinds;
+- fixed gents chat arguments, optional session UUID and an environment allowlist;
+- local `runtime.json` address check, with listener identity explicitly unverified;
+- distinct client-exit history; external runtime custody remains unknown;
+- schema-4 migration with backups and preservation of pending runs;
+- provider-free tests for scope, opt-ins, rebinding, custody and tamper refusal.
+
+The following G0 deliverables and gates remain open; the attached client does
+not supply runtime ownership, account rotation or canonical replay qualification.
 
 Deliverables:
 
@@ -105,7 +119,7 @@ Implemented, unreleased:
 - validated profile aliases and opaque IDs; register, list, show, rename,
   enable, disable, and unregister without deleting vendor files;
 - SQLite append-only events and projections in one transaction, full replay
-  verification, and backed-up schema-1/schema-2 to schema-3 migrations;
+  verification, and backed-up schema-1/schema-2/schema-3 to schema-4 migrations;
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;

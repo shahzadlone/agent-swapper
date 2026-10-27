@@ -7,7 +7,7 @@ pub mod launch;
 mod private_fs;
 pub mod store;
 
-pub use domain::{Alias, Harness, Profile, ProfileId};
+pub use domain::{Alias, ExecutionEngine, GentsAgentId, GentsBinding, Harness, Profile, ProfileId};
 pub use store::Store;
 
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +60,32 @@ pub enum Error {
         "native profile isolation is unverified; inspect --dry-run, then explicitly opt in with --experimental-native"
     )]
     UnverifiedNative,
+    #[error(
+        "gents integration is unverified; inspect --dry-run, then explicitly opt in with --experimental-gents; the external runtime may keep working after chat exits"
+    )]
+    UnverifiedGents,
+    #[error(
+        "engine binding requires gents with an explicit loopback IP:port (nonzero port) and agent; native profiles cannot carry a gents binding"
+    )]
+    InvalidEngineBinding,
+    #[error("gents agent ID must contain 1-128 printable ASCII characters without whitespace")]
+    InvalidGentsAgent,
+    #[error(
+        "gents runtime.json must be a private regular file with home and graphql fields matching this profile; initialize and start the dedicated runtime, or update its binding with `aswp profile bind`"
+    )]
+    GentsRuntimeMismatch,
+    #[error(
+        "another active gents profile already uses this runtime address; each home needs its own listener"
+    )]
+    DuplicateRuntime,
+    #[error("requested execution engine does not match the registered profile")]
+    EngineMismatch,
+    #[error(
+        "gents profiles accept no forwarded arguments or native login; initialize and authenticate the dedicated home with gents separately; use --session with run to resume"
+    )]
+    UnsupportedGentsOperation,
+    #[error("--session is supported only for the gents engine")]
+    UnsupportedSession,
     #[error(
         "interactive mode requires a terminal and cannot be combined with --json; use `aswp list --json` or `aswp run --dry-run --json`"
     )]
@@ -135,6 +161,14 @@ impl Error {
             Self::UnsafeExecutable => "unsafe_executable",
             Self::EnvironmentConflict(_) => "environment_conflict",
             Self::UnverifiedNative => "native_unverified",
+            Self::UnverifiedGents => "gents_unverified",
+            Self::InvalidEngineBinding => "invalid_engine_binding",
+            Self::InvalidGentsAgent => "invalid_gents_agent",
+            Self::GentsRuntimeMismatch => "gents_runtime_mismatch",
+            Self::DuplicateRuntime => "duplicate_runtime",
+            Self::EngineMismatch => "engine_mismatch",
+            Self::UnsupportedGentsOperation => "unsupported_gents_operation",
+            Self::UnsupportedSession => "unsupported_session",
             Self::InteractiveMode => "interactive_mode",
             Self::NonUtf8Path => "non_utf8_path",
             Self::HandoverTooLarge => "handover_too_large",

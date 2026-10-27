@@ -28,7 +28,16 @@ Automatic switching, quota routing, credential transfer, the full managed
 capsule-v1 protocol, encrypted account backups, structured adapters, and global
 activation are not implemented. See the [roadmap](roadmap.md).
 
-The optional gents execution-engine track is evaluated but **not implemented or
-promoted**. Its provider-free consumers and replay tests do not qualify a native
-CLI, subscription, engine/provider pair or platform. Keep engine support separate
-from the native matrix above; see [evaluation](gents-evaluation.md) and roadmap G0.
+The optional gents attached-client engine is **implemented, experimental and
+unverified with real providers**. Its CLI contract tests do not qualify a native
+CLI, subscription, engine/provider pair or platform. `aswp engines` compares
+ownership and tradeoffs; [engine setup](engines.md) documents the opt-in.
+
+| Engine contract | Linux | WSL2 | macOS | Windows |
+| --- | --- | --- | --- | --- |
+| gents attached CLI fixture | CI required | tested on WSL2 | CI required | CI required |
+| gents runtime/provider/account pairs | unverified | unverified | unverified | unverified |
+
+Cross-platform fixture evidence is recorded in [engine validation](engine-validation.md).
+Runtime/provider qualification remains separate from the native matrix above;
+see [evaluation](gents-evaluation.md) and roadmap G0.

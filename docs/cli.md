@@ -8,6 +8,7 @@ published yet.
 ## Everyday commands
 
 ```sh
+aswp engines
 aswp profile add claude --alias work
 aswp profile add codex --alias personal
 aswp profile add kimi --alias research
@@ -96,10 +97,30 @@ wall-clock changes; `--limit` accepts 1 through 200.
 `aswp runs RUN_ID` inspects one run, including retired profiles. Aliases show
 the profile's current label. History includes a PID and spawn time when observed,
 plus a custody state: `unknown`, `exited_uncontained`, `never_started`, or
-`attested_stopped`. A pending intent remains unknown even with a recorded PID.
+`attested_stopped`. Gents client exits and client-stop attestations report
+`external_runtime_unknown`. A pending intent remains unknown even with a recorded PID.
 These observations never authorize an automatic switch; stored PIDs are
 diagnostics and are never used for process termination. Argument contents are
 absent from history.
+
+## Optional gents engine
+
+```sh
+aswp profile add --engine gents --alias relay --address 127.0.0.1:9191 --agent YOUR_AGENT_ID
+aswp profile show relay --json
+aswp run relay --dry-run
+aswp run relay --experimental-gents
+```
+
+Initialize, authenticate and start the dedicated gents runtime separately before
+launching. The profile's home, address and agent fix the client's route; forwarded
+arguments and native login are refused. `--session UUID` continues or creates an explicit
+gents session with the bound agent. `profile bind` changes the address/agent without replacing the
+home. `run --engine native|gents` asserts the profile's engine selection.
+
+Gents owns its tools, credentials, permissions and configured workspace. A client
+exit does not stop runtime work. See [engine setup and comparison](engines.md)
+for the complete workflow, trust boundary and current qualification limits.
 
 ## Manual handover packs
 

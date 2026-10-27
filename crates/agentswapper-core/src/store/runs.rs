@@ -14,6 +14,7 @@ use crate::{Alias, Error, Harness, ProfileId, Result};
 pub enum ProcessCustody {
     Unknown,
     ExitedUncontained,
+    ExternalRuntimeUnknown,
     NeverStarted,
     AttestedStopped,
 }
@@ -74,8 +75,12 @@ fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRe
         let harness: String = row.get(3)?;
         let outcome: Option<String> = row.get(9)?;
         let custody = match outcome.as_deref() {
+            Some("spawn_failed" | "user_attested_stopped") if harness == "gents" => {
+                ProcessCustody::ExternalRuntimeUnknown
+            }
             None => ProcessCustody::Unknown,
             Some("exited") => ProcessCustody::ExitedUncontained,
+            Some("external_client_exited") => ProcessCustody::ExternalRuntimeUnknown,
             Some("spawn_failed") => ProcessCustody::NeverStarted,
             Some("user_attested_stopped") => ProcessCustody::AttestedStopped,
             _ => return Err(Error::CorruptRegistry),
@@ -179,5 +184,58 @@ mod tests {
         s.db.execute_batch("CREATE TRIGGER event_no_update BEFORE UPDATE ON event_log BEGIN SELECT RAISE(ABORT, 'append-only event log'); END; VACUUM;").unwrap();
         assert_eq!(s.runs(1).unwrap()[0].id, second);
         assert_eq!(s.run(&first.to_uppercase()).unwrap().id, first);
+    }
+}
+
+#[cfg(test)]
+mod engine_custody_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    #[test]
+    fn journal_refuses_cross_engine_exit_labels_and_unobserved_clients() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut s = Store::open(&temp.path().join("state")).unwrap();
+        let native = s
+            .register(Harness::Codex, "native".parse().unwrap())
+            .unwrap();
+        let external = s
+            .register_gents(
+                "external".parse().unwrap(),
+                crate::GentsBinding::new(
+                    "127.0.0.1:9191".parse().unwrap(),
+                    "agent".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        for profile in [native, external] {
+            let lease = s.lease(profile.id).unwrap();
+            let id = s.begin_run(&lease, "run").unwrap();
+            assert!(
+                s.finish_run(id.clone(), RunCompletion::ExternalClientExited(0))
+                    .is_err()
+            );
+            s.observe_spawn(&id, 42).unwrap();
+            if profile.harness == Harness::Gents {
+                assert!(
+                    s.finish_run(id.clone(), RunCompletion::ChildExited(0))
+                        .is_err()
+                );
+                s.finish_run(id.clone(), RunCompletion::ExternalClientExited(7))
+                    .unwrap();
+                let record = s.run(&id).unwrap();
+                assert_eq!(record.exit_code, Some(7));
+                assert_eq!(record.custody, ProcessCustody::ExternalRuntimeUnknown);
+            } else {
+                assert!(
+                    s.finish_run(id.clone(), RunCompletion::ExternalClientExited(0))
+                        .is_err()
+                );
+                s.finish_run(id, RunCompletion::ChildExited(0)).unwrap();
+            }
+            drop(lease);
+            assert!(s.lease(profile.id).is_ok());
+            assert!(s.verify().unwrap().consistent);
+        }
     }
 }

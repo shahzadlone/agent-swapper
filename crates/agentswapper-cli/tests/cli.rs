@@ -171,7 +171,7 @@ fn registry_verify_reports_full_replay_in_json() {
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["schemaVersion"], 0);
-    assert_eq!(value["data"]["schemaVersion"], 3);
+    assert_eq!(value["data"]["schemaVersion"], 4);
     assert_eq!(value["data"]["events"], 0);
     assert_eq!(value["data"]["consistent"], true);
     s.add("claude", "work");
@@ -406,7 +406,7 @@ fn doctor_reports_a_missing_home_and_metadata_can_still_be_removed() {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["data"]["storage"], "needs_attention");
     assert_eq!(value["data"]["issue"]["code"], "profile_dir_missing");
-    assert_eq!(value["data"]["executables"].as_array().unwrap().len(), 3);
+    assert_eq!(value["data"]["executables"].as_array().unwrap().len(), 4);
     s.command()
         .args(["profile", "remove", "work"])
         .assert()
@@ -548,4 +548,351 @@ fn foreground_sigint_reaches_child_while_supervisor_records_exit() {
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["data"][0]["custody"], "exited_uncontained");
     assert_eq!(value["data"][0]["exitCode"], 130);
+}
+
+fn gents_profile(s: &Sandbox, address: &str, agent: &str) -> PathBuf {
+    let output = s
+        .command()
+        .args([
+            "profile",
+            "add",
+            "--engine",
+            "gents",
+            "--alias",
+            "relay",
+            "--address",
+            address,
+            "--agent",
+            agent,
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["data"]["engine"], "gents");
+    PathBuf::from(value["data"]["profileHome"].as_str().unwrap())
+}
+
+fn runtime_state(home: &Path, address: &str) {
+    let path = home.join("runtime.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(
+            &serde_json::json!({"home":home,"graphql":format!("http://{address}/api/v0/graphql")}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+fn gents_run(s: &Sandbox) -> AssertCommand {
+    let mut cmd = s.command();
+    cmd.args(["run", "relay", "--experimental-gents", "--executable"])
+        .arg(fixture());
+    cmd
+}
+
+#[test]
+fn engine_comparison_never_opens_storage() {
+    let s = Sandbox::new();
+    let out = s
+        .command()
+        .args(["engines", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["data"][0]["engine"], "native");
+    assert_eq!(value["data"][1]["engine"], "gents");
+    assert!(value["data"][1]["limitations"].as_array().unwrap().len() >= 5);
+    assert!(!s.state().exists());
+    s.command()
+        .arg("engines")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Listener identity is unverified"));
+    assert!(!s.state().exists());
+}
+
+#[test]
+fn gents_launch_binds_argv_isolates_environment_and_records_external_custody() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "[::1]:9192", "web_persona");
+    runtime_state(&home, "::1:9192"); // Exact unbracketed form written by reviewed upstream.
+    let session = "cafe0000-0000-4000-8000-000000000004";
+    let out = gents_run(&s)
+        .args(["--engine", "gents", "--session", session])
+        .env("GENTS_HOME", "private-canary")
+        .env("GENTS_GRAPHQL", "private-canary")
+        .env("GENTS_FUTURE_OVERRIDE", "private-canary")
+        .env("HTTP_PROXY", "private-canary")
+        .env("http_proxy", "private-canary")
+        .env("HTTPS_PROXY", "private-canary")
+        .env("ALL_PROXY", "private-canary")
+        .env("UNRELATED_SECRET", "private-canary")
+        .env("OPENAI_API_KEY", "private-canary")
+        .env("ANTHROPIC_API_KEY", "private-canary")
+        .env("TERM", "xterm-256color")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("leaked=").not())
+        .stdout(predicate::str::contains("terminal=xterm-256color"))
+        .stdout(predicate::str::contains("private-canary").not())
+        .stderr(predicate::str::contains(
+            "External runtime work may continue",
+        ))
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(out).unwrap();
+    let actual: Vec<_> = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("arg="))
+        .collect();
+    let expected = [
+        OsStr::new("chat"),
+        OsStr::new("--home"),
+        home.as_os_str(),
+        OsStr::new("--graphql"),
+        OsStr::new("http://[::1]:9192/api/v0/graphql"),
+        OsStr::new("--agent-id=web_persona"),
+        OsStr::new("--session-id"),
+        OsStr::new(session),
+    ]
+    .map(hex);
+    assert_eq!(actual, expected);
+    assert!(home.join("fixture-owned.txt").is_file());
+    for key in ["CLAUDE_CONFIG_DIR=", "CODEX_HOME=", "KIMI_CODE_HOME="] {
+        assert!(!stdout.contains(key));
+    }
+    let out = s
+        .command()
+        .args(["runs", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["data"][0]["outcome"], "external_client_exited");
+    assert_eq!(value["data"][0]["custody"], "external_runtime_unknown");
+    assert_eq!(value["data"][0]["harness"], "gents");
+    gents_run(&s).assert().success(); // Explicit manual reuse, not runtime cleanup proof.
+    s.command().args(["registry", "verify"]).assert().success();
+}
+
+#[test]
+fn gents_scope_overrides_wrong_opt_in_and_native_login_are_rejected_before_spawn() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    runtime_state(&home, "127.0.0.1:9191");
+    for (args, message) in [
+        (
+            vec!["run", "relay", "--experimental-native"],
+            "--experimental-gents",
+        ),
+        (
+            vec!["run", "relay", "--experimental-gents", "--engine", "native"],
+            "does not match",
+        ),
+        (
+            vec!["login", "relay", "--experimental-gents"],
+            "no forwarded arguments or native login",
+        ),
+    ] {
+        s.command()
+            .args(args)
+            .arg("--executable")
+            .arg(fixture())
+            .assert()
+            .code(125)
+            .stderr(predicate::str::contains(message));
+    }
+    for args in [
+        vec!["--home", "private-canary"],
+        vec!["--graphql", "https://remote.invalid"],
+        vec!["--agent-id=other"],
+        vec!["private-message-canary"],
+    ] {
+        gents_run(&s)
+            .arg("--")
+            .args(args)
+            .assert()
+            .code(125)
+            .stderr(predicate::str::contains("no forwarded arguments"))
+            .stderr(predicate::str::contains("canary").not());
+    }
+    assert!(!home.join("fixture-owned.txt").exists());
+    s.command()
+        .args(["runs", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"data\":[]"));
+    s.add("codex", "native");
+    s.command()
+        .args(["run", "native", "--experimental-gents", "--executable"])
+        .arg(fixture())
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("--experimental-native"));
+    s.run("native")
+        .args(["--session", "cafe0000-0000-4000-8000-000000000004"])
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("only for the gents engine"));
+    s.command()
+        .args([
+            "profile",
+            "bind",
+            "native",
+            "--address",
+            "127.0.0.1:9192",
+            "--agent",
+            "worker",
+            "--json",
+        ])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("engine_mismatch"));
+    s.command()
+        .args(["profile", "remove", "relay"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Keychain items retained"))
+        .stdout(predicate::str::contains(
+            "External runtimes are not stopped",
+        ));
+    assert!(home.is_dir());
+}
+
+#[test]
+fn runtime_record_is_checked_and_previews_disclose_listener_and_workspace_scope() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    gents_run(&s)
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("runtime.json missing"))
+        .stdout(predicate::str::contains("Listener unverified"))
+        .stdout(predicate::str::contains(
+            "Workspace and permissions belong to the gents agent configuration",
+        ));
+    gents_run(&s)
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("runtime.json"));
+    runtime_state(&home, "127.0.0.1:9192");
+    gents_run(&s)
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("matching this profile"));
+    for invalid in ["private-canary".to_owned(), " ".repeat(65537)] {
+        std::fs::write(home.join("runtime.json"), invalid).unwrap();
+        gents_run(&s)
+            .assert()
+            .code(125)
+            .stderr(predicate::str::contains("private-canary").not());
+    }
+    // A copied runtime record from another home must not authorize launch.
+    runtime_state(&home, "127.0.0.1:9191");
+    let mut state: Value =
+        serde_json::from_slice(&std::fs::read(home.join("runtime.json")).unwrap()).unwrap();
+    state["home"] = s.temp.path().to_str().unwrap().into();
+    std::fs::write(
+        home.join("runtime.json"),
+        serde_json::to_vec(&state).unwrap(),
+    )
+    .unwrap();
+    gents_run(&s).assert().code(125);
+    assert!(!home.join("fixture-owned.txt").exists());
+    s.command()
+        .args([
+            "profile",
+            "bind",
+            "relay",
+            "--address",
+            "127.0.0.1:9192",
+            "--agent",
+            "--leading-id",
+        ])
+        .assert()
+        .code(2); // Use = for a leading hyphen, just as clap documents.
+    s.command()
+        .args([
+            "profile",
+            "bind",
+            "relay",
+            "--address",
+            "127.0.0.1:9192",
+            "--agent=-leading_id",
+        ])
+        .assert()
+        .success();
+    runtime_state(&home, "127.0.0.1:9192");
+    gents_run(&s)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "arg={}",
+            hex(OsStr::new("--agent-id=-leading_id"))
+        )));
+    assert!(home.join("fixture-owned.txt").exists());
+}
+
+#[test]
+fn engine_registration_refuses_ambiguous_or_nonlocal_bindings() {
+    let s = Sandbox::new();
+    for args in [
+        vec!["--engine", "gents"],
+        vec![
+            "claude",
+            "--engine",
+            "gents",
+            "--address",
+            "127.0.0.1:9191",
+            "--agent",
+            "worker",
+        ],
+        vec!["gents", "--engine", "native"],
+        vec!["codex", "--address", "127.0.0.1:9191", "--agent", "worker"],
+        vec!["gents", "--address", "192.0.2.1:9191", "--agent", "worker"],
+    ] {
+        s.command()
+            .args(["profile", "add", "--alias", "invalid"])
+            .args(args)
+            .assert()
+            .code(125);
+    }
+    for address in ["localhost:9191", "http://127.0.0.1:9191", "[::1]:0"] {
+        s.command()
+            .args([
+                "profile",
+                "add",
+                "gents",
+                "--alias",
+                "invalid",
+                "--address",
+                address,
+                "--agent",
+                "worker",
+            ])
+            .assert()
+            .failure();
+    }
+    s.command()
+        .args(["list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"data\":[]"));
 }

@@ -1,4 +1,5 @@
 //! Shared entry point for both command names. JSON is an unstable v0 contract.
+mod engines;
 mod handover_cli;
 mod tui;
 
@@ -9,7 +10,7 @@ use std::{
 };
 
 use agentswapper_core::{
-    Alias, Error, Harness, Profile, Result, Store,
+    Alias, Error, ExecutionEngine, GentsAgentId, GentsBinding, Harness, Profile, Result, Store,
     launch::{LaunchPlan, discover},
     terminal_text,
 };
@@ -21,7 +22,7 @@ use serde_json::json;
 #[command(
     version,
     about = "Switch agents. Keep your place.",
-    after_help = "Developer preview: native isolation is unverified. No automatic switching yet."
+    after_help = "Developer preview: engine integrations are unverified. No automatic switching yet."
 )]
 struct Cli {
     /// Private local state directory (absolute path).
@@ -36,6 +37,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Compare execution engines, ownership, benefits and limitations.
+    Engines,
     #[command(flatten)]
     Registry(RegistryCommands),
     /// Create, inspect, and reconcile encrypted manual handover packs.
@@ -60,7 +63,7 @@ enum RegistryCommands {
     /// List profiles, account verification, and quota.
     #[command(alias = "ls")]
     List,
-    /// Show profiles and unfinished native runs.
+    /// Show profiles and unfinished client runs.
     Status,
     /// Inspect recent runs or one run ID, including process-custody observations.
     Runs {
@@ -70,10 +73,10 @@ enum RegistryCommands {
     },
     /// Check local storage and discover native CLIs without executing them.
     Doctor,
-    /// Resolve an unfinished run only after you have stopped its native processes.
+    /// Resolve an unfinished run only after you have stopped its client processes.
     Recover {
         run_id: String,
-        /// Assert that the agent and every descendant have stopped. This is recorded.
+        /// Attest the client and its descendants stopped; external gents runtime custody stays unknown.
         #[arg(long, required = true)]
         confirm_stopped: bool,
     },
@@ -117,6 +120,15 @@ struct LaunchArgs {
     /// Opt in to unverified native profile isolation. No automatic swapping.
     #[arg(long)]
     experimental_native: bool,
+    /// Opt in to an attached gents chat client. External work may outlive it.
+    #[arg(long, conflicts_with = "experimental_native")]
+    experimental_gents: bool,
+    /// Require this engine to match the registered profile.
+    #[arg(long, value_parser = parse_engine)]
+    engine: Option<ExecutionEngine>,
+    /// Continue or create a gents session UUID; the profile binding selects its agent.
+    #[arg(long)]
+    session: Option<uuid::Uuid>,
     /// Absolute path to a trusted executable instead of PATH discovery.
     #[arg(long)]
     executable: Option<PathBuf>,
@@ -124,12 +136,29 @@ struct LaunchArgs {
 
 #[derive(Subcommand)]
 enum ProfileCommands {
-    /// Create an empty profile. Run `aswp login ALIAS` to authenticate later.
+    /// Create an empty native or gents profile. Registration does not authenticate.
     Add {
         #[arg(value_parser = parse_harness)]
-        harness: Harness,
+        harness: Option<Harness>,
+        /// Choose native or gents. Native is the default unless HARNESS is gents.
+        #[arg(long, value_parser = parse_engine)]
+        engine: Option<ExecutionEngine>,
+        /// Explicit gents runtime address, e.g. 127.0.0.1:9191 (loopback only).
+        #[arg(long, requires = "agent")]
+        address: Option<std::net::SocketAddr>,
+        /// Gents agent ID: exact, case-sensitive; 1-128 printable ASCII characters.
+        #[arg(long, requires = "address")]
+        agent: Option<GentsAgentId>,
         #[arg(long)]
         alias: Alias,
+    },
+    /// Rebind a gents home to its runtime and agent; does not stop external work.
+    Bind {
+        profile: Alias,
+        #[arg(long)]
+        address: std::net::SocketAddr,
+        #[arg(long)]
+        agent: GentsAgentId,
     },
     /// Rename the label without changing profile identity or files.
     Alias { profile: Alias, alias: Alias },
@@ -146,7 +175,13 @@ enum ProfileCommands {
 fn parse_harness(value: &str) -> std::result::Result<Harness, String> {
     value
         .parse()
-        .map_err(|_| "choose claude, codex, or kimi".to_owned())
+        .map_err(|_| "choose claude, codex, kimi, or gents".to_owned())
+}
+
+fn parse_engine(value: &str) -> std::result::Result<ExecutionEngine, String> {
+    value
+        .parse()
+        .map_err(|_| "choose native or gents".to_owned())
 }
 
 pub fn main_entry(name: &'static str) -> i32 {
@@ -214,6 +249,9 @@ pub fn main_entry(name: &'static str) -> i32 {
 
 fn dispatch(cli: Cli) -> Result<i32> {
     let command = match cli.command {
+        Some(Commands::Engines) => {
+            return engines::show(cli.json);
+        }
         Some(Commands::Handover { command }) => {
             return handover_cli::dispatch(command, cli.json, cli.state_dir);
         }
@@ -246,13 +284,61 @@ fn dispatch(cli: Cli) -> Result<i32> {
             return Ok(if report.consistent { 0 } else { 125 });
         }
         RegistryCommands::Profile { command } => match command {
-            ProfileCommands::Add { harness, alias } => {
-                let p = store.register(harness, alias)?;
+            ProfileCommands::Add {
+                harness,
+                alias,
+                engine,
+                address,
+                agent,
+            } => {
+                let engine = engine
+                    .unwrap_or_else(|| harness.map_or(ExecutionEngine::Native, Harness::engine));
+                let p = match (engine, harness, address, agent) {
+                    (
+                        ExecutionEngine::Gents,
+                        None | Some(Harness::Gents),
+                        Some(address),
+                        Some(agent),
+                    ) => store.register_gents(alias, GentsBinding::new(address, agent)?)?,
+                    (ExecutionEngine::Native, Some(harness), None, None)
+                        if harness != Harness::Gents =>
+                    {
+                        store.register(harness, alias)?
+                    }
+                    _ => return Err(Error::InvalidEngineBinding),
+                };
+                let home = store.profile_home(p.id)?;
+                let next = if p.harness == Harness::Gents {
+                    format!(
+                        "Initialize and authenticate gents separately in this home, then start its local runtime. Inspect: aswp run {} --dry-run",
+                        p.alias
+                    )
+                } else {
+                    format!("Next: aswp login {} --dry-run", p.alias)
+                };
+                emit(
+                    cli.json,
+                    &json!({"profile":p,"engine":p.harness.engine(),"profileHome":home,"account":"unverified","quota":"unknown","isolation":"unverified"}),
+                    &format!(
+                        "Registered {} ({} / {}). Account unverified.\nHome: {}\n{next}",
+                        p.alias,
+                        p.harness.engine(),
+                        p.harness,
+                        terminal_text(&home.display().to_string())
+                    ),
+                )?;
+            }
+            ProfileCommands::Bind {
+                profile,
+                address,
+                agent,
+            } => {
+                let p = store.bind_gents(&profile, GentsBinding::new(address, agent)?)?;
                 show_profile(
                     cli.json,
                     &p,
                     &format!(
-                        "Registered {} ({harness}). Account unverified. Next: aswp login {} --dry-run",
+                        "Rebound {}. Home and credentials retained. This does not stop or move work in the external runtime. Inspect: aswp run {} --dry-run",
                         p.alias, p.alias
                     ),
                 )?;
@@ -283,18 +369,35 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 )?;
             }
             ProfileCommands::Remove { profile } => {
+                let external = store.find(&profile)?.harness == Harness::Gents;
                 store.remove(&profile)?;
+                let engine_note = if external {
+                    " Keychain items retained. External runtimes are not stopped."
+                } else {
+                    ""
+                };
                 emit(
                     cli.json,
                     &json!({"removed": profile, "vendorFilesRetained": true}),
                     &format!(
-                        "Unregistered {profile}. Vendor files retained; server-side login is unchanged."
+                        "Unregistered {profile}. Vendor files retained; server-side login is unchanged.{engine_note}"
                     ),
                 )?;
             }
             ProfileCommands::Show { profile } => {
                 let p = store.find(&profile)?;
-                show_profile(cli.json, &p, &profile_line(&p))?;
+                let home = store.profile_home(p.id)?;
+                let binding = p.gents.as_ref().map(|g| format!("\nRuntime: {} | Agent: {}\nWorkspace and permissions: gents agent configuration; external runtime.", g.address(), g.agent())).unwrap_or_default();
+                emit(
+                    cli.json,
+                    &json!({"profile":p,"engine":p.harness.engine(),"profileHome":home,"account":"unverified","quota":"unknown","isolation":"unverified"}),
+                    &format!(
+                        "{}\nEngine: {}\nHome: {}{binding}",
+                        profile_line(&p),
+                        p.harness.engine(),
+                        terminal_text(&home.display().to_string())
+                    ),
+                )?;
             }
         },
         RegistryCommands::List => {
@@ -364,7 +467,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 cli.json,
                 &json!({"storage":health,"issue":issue, "profilePermissions": if cfg!(unix) {"posix_checked"} else {"acl_not_verified"},"executables":executables,"unfinishedRuns":pending,"containment":"none"}),
                 &format!(
-                    "Storage integrity: {health}\nNative CLIs: {}\nProfile isolation: unverified\nVersions: not probed\nProcess containment: none\nUnfinished runs: {pending}\n{}\n{}",
+                    "Storage integrity: {health}\nAgent CLIs: {}\nProfile isolation: unverified\nVersions: not probed\nProcess containment: none\nUnfinished runs: {pending}\n{}\n{}",
                     Harness::ALL
                         .into_iter()
                         .map(|h| format!(
@@ -397,11 +500,16 @@ fn dispatch(cli: Cli) -> Result<i32> {
             if !confirm_stopped {
                 return Err(Error::Busy);
             }
+            let external = store.run(&run_id)?.harness == Harness::Gents;
             store.attest_stopped(&run_id)?;
             emit(
                 cli.json,
                 &json!({"runId":run_id,"outcome":"user_attested_stopped"}),
-                "Recorded your stopped-process attestation. Profile reuse is permitted; descendant custody was not independently verified.",
+                if external {
+                    "Recorded your client-stop attestation. Client reuse is permitted; external runtime custody remains unknown and work may continue."
+                } else {
+                    "Recorded your stopped-process attestation. Profile reuse is permitted; descendant custody was not independently verified."
+                },
             )?;
         }
         RegistryCommands::Run {
@@ -422,11 +530,11 @@ fn dispatch(cli: Cli) -> Result<i32> {
                     p
                 }
             };
-            return launch_native(&mut store, p, launch, args, false, cli.json);
+            return launch_profile(&mut store, p, launch, args, false, cli.json);
         }
         RegistryCommands::Login { profile, launch } => {
             let p = store.find(&profile)?;
-            return launch_native(&mut store, p, launch, vec![], true, cli.json);
+            return launch_profile(&mut store, p, launch, vec![], true, cli.json);
         }
         RegistryCommands::Map {
             profile: Some(alias),
@@ -476,7 +584,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
     Ok(0)
 }
 
-fn launch_native(
+fn launch_profile(
     store: &mut Store,
     profile: Profile,
     launch: LaunchArgs,
@@ -484,6 +592,13 @@ fn launch_native(
     login: bool,
     json_mode: bool,
 ) -> Result<i32> {
+    let engine = profile.harness.engine();
+    if launch.engine.is_some_and(|requested| requested != engine) {
+        return Err(Error::EngineMismatch);
+    }
+    if login && launch.session.is_some() {
+        return Err(Error::UnsupportedSession);
+    }
     let plan = LaunchPlan::build(
         store,
         profile,
@@ -491,22 +606,52 @@ fn launch_native(
         &std::env::current_dir()?,
         args,
         login,
-    )?;
+    )?
+    .with_session(launch.session)?;
     if launch.dry_run {
         let preview = plan.preview();
+        let runtime_check = if engine == ExecutionEngine::Gents {
+            Some(match plan.check_gents_runtime() {
+                Ok(true) => "recorded home and address match; listener unverified".to_owned(),
+                Ok(false) => {
+                    "runtime.json missing; start the dedicated runtime before launching".to_owned()
+                }
+                Err(error) => error.to_string(),
+            })
+        } else {
+            None
+        };
+        let scope = if engine == ExecutionEngine::Gents {
+            let binding = preview
+                .profile
+                .gents
+                .as_ref()
+                .ok_or(Error::InvalidEngineBinding)?;
+            format!(
+                "\nEngine: gents (attached chat client)\nRuntime: {} | Agent: {}\nHome is passed with --home. Workspace and permissions belong to the gents agent configuration, not this client directory.\nClient exit does not stop the external runtime. Listener unverified; gents presents this home's authentication to the bound address.\nRuntime check: {}\nSession: {}",
+                binding.address(),
+                binding.agent(),
+                runtime_check.as_deref().unwrap_or("not checked"),
+                preview
+                    .session
+                    .map_or_else(|| "new (created by gents)".to_owned(), |id| id.to_string())
+            )
+        } else {
+            "\nEngine: native".to_owned()
+        };
         let conflicts = plan
             .check_environment(|key| std::env::var_os(key))
             .err()
             .map(|e| e.to_string());
         emit(
             json_mode,
-            &json!({"plan":preview,"environmentConflict":conflicts}),
+            &json!({"plan":preview,"environmentConflict":conflicts,"runtimeCheck":runtime_check}),
             &format!(
-                "{} {}\nProgram: {}\n{}={}\nArguments: {} (contents redacted)\nIsolation: unverified. Quota: unknown. Containment: none.\n{}",
+                "{} {}\nProgram: {}\n{}={}\nArguments: {} (contents redacted)\nIsolation: unverified. Quota: unknown. Containment: none.{scope}\n{}",
                 preview.operation,
                 preview.profile.alias,
                 terminal_text(&preview.program.display().to_string()),
-                preview.home_variable,
+                preview.home_variable.unwrap_or("--home"),
                 terminal_text(&preview.profile_home.display().to_string()),
                 preview.argument_count,
                 conflicts
@@ -519,30 +664,46 @@ fn launch_native(
     if json_mode {
         return Err(Error::InteractiveMode);
     }
-    if !launch.experimental_native {
-        return Err(Error::UnverifiedNative);
+    match engine {
+        ExecutionEngine::Native if !launch.experimental_native => {
+            return Err(Error::UnverifiedNative);
+        }
+        ExecutionEngine::Gents if !launch.experimental_gents => return Err(Error::UnverifiedGents),
+        _ => {}
     }
     writeln!(
         io::stderr(),
-        "Experimental native launch: {} ({}). Profile isolation unverified; no process containment or automatic swapping.",
-        plan.profile.alias,
-        plan.profile.harness
+        "Experimental {engine} launch: {} ({}). Isolation unverified; no containment or automatic swapping.",
+        plan.profile().alias,
+        plan.profile().harness
     )?;
+    if engine == ExecutionEngine::Gents {
+        writeln!(
+            io::stderr(),
+            "Attached chat client only. Gents owns credentials, tools, permissions and the configured agent workspace. External runtime work may continue after this client exits."
+        )?;
+    }
     ctrlc::set_handler(|| {})
         .map_err(|_| Error::Io(io::Error::other("could not install interrupt handler")))?;
-    plan.execute(store, true)
+    match engine {
+        ExecutionEngine::Native => plan.execute(store, true),
+        ExecutionEngine::Gents => plan.execute_gents(store, true),
+    }
 }
 
 fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
     use agentswapper_core::store::ProcessCustody;
     let custody = match run.custody {
         ProcessCustody::Unknown => "unknown; descendant custody unresolved",
+        ProcessCustody::ExternalRuntimeUnknown => {
+            "external runtime unknown; work may continue independently of this client"
+        }
         ProcessCustody::ExitedUncontained => "child exited; descendants unverified",
         ProcessCustody::NeverStarted => "native process did not start",
         ProcessCustody::AttestedStopped => "operator attested stopped; not independently verified",
     };
     format!(
-        "{}  {} / {} / {}\n  {} | exit={}\n  Custody: {}\n  Observed PID={} (may be reused; do not signal this ID)",
+        "{}  {} / {} / {}\n  {} | exit={} | outcome={}\n  Custody: {}\n  Observed PID={} (may be reused; do not signal this ID)",
         run.id,
         run.alias,
         run.harness,
@@ -550,6 +711,7 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
         terminal_text(&run.started_at),
         run.exit_code
             .map_or_else(|| "pending".to_owned(), |code| code.to_string()),
+        terminal_text(run.outcome.as_deref().unwrap_or("pending")),
         custody,
         run.observed_pid
             .map_or_else(|| "unrecorded".to_owned(), |pid| pid.to_string())
@@ -557,7 +719,7 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
 }
 
 fn profile_view(p: &Profile) -> serde_json::Value {
-    json!({"profile":p,"account":"unverified","quota":"unknown","isolation":"unverified"})
+    json!({"profile":p,"engine":p.harness.engine(),"account":"unverified","quota":"unknown","isolation":"unverified"})
 }
 
 fn profile_line(p: &Profile) -> String {

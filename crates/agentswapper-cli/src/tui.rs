@@ -1,6 +1,6 @@
 use std::{io, time::Duration};
 
-use agentswapper_core::{Profile, Result, Store, launch::LaunchPlan};
+use agentswapper_core::{Error, Profile, Result, Store, launch::LaunchPlan};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame, Terminal,
@@ -134,8 +134,16 @@ pub(crate) fn run(store: &Store) -> Result<()> {
                         &std::env::current_dir()?,
                         vec![],
                         false,
-                    );
+                    )
+                    .and_then(|plan| {
+                        if !plan.check_gents_runtime()? {
+                            return Err(Error::GentsRuntimeMismatch);
+                        }
+                        Ok(plan)
+                    });
                     app.message = Some(match result {
+                        Ok(_) if profile.harness == agentswapper_core::Harness::Gents =>
+                            "Gents client preflight: local address matches; listener unverified. External runtime owns workspace and permissions. Inspect with aswp run PROFILE --dry-run.".to_owned(),
                         Ok(_) if app.masked => format!(
                             "Preflight: {} found. Isolation unverified. Unmask aliases to see the launch command.",
                             profile.harness
@@ -287,7 +295,12 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
                 )
             })
             .unwrap_or_default();
-        if area.width < 70 {
+        if profiles
+            .get(app.selected)
+            .is_some_and(|p| p.harness == agentswapper_core::Harness::Gents)
+        {
+            "Engine: gents / attached client\nWorkspace + permissions: gents\nRuntime may outlive chat\nQuota: unknown / no auto switch".to_owned()
+        } else if area.width < 70 {
             format!(
                 "{selected}\nAccount: unverified\nQuota: unknown / no auto switch\nUnfinished runs: {}",
                 app.pending
@@ -362,5 +375,29 @@ mod tests {
         for (width, height) in [(0, 0), (1, 1), (20, 6), (34, 10)] {
             let _ = screenshot(&app, width, height);
         }
+    }
+    #[test]
+    fn gents_dashboard_discloses_external_ownership_without_leaking_masked_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        store
+            .register_gents(
+                "private-client".parse().unwrap(),
+                agentswapper_core::GentsBinding::new(
+                    "127.0.0.1:9191".parse().unwrap(),
+                    "private_agent".parse().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut app = Dashboard {
+            masked: true,
+            ..Dashboard::default()
+        };
+        app.refresh(&store).unwrap();
+        let screen = screenshot(&app, 44, 17);
+        assert!(screen.contains("Engine: gents / attached client"));
+        assert!(screen.contains("Runtime may outlive chat"));
+        assert!(!screen.contains("private"));
     }
 }

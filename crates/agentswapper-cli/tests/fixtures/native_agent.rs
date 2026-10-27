@@ -26,5 +26,13 @@ fn main() {
             std::fs::write(PathBuf::from(value).join("fixture-owned.txt"), "fixture").unwrap();
         }
     }
+    if args.first().is_some_and(|arg| arg == "chat") {
+        let home = args.windows(2).find(|pair| pair[0] == "--home").unwrap();
+        std::fs::write(PathBuf::from(&home[1]).join("fixture-owned.txt"), "gents fixture").unwrap();
+        for key in ["GENTS_HOME", "GENTS_GRAPHQL", "GENTS_FUTURE_OVERRIDE", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "ALL_PROXY", "UNRELATED_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
+            if std::env::var_os(key).is_some() { println!("leaked={key}"); }
+        }
+        println!("terminal={}", std::env::var("TERM").unwrap_or_default());
+    }
     if args.first().is_some_and(|arg| arg == "--exit") { std::process::exit(42); }
 }

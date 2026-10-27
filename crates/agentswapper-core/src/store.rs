@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 3;
+const SCHEMA: i64 = 4;
 mod journal;
 mod runs;
 pub use journal::VerificationReport;
@@ -19,6 +19,7 @@ pub use runs::{ProcessCustody, RunRecord};
 /// Internal producer outcomes. External callers cannot declare a run finished.
 pub(crate) enum RunCompletion {
     ChildExited(i32),
+    ExternalClientExited(i32),
     FailedToSpawn,
     OperatorAttested,
 }
@@ -28,6 +29,10 @@ pub(crate) enum RunCompletion {
 enum Event {
     Registered {
         profile: Profile,
+    },
+    Rebound {
+        id: ProfileId,
+        binding: crate::GentsBinding,
     },
     Renamed {
         id: ProfileId,
@@ -150,7 +155,7 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if matches!(current, 1 | 2) {
+        if matches!(current, 1..=3) {
             journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
@@ -176,7 +181,7 @@ impl Store {
 
     pub fn profiles(&self) -> Result<Vec<Profile>> {
         let mut query = self.db.prepare(
-            "SELECT id,alias,harness,enabled FROM main.profiles WHERE retired=0 ORDER BY alias",
+            "SELECT id,alias,harness,enabled,gents FROM main.profiles WHERE retired=0 ORDER BY alias",
         )?;
         let rows = query.query_map([], |r| {
             Ok((
@@ -184,16 +189,23 @@ impl Store {
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, bool>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, alias, harness, enabled) = row?;
-            Ok(Profile {
+            let (id, alias, harness, enabled, gents) = row?;
+            let profile = Profile {
                 id: id.parse()?,
                 alias: alias.parse().map_err(|_| Error::CorruptRegistry)?,
                 harness: harness.parse()?,
                 enabled,
-            })
+                gents: gents
+                    .map(|json| serde_json::from_str(&json))
+                    .transpose()
+                    .map_err(|_| Error::CorruptRegistry)?,
+            };
+            profile.validate().map_err(|_| Error::CorruptRegistry)?;
+            Ok(profile)
         })
         .collect()
     }
@@ -206,12 +218,31 @@ impl Store {
     }
 
     pub fn register(&mut self, harness: Harness, alias: Alias) -> Result<Profile> {
+        self.register_profile(harness, alias, None)
+    }
+
+    pub fn register_gents(
+        &mut self,
+        alias: Alias,
+        binding: crate::GentsBinding,
+    ) -> Result<Profile> {
+        self.register_profile(Harness::Gents, alias, Some(binding))
+    }
+
+    fn register_profile(
+        &mut self,
+        harness: Harness,
+        alias: Alias,
+        gents: Option<crate::GentsBinding>,
+    ) -> Result<Profile> {
         let profile = Profile {
             id: ProfileId::new(),
             harness,
             alias,
             enabled: true,
+            gents,
         };
+        profile.validate()?;
         // A failed transaction may leave an empty opaque directory, never credentials.
         private_fs::directory(
             &self.root.join("profiles").join(profile.id.to_string()),
@@ -221,6 +252,21 @@ impl Store {
             profile: profile.clone(),
         })?;
         Ok(profile)
+    }
+
+    /// Updates routing without replacing the engine-owned home or credentials.
+    /// A client lease does not prove that work in the external runtime stopped.
+    pub fn bind_gents(&mut self, alias: &Alias, binding: crate::GentsBinding) -> Result<Profile> {
+        let profile = self.find(alias)?;
+        if profile.harness != Harness::Gents {
+            return Err(Error::EngineMismatch);
+        }
+        let _lease = self.lease(profile.id)?;
+        self.record(Event::Rebound {
+            id: profile.id,
+            binding,
+        })?;
+        self.find(alias)
     }
 
     pub fn rename(&mut self, alias: &Alias, new: Alias) -> Result<Profile> {
@@ -342,6 +388,7 @@ impl Store {
     pub(crate) fn finish_run(&mut self, id: String, completion: RunCompletion) -> Result<()> {
         let (exit_code, outcome) = match completion {
             RunCompletion::ChildExited(code) => (code, "exited"),
+            RunCompletion::ExternalClientExited(code) => (code, "external_client_exited"),
             RunCompletion::FailedToSpawn => (126, "spawn_failed"),
             RunCompletion::OperatorAttested => (125, "user_attested_stopped"),
         };
@@ -526,6 +573,18 @@ fn missing_directory_key(path: &Path) -> Result<String> {
         .ok_or(Error::NonUtf8Path)
 }
 
+fn check_runtime_available(
+    tx: &Transaction<'_>,
+    id: ProfileId,
+    binding: &crate::GentsBinding,
+) -> Result<()> {
+    let duplicate: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM main.profiles WHERE retired=0 AND harness='gents' AND id<>?1 AND json_extract(gents,'$.address')=?2)", params![id.to_string(), binding.address().to_string()], |r| r.get(0))?;
+    if duplicate {
+        return Err(Error::DuplicateRuntime);
+    }
+    Ok(())
+}
+
 fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
     match event {
         Event::Registered { profile: p } => {
@@ -537,15 +596,23 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             if duplicate {
                 return Err(Error::DuplicateAlias);
             }
+            if let Some(binding) = &p.gents { check_runtime_available(tx, p.id, binding)?; }
             tx.execute(
-                "INSERT INTO main.profiles(id,alias,harness,enabled) VALUES(?1,?2,?3,?4)",
+                "INSERT INTO main.profiles(id,alias,harness,enabled,gents) VALUES(?1,?2,?3,?4,?5)",
                 params![
                     p.id.to_string(),
                     p.alias.to_string(),
                     p.harness.to_string(),
-                    p.enabled
+                    p.enabled,
+                    p.gents.as_ref().map(serde_json::to_string).transpose()?
                 ],
             )?;
+        }
+        Event::Rebound { id, binding } => {
+            check_runtime_available(tx, *id, binding)?;
+            if tx.execute("UPDATE main.profiles SET gents=?1 WHERE id=?2 AND retired=0 AND harness='gents' AND NOT EXISTS(SELECT 1 FROM main.runs WHERE profile=?2 AND exit_code IS NULL)", params![serde_json::to_string(binding)?, id.to_string()])? != 1 {
+                return Err(Error::Busy);
+            }
         }
         Event::Renamed { id, alias } => {
             let duplicate: bool = tx.query_row(
@@ -592,16 +659,17 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             tx.execute("DELETE FROM main.mappings WHERE profile=?1", [id.to_string()])?;
         }
         Event::RunPlanned { id, profile, kind, requires_spawn_observation } => {
-            let enabled: Option<bool> = tx
+            let enabled: Option<(bool, String)> = tx
                 .query_row(
-                    "SELECT enabled FROM main.profiles WHERE id=?1 AND retired=0",
+                    "SELECT enabled,harness FROM main.profiles WHERE id=?1 AND retired=0",
                     [profile.to_string()],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
             match enabled {
-                Some(true) => {}
-                Some(false) => return Err(Error::Disabled),
+                Some((_, harness)) if harness == "gents" && (kind != "run" || !requires_spawn_observation) => return Err(Error::UnsupportedGentsOperation),
+                Some((true, _)) => {}
+                Some((false, _)) => return Err(Error::Disabled),
                 None => return Err(Error::NotFound),
             }
             tx.execute(
@@ -615,7 +683,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             outcome,
         } => {
             if tx.execute(
-                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2<>'exited' OR requires_spawn_observation=0 OR observed_pid IS NOT NULL)",
+                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2 NOT IN ('exited','external_client_exited') OR requires_spawn_observation=0 OR observed_pid IS NOT NULL) AND (?2<>'exited' OR profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')) AND (?2<>'external_client_exited' OR profile IN (SELECT id FROM main.profiles WHERE harness='gents'))",
                 params![exit_code, outcome, id],
             )? != 1
             {

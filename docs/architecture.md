@@ -33,8 +33,8 @@ is not supported. In native mode, cross-vendor continuation therefore means
 stopping one official CLI and starting another. An optional execution engine
 can instead retain its own canonical conversation while changing providers.
 The [gents evaluation](gents-evaluation.md) selects this as an early parallel
-qualification track, not a replacement for native adapters. It is not yet
-implemented or promoted.
+qualification track, not a replacement for native adapters. An experimental attached-client slice is implemented; real runtime/provider
+pairs remain unverified. See [execution engines](engines.md).
 
 ## 2. Identity model
 
@@ -178,7 +178,10 @@ PTY fallback: `portable-pty` only hosts native sessions inside the TUI.
 Screen-scraped text never drives a switch, a quota estimate, or a "verified"
 claim.
 
-Optional engine mode: qualify gents through a pinned, authenticated local process
+Optional engine mode: the implemented first slice attaches `gents chat` to a
+separately operated local runtime, with fixed home/address/agent bindings and
+explicitly unknown external runtime custody. The full design below still needs
+qualification. Qualify gents through a pinned, authenticated local process
 adapter. Keep AgentSwapper's SQLite journal, policy and supervision independent;
 gents owns its history, credentials and tools. Use a dedicated agent/profile per
 lineage to avoid agent-wide model changes affecting unrelated sessions. Show

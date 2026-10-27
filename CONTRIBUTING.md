@@ -45,3 +45,9 @@ and must pass the advisory/license policy. Contributions are licensed under
 Read [dependency decisions](docs/dependencies.md) before upgrading encryption
 or translation crates. Handover CLI tests exercise the production KDF; nextest
 serializes that test group to limit concurrent memory use.
+
+Use Conventional Commits for every new commit: `type(scope): description`.
+For example, `feat(engine): add optional gents chat profiles`,
+`fix(registry): preserve pending runs during migration`, or
+`docs(engines): explain runtime ownership`. Keep the type and scope lowercase
+and make the description state the change.

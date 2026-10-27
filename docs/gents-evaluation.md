@@ -11,6 +11,11 @@ execution engine changes provider or account. Rebuilding that engine ourselves
 would duplicate significant work. Native CLI supervision and cross-engine
 handover still require AgentSwapper's own implementation.
 
+Implementation follow-up: the experimental attached-client option is now
+available. See [engine setup and comparison](engines.md) for what it does and
+[validation evidence](engine-validation.md) for its limits. This source review
+does not qualify that runtime or any provider account.
+
 ## Scope and provenance
 
 - Main: [`89f1b6760e2297b3d8a09d347c43eaf6978a8b31`][main], workspace 0.21.0,

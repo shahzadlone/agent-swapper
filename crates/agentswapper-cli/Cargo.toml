@@ -25,6 +25,7 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm_0
 crossterm = "0.29"
 ctrlc = "3"
 zeroize.workspace = true
+uuid = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

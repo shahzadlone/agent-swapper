@@ -215,14 +215,20 @@ fn replay(source: &Connection) -> Result<(Connection, u64)> {
 fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
     projection_dump_with_run_fields(
         db,
+        "id,alias,harness,enabled,retired,gents",
         "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation",
     )
 }
 
-fn projection_dump_with_run_fields(db: &Connection, fields: &str) -> Result<Vec<Vec<Vec<Value>>>> {
+fn projection_dump_with_run_fields(
+    db: &Connection,
+    profile_fields: &str,
+    fields: &str,
+) -> Result<Vec<Vec<Vec<Value>>>> {
+    let profile_sql = format!("SELECT {profile_fields} FROM main.profiles ORDER BY id");
     let run_sql = format!("SELECT {fields} FROM main.runs ORDER BY id");
     [
-        "SELECT id,alias,harness,enabled,retired FROM main.profiles ORDER BY id",
+        profile_sql.as_str(),
         run_sql.as_str(),
         "SELECT directory,profile FROM main.mappings ORDER BY directory",
     ]
@@ -243,6 +249,7 @@ fn projection_dump_with_run_fields(db: &Connection, fields: &str) -> Result<Vec<
 
 pub(super) fn validate_event(event: &Event) -> Result<()> {
     match event {
+        Event::Registered { profile } => profile.validate().map_err(|_| Error::CorruptRegistry)?,
         Event::RunSpawned { id, pid } => {
             if !canonical_uuid(id) || *pid == 0 {
                 return Err(Error::CorruptRegistry);
@@ -261,7 +268,7 @@ pub(super) fn validate_event(event: &Event) -> Result<()> {
             if !canonical_uuid(id)
                 || !matches!(
                     outcome.as_str(),
-                    "exited" | "spawn_failed" | "user_attested_stopped"
+                    "exited" | "external_client_exited" | "spawn_failed" | "user_attested_stopped"
                 )
                 || (outcome == "spawn_failed" && *exit_code != 126)
                 || (outcome == "user_attested_stopped" && *exit_code != 125)
@@ -298,7 +305,7 @@ fn valid_timestamp(value: &str) -> bool {
 pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != from || !matches!(from, 1 | 2) {
+    if version != from || !matches!(from, 1..=3) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -350,7 +357,28 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         }
         drop(update);
     }
-    tx.execute_batch("ALTER TABLE runs ADD COLUMN observed_pid INTEGER CHECK(observed_pid>0); ALTER TABLE runs ADD COLUMN spawned_at TEXT; ALTER TABLE runs ADD COLUMN requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1)); PRAGMA user_version=3;")?;
+    if from < 3 {
+        tx.execute_batch("ALTER TABLE runs ADD COLUMN observed_pid INTEGER CHECK(observed_pid>0); ALTER TABLE runs ADD COLUMN spawned_at TEXT; ALTER TABLE runs ADD COLUMN requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1));")?;
+    }
+    // Check the old DDL before replacing tables so extra triggers, indexes, or
+    // altered constraints cannot disappear into an apparently valid migration.
+    let legacy_schema = Connection::open_in_memory()?;
+    legacy_schema.execute_batch(include_str!("schema_v3.sql"))?;
+    if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
+        return Err(Error::ProjectionMismatch);
+    }
+    // Copy actual projections, not the replay: corrupted rows must still fail
+    // verification. Keep foreign keys enabled, dropping children before parents.
+    tx.execute_batch("CREATE TEMP TABLE migration_profiles AS SELECT id,alias,harness,enabled,retired FROM main.profiles;
+        CREATE TEMP TABLE migration_runs AS SELECT * FROM main.runs;
+        CREATE TEMP TABLE migration_mappings AS SELECT * FROM main.mappings;
+        DROP TABLE main.mappings; DROP TABLE main.runs; DROP TABLE main.profiles;")?;
+    tx.execute_batch(include_str!("projections.sql"))?;
+    tx.execute_batch("INSERT INTO main.profiles(id,alias,harness,enabled,retired) SELECT * FROM temp.migration_profiles;
+        INSERT INTO main.runs SELECT * FROM temp.migration_runs;
+        INSERT INTO main.mappings SELECT * FROM temp.migration_mappings;
+        DROP TABLE temp.migration_profiles; DROP TABLE temp.migration_runs; DROP TABLE temp.migration_mappings;
+        PRAGMA user_version=4;")?;
     if !verify_snapshot(&tx)?.consistent {
         return Err(Error::ProjectionMismatch);
     }

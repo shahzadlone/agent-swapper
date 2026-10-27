@@ -16,7 +16,7 @@ AI coding agent and subscription switcher for Claude Code, Codex, and Kimi Code.
 
 Meet **`aswp`**, short for **A**gent**Sw**a**p**per. Prefer the full name? Use `agentswapper`.
 
-> Developer preview. Build from source; native integrations are experimental.
+> Developer preview. Build from source; execution engines are experimental.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/handover-dark.png">
@@ -35,6 +35,16 @@ Meet **`aswp`**, short for **A**gent**Sw**a**p**per. Prefer the full name? Use `
 Checkpoint the work. Switch accounts or agents. Verify the workspace. Continue.
 
 Resume an existing session where supported. When changing agents, use a checked handover to carry the task forward.
+
+## Choose your engine
+
+| Engine | Why choose it | Tradeoff |
+| --- | --- | --- |
+| **Native** | Keep Claude, Codex or Kimi's familiar terminal and tools | Cross-brand context needs a handover |
+| **gents · optional** | Use a common runtime with its own conversation history | Separate setup; runtime work can outlive the chat client |
+
+Explore with `aswp engines`. Both paths are experimental; automatic switching
+is still in development. [Setup and full comparison →](docs/engines.md)
 
 [CLI guide](docs/cli.md) / [Build and contribute](CONTRIBUTING.md) / [Architecture](docs/architecture.md) / [Roadmap](docs/roadmap.md)
 

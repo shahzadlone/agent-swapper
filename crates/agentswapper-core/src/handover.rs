@@ -321,7 +321,7 @@ pub fn validate_note_location(path: &Path, state_root: &Path) -> Result<PathBuf>
         forbidden.push(default_root);
     }
     if let Some(base) = directories::BaseDirs::new() {
-        for name in [".claude", ".codex", ".kimi", ".kimi-code"] {
+        for name in [".claude", ".codex", ".kimi", ".kimi-code", ".gents"] {
             forbidden.push(base.home_dir().join(name));
         }
     }
