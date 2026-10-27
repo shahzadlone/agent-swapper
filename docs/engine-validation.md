@@ -55,9 +55,23 @@ launch plans after rebinding. The gents state filename and CLI arguments were
 checked against pinned source, rather than accepted solely from a model review.
 Review is supplemental to tests, not proof of provider or runtime isolation.
 
+## Cross-platform CI
+
+[Run 40559571403](https://github.com/shahzadlone/agent-swapper/actions/runs/40559571403)
+passed all four jobs for code commit `5c84881`: Ubuntu, macOS, Windows and
+security/dependency policy. This includes formatting, Clippy, the fixture suite,
+doctests, ten Windows journal lifecycle stress iterations, the Windows Job
+custody probe and the Linux delegated-cgroup probe. These custody probes test
+their own primitives; they do not contain the external gents runtime.
+
+The first macOS run caught three new migration fixtures using the `/var` parent
+alias directly. `test(registry): normalize migration fixture roots on macOS`
+resolved the fixture paths before calling the private-path checker, matching the
+existing migration tests. The safety checks and assertions were preserved; the
+corrected run passed on all three CI platforms.
+
 ## Remaining evidence
 
-Cross-platform CI results for this change will be recorded here after the run.
 Real authenticated runtime setup, provider/account pairs, refresh persistence,
 reasoning/tool replay, macOS Keychain custody and Windows ACL privacy remain
 unverified. No live credentials or provider requests were used for these checks.

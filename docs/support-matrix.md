@@ -35,7 +35,7 @@ ownership and tradeoffs; [engine setup](engines.md) documents the opt-in.
 
 | Engine contract | Linux | WSL2 | macOS | Windows |
 | --- | --- | --- | --- | --- |
-| gents attached CLI fixture | CI required | tested on WSL2 | CI required | CI required |
+| gents attached CLI fixture | passed in CI | passed locally | passed in CI | passed in CI |
 | gents runtime/provider/account pairs | unverified | unverified | unverified | unverified |
 
 Cross-platform fixture evidence is recorded in [engine validation](engine-validation.md).
