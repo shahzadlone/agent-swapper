@@ -29,9 +29,9 @@ The probe never signals a PID read from a file. All fixtures have deadlines.
 
 | Check | Recorded result |
 | --- | --- |
-| Detached writer survives original group kill | Demonstrated locally on WSL2, Linux 6.18.54.1-microsoft-standard-WSL2, 2026-10-27 |
+| Detached writer survives original group kill | Demonstrated locally on WSL2, Linux 6.18.54.1-microsoft-standard-WSL2, and in CI on Ubuntu kernel 7.0.0-1017-azure, 2026-10-27 |
 | Linux delegated cgroup | Not available to the current user on that host; hierarchy and control files are root-owned |
-| macOS detached-writer probe | Passed in CI at `67d06fa` on `macos-latest`; exact build was not yet recorded |
+| macOS detached-writer probe | Passed on macOS 26.6.2 arm64 / Darwin 25.6.0, Rust 1.98.0, at `11ab437` |
 | Windows strict Job containment | Not implemented or verified |
 | Real provider isolation and custody | Unverified for every harness |
 
@@ -59,9 +59,24 @@ is insufficient. See Microsoft's [Job Objects reference](https://learn.microsoft
 
 An audit of process-wrap 10.0.1 found that its std Job wrapper creates a Job
 without kill-on-close, and its wait helper does not distinguish an empty-Job
-notification from other completion messages. The dependency has not been
-adopted. Its wrapper behavior needs additional ownership and verification
-before it can support these gates; enabling a feature by name is insufficient.
+notification from other completion messages. The native launcher does not use
+it. A separate Windows-only verification example combines its suspended
+assignment with a process-lifetime root Job and independent membership queries.
+Its runtime evidence is still pending; enabling a feature by name is insufficient.
+
+Run that provider-free spike on Windows with:
+
+```sh
+cargo run -p agentswapper-core --example windows_custody_probe
+```
+
+It tests targeted Job termination, hard termination of the owned supervisor,
+and refusal of breakaway child creation at both the root and inner Jobs.
+Adjacent normal children are positive controls; refusal must be Windows
+access-denied, rather than an arbitrary spawn error. The root membership query must leave only the trusted
+supervisor after targeted termination. Crash cleanup uses a controlled writer's
+lifetime lock and heartbeat as fixture observations; it does not issue a general
+custody certificate. Helpers have deadlines and use private temporary files.
 
 Containment addresses owned local processes. It is not a filesystem sandbox or
 proof about work delegated to an external service. Credential custody, native

@@ -37,6 +37,21 @@ an affected runtime dependency. Re-check the actual graph with `cargo tree`
 before changing the rationale. Do not infer audit cleanliness merely from a
 package's age, version number, or continued compilation.
 
+## Windows custody verification
+
+The Windows-only custody example uses exact development dependencies
+`process-wrap 10.0.1` and `win32job 2.0.3`, both MIT OR Apache-2.0, plus the
+Microsoft Windows bindings. They are excluded from normal native-launch
+dependencies. Only std, Job Object, and creation-flag support is enabled in
+process-wrap; Tokio and tracing are disabled. The two libraries currently use
+different Windows binding versions, both recorded and audited in Cargo.lock.
+
+Source review found that process-wrap's std Job wrapper alone lacks
+kill-on-close and an adequate empty-Job wait. The verification example supplies
+separate root ownership and membership checks; the result must pass the
+[custody gates](custody.md) before production supervision can use it. No new
+advisory or licensing exception was added for this experiment.
+
 ## Licensing and distribution
 
 BSD-3-Clause is allowed for the RustCrypto/Dalek dependencies. The existing
