@@ -23,8 +23,13 @@ def main():
             for failure in case.findall(tag):
                 name = case.get("name", "unknown test")
                 output = failure.text or failure.get("message", "Test failed")
+                stdout = case.findtext("system-out", "")
                 stderr = case.findtext("system-err", "")
-                print("::error::" + escape(f"{name}: {output}\n{stderr}"[:6000]))
+                diagnostic = f"{name}: {output}\n{stdout}\n{stderr}"
+                if len(diagnostic) > 6000:
+                    # Proptest puts the minimized input and replay seed at the end.
+                    diagnostic = diagnostic[:2500] + "\n[output truncated]\n" + diagnostic[-3400:]
+                print("::error::" + escape(diagnostic))
 
 
 if __name__ == "__main__":

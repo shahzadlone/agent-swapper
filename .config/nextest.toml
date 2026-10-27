@@ -9,6 +9,7 @@ failure-output = "immediate-final"
 
 [profile.ci.junit]
 path = "junit.xml"
+store-failure-output = true
 
 [test-groups.handover-crypto]
 max-threads = 1
