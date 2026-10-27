@@ -726,7 +726,7 @@ fn v3_dump(db: &Connection) -> Vec<Vec<Vec<Value>>> {
 #[test]
 fn v3_upgrade_preserves_observed_pending_run_and_exact_backup() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("state");
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
     let mut db = legacy_v3(&root);
     let before = v3_dump(&db);
     migrate(&mut db, &root, 3).unwrap();
@@ -763,7 +763,7 @@ fn v3_migration_does_not_erase_projection_or_schema_tampering() {
         "DROP INDEX unique_alias",
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("state");
+        let root = dunce::canonicalize(temp.path()).unwrap().join("state");
         let mut db = legacy_v3(&root);
         db.execute_batch(mutation).unwrap();
         let before = v3_dump(&db);
@@ -854,7 +854,7 @@ fn gents_rebinding_is_leased_durable_and_keeps_home_identity() {
 #[test]
 fn v3_with_v1_default_and_appended_columns_upgrades_without_losing_history() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("state");
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
     let (mut db, _) = legacy(&root);
     // Exact prior 1->3 migration shape from f780f97: retain the unused default.
     db.execute_batch("UPDATE runs SET started_at=(SELECT recorded_at FROM event_log WHERE sequence=2);
