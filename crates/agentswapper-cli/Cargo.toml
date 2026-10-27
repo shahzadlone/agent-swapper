@@ -24,6 +24,7 @@ serde_json.workspace = true
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 crossterm = "0.29"
 ctrlc = "3"
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

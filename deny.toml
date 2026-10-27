@@ -1,9 +1,13 @@
 [advisories]
 unmaintained = "all"
 yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml is used by age's i18n-config build-time translation macros on checked-in crate metadata only; unmaintained notice, not a vulnerability. See docs/dependencies.md." },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is used by age 0.11.3 translation macros during compilation only; unmaintained notice, not a vulnerability. Toolchain is pinned. See docs/dependencies.md." },
+]
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Unlicense", "Zlib"]
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Unlicense", "Zlib", "BSD-3-Clause"]
 confidence-threshold = 0.9
 private = { ignore = false }
 
@@ -17,6 +21,11 @@ allow = ["MPL-2.0"]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+deny = [
+    { crate = "basic-toml", wrappers = ["i18n-config"] },
+    { crate = "i18n-config", wrappers = ["i18n-embed-fl", "i18n-embed-impl"] },
+    { crate = "proc-macro-error2", wrappers = ["i18n-embed-fl"] },
+]
 
 [sources]
 unknown-registry = "deny"

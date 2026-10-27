@@ -1,6 +1,6 @@
 # AgentSwapper Roadmap
 
-Status: M1a developer preview implemented; the full milestones below remain
+Status: M1a foundations and M1b manual handover packs implemented; full milestones remain
 open. There are no release dates. A
 milestone is complete only when every gate below passes and the evidence (logs,
 traces, fixture results) is recorded with the harness versions and OS builds it
@@ -82,6 +82,26 @@ replay, process containment, independently verified recovery, config, encryption
 stores, auto switching, and handover remain open. Secret-store/encryption and
 IPC scaffolding are deferred until a concrete consumer exists. Local tests
 establish fixture behavior only; CI and provider matrix evidence are separate.
+
+## M1b - Implemented manual handover packs
+
+Implemented, unreleased:
+
+- `handover pack`, `inspect`, and `pickup`, with a draft encrypted schema-v0
+  payload that preserves a complete existing HANDOVER.md;
+- hidden passphrase prompts, confirmation, cancellation with terminal restore,
+  explicit bounded stdin input, and fixed-cost age passphrase encryption;
+- authenticated unlock before rendering, bounded decryption cost, exclusive
+  output publication, source-location/link checks, and terminal control refusal;
+- metadata-only inspection and manual pickup notes with imported-data fences;
+- directory and Git HEAD reconciliation, with worktree state explicitly unknown;
+- fixture tests for tampering, wrong passwords, credential-location refusal,
+  source preservation, drift, and failed/truncated pickup output.
+
+This pulls a manual continuity utility forward while M0/M1 integration work
+continues. It does not complete M2: no writer stop, managed switch, native resume,
+read-only execution boundary, secret-store key persistence, full capsule-v1
+claims/evidence model, or account backup is implied. See [handover](handover.md).
 
 ## M1 - Foundations and native launch for all three providers
 

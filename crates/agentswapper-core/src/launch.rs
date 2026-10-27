@@ -149,17 +149,16 @@ impl LaunchPlan {
 }
 
 pub fn discover(harness: crate::Harness) -> Option<PathBuf> {
+    discover_named(&harness.to_string())
+}
+
+pub(crate) fn discover_named(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let absolute = std::env::split_paths(&path)
         .filter(|entry| entry.is_absolute())
         .collect::<Vec<_>>();
     let search = std::env::join_paths(absolute).ok()?;
-    which::which_in(
-        harness.to_string(),
-        Some(search),
-        std::env::current_dir().ok()?,
-    )
-    .ok()
+    which::which_in(name, Some(search), std::env::current_dir().ok()?).ok()
 }
 
 fn validate_executable(path: &Path) -> Result<()> {

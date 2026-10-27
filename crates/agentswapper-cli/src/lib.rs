@@ -1,4 +1,5 @@
 //! Shared entry point for both command names. JSON is an unstable v0 contract.
+mod handover_cli;
 mod tui;
 
 use std::{
@@ -35,6 +36,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(flatten)]
+    Registry(RegistryCommands),
+    /// Create, inspect, and reconcile encrypted manual handover packs.
+    Handover {
+        #[command(subcommand)]
+        command: handover_cli::HandoverCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryCommands {
     /// Register and manage profiles. Registration does not authenticate an account.
     Profile {
         #[command(subcommand)]
@@ -139,6 +151,12 @@ pub fn main_entry(name: &'static str) -> i32 {
         }
     };
     let json_mode = cli.json;
+    let strict_stdout = matches!(
+        &cli.command,
+        Some(Commands::Handover {
+            command: handover_cli::HandoverCommands::Pickup { .. }
+        })
+    );
     if cli.command.is_none() {
         let result = if json_mode {
             emit(
@@ -156,7 +174,7 @@ pub fn main_entry(name: &'static str) -> i32 {
     }
     match dispatch(cli) {
         Ok(code) => code,
-        Err(Error::Io(error)) if error.kind() == io::ErrorKind::BrokenPipe => 0,
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::BrokenPipe && !strict_stdout => 0,
         Err(error) => {
             if json_mode {
                 let _ = emit(
@@ -170,6 +188,7 @@ pub fn main_entry(name: &'static str) -> i32 {
             match error {
                 Error::ExecutableNotFound => 127,
                 Error::UnsafeExecutable => 126,
+                Error::Cancelled => 130,
                 _ => 125,
             }
         }
@@ -177,17 +196,21 @@ pub fn main_entry(name: &'static str) -> i32 {
 }
 
 fn dispatch(cli: Cli) -> Result<i32> {
+    let command = match cli.command {
+        Some(Commands::Handover { command }) => {
+            return handover_cli::dispatch(command, cli.json, cli.state_dir);
+        }
+        Some(Commands::Registry(command)) => command,
+        None => return Ok(0),
+    };
     let root = match cli.state_dir {
         Some(root) => root,
         None => Store::default_root()?,
     };
     let mut store = Store::open(&root)?;
     let cwd = std::env::current_dir()?;
-    let Some(command) = cli.command else {
-        return Ok(0);
-    };
     match command {
-        Commands::Profile { command } => match command {
+        RegistryCommands::Profile { command } => match command {
             ProfileCommands::Add { harness, alias } => {
                 let p = store.register(harness, alias)?;
                 show_profile(
@@ -239,7 +262,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 show_profile(cli.json, &p, &profile_line(&p))?;
             }
         },
-        Commands::List => {
+        RegistryCommands::List => {
             let profiles = store.profiles()?;
             let data: Vec<_> = profiles.iter().map(profile_view).collect();
             let text = if profiles.is_empty() {
@@ -256,7 +279,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
             };
             emit(cli.json, &data, &text)?;
         }
-        Commands::Status => {
+        RegistryCommands::Status => {
             let profiles = store.profiles()?;
             let unfinished = store.unfinished()?;
             let text = format!(
@@ -275,7 +298,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 &text,
             )?;
         }
-        Commands::Doctor => {
+        RegistryCommands::Doctor => {
             let issue = store
                 .check()
                 .err()
@@ -317,7 +340,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
             )?;
             return Ok(if issue.is_some() { 125 } else { 0 });
         }
-        Commands::Recover {
+        RegistryCommands::Recover {
             run_id,
             confirm_stopped,
         } => {
@@ -331,7 +354,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 "Recorded your stopped-process attestation. Profile reuse is permitted; descendant custody was not independently verified.",
             )?;
         }
-        Commands::Run {
+        RegistryCommands::Run {
             profile,
             launch,
             args,
@@ -351,11 +374,11 @@ fn dispatch(cli: Cli) -> Result<i32> {
             };
             return launch_native(&mut store, p, launch, args, false, cli.json);
         }
-        Commands::Login { profile, launch } => {
+        RegistryCommands::Login { profile, launch } => {
             let p = store.find(&profile)?;
             return launch_native(&mut store, p, launch, vec![], true, cli.json);
         }
-        Commands::Map {
+        RegistryCommands::Map {
             profile: Some(alias),
             directory,
         } => {
@@ -366,7 +389,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 &format!("Directory mapped to {alias}."),
             )?;
         }
-        Commands::Map {
+        RegistryCommands::Map {
             profile: None,
             directory,
         } => {
@@ -385,7 +408,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
             };
             emit(cli.json, &mappings, &text)?;
         }
-        Commands::Unmap { directory } => {
+        RegistryCommands::Unmap { directory } => {
             store.unmap(directory.as_deref().unwrap_or(&cwd))?;
             emit(
                 cli.json,
@@ -393,7 +416,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 "Directory mapping removed.",
             )?;
         }
-        Commands::Tui => {
+        RegistryCommands::Tui => {
             if cli.json || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
                 return Err(Error::InteractiveMode);
             }

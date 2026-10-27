@@ -15,6 +15,7 @@ serde_json = "1"
 thiserror = "2"
 tempfile = "3"
 proptest = "1"
+zeroize = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -27,3 +28,10 @@ expect_used = "deny"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Keep the password KDF at its production work factor during CLI tests.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3

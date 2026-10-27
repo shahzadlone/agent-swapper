@@ -2,6 +2,7 @@
 //!
 //! No quota or account identity is inferred from the presence of a directory.
 pub mod domain;
+pub mod handover;
 pub mod launch;
 mod private_fs;
 pub mod store;
@@ -53,6 +54,44 @@ pub enum Error {
     InteractiveMode,
     #[error("path cannot be represented without loss; use a UTF-8 state or mapping path")]
     NonUtf8Path,
+    #[error(
+        "handover input is too large; notes are limited to 256 KiB and encrypted packs to 1 MiB plus framing"
+    )]
+    HandoverTooLarge,
+    #[error(
+        "handover input must be a regular task note outside authentication and application-state directories"
+    )]
+    UnsafeHandoverInput,
+    #[error(
+        "handover file must be regular; symbolic links and Windows cloud/reparse files are unsupported in this preview"
+    )]
+    UnsafeHandoverFile,
+    #[error(
+        "handover data is invalid or uses an unsupported schema; no imported content was executed"
+    )]
+    InvalidHandover,
+    #[error("could not authenticate and decrypt the handover; check the passphrase and file")]
+    HandoverDecryption,
+    #[error("handover encryption work factor exceeds the supported resource limit")]
+    HandoverWorkFactor,
+    #[error("handover output already exists; choose a new path rather than overwriting it")]
+    OutputExists,
+    #[error(
+        "use a unique passphrase of at least 16 characters, entered at the hidden prompt or through --passphrase-stdin"
+    )]
+    InvalidPassphrase,
+    #[error(
+        "passphrase input requires a terminal, or --passphrase-stdin with a pipe; passphrases never belong in arguments"
+    )]
+    PassphraseInput,
+    #[error("passphrases did not match; no handover file was written")]
+    PassphraseMismatch,
+    #[error("cancelled; no handover file was written")]
+    Cancelled,
+    #[error(
+        "unsupported key in hidden passphrase entry; retry or provide one line through --passphrase-stdin"
+    )]
+    UnsupportedPasswordKey,
     #[error("storage operation failed")]
     Database(#[from] rusqlite::Error),
     #[error("filesystem or process operation failed")]
@@ -81,6 +120,18 @@ impl Error {
             Self::UnverifiedNative => "native_unverified",
             Self::InteractiveMode => "interactive_mode",
             Self::NonUtf8Path => "non_utf8_path",
+            Self::HandoverTooLarge => "handover_too_large",
+            Self::UnsafeHandoverInput => "unsafe_handover_input",
+            Self::UnsafeHandoverFile => "unsafe_handover_file",
+            Self::InvalidHandover => "invalid_handover",
+            Self::HandoverDecryption => "handover_decryption_failed",
+            Self::HandoverWorkFactor => "handover_work_factor",
+            Self::OutputExists => "output_exists",
+            Self::InvalidPassphrase => "invalid_passphrase",
+            Self::PassphraseInput => "passphrase_input",
+            Self::PassphraseMismatch => "passphrase_mismatch",
+            Self::Cancelled => "cancelled",
+            Self::UnsupportedPasswordKey => "unsupported_password_key",
             Self::Database(_) => "database_error",
             Self::Io(_) => "io_error",
             Self::Json(_) => "serialization_error",
@@ -95,11 +146,15 @@ pub fn terminal_text(value: &str) -> String {
     value
         .chars()
         .flat_map(|c| {
-            if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+            if c.is_control() || invisible_control(c) {
                 c.escape_default().collect::<Vec<_>>()
             } else {
                 vec![c]
             }
         })
         .collect()
+}
+
+pub(crate) fn invisible_control(c: char) -> bool {
+    matches!(c, '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}')
 }

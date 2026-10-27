@@ -63,8 +63,8 @@ providers or windows.
 | Iteration speed                    | slower    | fast                   | fastest              | fast            |
 
 Selected: Rust. The hard parts are process containment, state-machine
-correctness, OS secret stores and signed distribution. Candidate crates, with
-future additions require their own M0 validation. Current foundation dependency
+correctness, OS secret stores and signed distribution. Future integration
+dependencies require their own M0 validation. Current foundation dependency
 versions are locked in Cargo.lock for reproducible builds:
 
 - `clap` (CLI), `tokio` (runtime, child processes), `serde`/`serde_json`, JSON
@@ -81,8 +81,11 @@ versions are locked in Cargo.lock for reproducible builds:
 Costs accepted: slower iteration, async plus PTY complexity, smaller widget set.
 Mitigation: a core library with no UI dependency, adapters as separate crates.
 The current slice uses synchronous native processes, SQLite, and Ratatui.
-Tokio, encryption, secret stores, IPC, PTYs, and containment are deferred until
+Tokio, secret stores, IPC, PTYs, and containment are deferred until
 there is an implemented consumer and verified platform behavior.
+The manual handover-pack feature now consumes age for explicit password-based
+exports, with no stored encryption key. See [handover](handover.md) and
+[dependency decisions](dependencies.md) for its draft format and boundaries.
 
 ## 4. Profiles and CLI auth ownership
 
@@ -295,6 +298,11 @@ reconciles reality, checks drift and capability delta, then continues.
 
 The skills provide continuity content. The supervisor provides ownership,
 capture, crash recovery and permission boundaries.
+
+Current manual implementation: pack the complete existing note as unverified
+data, encrypt it to a user-supplied passphrase, and render a fenced pickup note
+after checking directory/HEAD drift. It does not yet parse claims into the full
+capsule schema, enforce read-only pickup, stop writers, or launch the receiver.
 
 ## 12. Resume versus handover
 

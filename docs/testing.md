@@ -18,6 +18,7 @@ them to make failures explicit.
 | Crash | Kill the supervisor while a fixture agent is running; a second launch remains blocked after the OS lock releases |
 | Disclosure | Canary auth values and argument contents are absent from wrapper error/preview output; the fixture writes only the chosen profile home |
 | CLI | Both binary names, help without opening state, profile lifecycle, duplicate aliases, JSON shape |
+| Handover | Authenticated encrypted round trip, wrong password and tamper refusal, chunk-boundary truncation, bounded work, concurrent exclusive output, source-link/credential-location checks, invisible-character and fence handling, AltGr/repeat input, actual HEAD drift, and broken-pipe failure |
 | Terminal | Reviewed empty and narrow/masked snapshots, literal unknown quota, very small viewport rendering |
 
 Each integration test creates its own temporary state and fake home. Tests
@@ -43,9 +44,11 @@ fallback. nextest does not run doctests, which is why CI has a separate step.
 Never enable snapshot auto-update in CI. Review `.snap.new` files locally and
 accept only intentional UX changes.
 
-The checked-in workflow runs tests on Linux, macOS, and Windows; a configured
-job is not evidence that it passed. Local verification in this environment is
-Linux/WSL only. There is no lower, untested MSRV promise.
+The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
+Windows, including Clippy and doctests. New handover checks run locally on
+Linux/WSL and need their own cross-platform CI results. Neither a configured
+job nor a fixture result verifies a real provider. There is no lower, untested
+MSRV promise.
 
 ## Gates still required
 

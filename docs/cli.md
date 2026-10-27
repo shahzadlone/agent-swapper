@@ -58,7 +58,7 @@ the selected child's profile-home variable: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
 or `KIMI_CODE_HOME`. Native configuration, platform credential stores, workspace
 hooks, and version-specific behavior can reach beyond that directory. A home
 variable is not a sandbox. There is no process-tree containment, native resume
-verification, automatic account rotation, or cross-agent handover yet. Do not
+verification, automatic account rotation, or managed cross-agent takeover yet. Do not
 use experimental profiles for sensitive production work.
 
 Known inherited auth, base-URL, billing-route, and selected home variables cause
@@ -76,13 +76,20 @@ belongs to the child, so actual launches cannot use `--json`.
 A profile lease, stored outside the native home, prevents simultaneous launches by cooperating AgentSwapper
 processes. A durable intent is written before spawn. An interrupted supervisor
 leaves an unfinished run and blocks reuse even after its OS lease disappears.
-`status` exposes the unresolved intent. Recovery tooling and descendant custody
-verification are not implemented. Once you have independently stopped the
+`status` exposes the unresolved intent. Independent descendant custody
+verification is not implemented. Once you have independently stopped the
 native agent and all descendants, use `aswp recover RUN_ID --confirm-stopped`
 to record that manual attestation. It refuses while any supervisor holds the
 profile lease. This is not independently verified custody and never drives
 automatic routing. Preserve state if you are unsure. A normal
 direct-child exit is recorded but does not prove its descendants have stopped.
+
+## Manual handover packs
+
+Use `aswp handover pack`, `inspect`, and `pickup` to carry an existing task note
+in an encrypted file. Pickup prints a manual reconciliation note; it does not
+launch another agent. See the [handover guide](handover.md) for the complete
+workflow, password handling, trust boundary, and limits.
 
 ## Directory mappings
 

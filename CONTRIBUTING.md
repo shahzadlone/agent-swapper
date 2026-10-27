@@ -41,3 +41,7 @@ Review snapshot diffs before accepting them. Commit proptest regression seeds;
 do not ignore or automatically bless failures. Dependencies belong in Cargo.lock
 and must pass the advisory/license policy. Contributions are licensed under
 [Apache-2.0](LICENSE). Preserve dependency and artwork notices when redistributing.
+
+Read [dependency decisions](docs/dependencies.md) before upgrading encryption
+or translation crates. Handover CLI tests exercise the production KDF; nextest
+serializes that test group to limit concurrent memory use.

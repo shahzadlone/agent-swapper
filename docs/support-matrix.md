@@ -21,6 +21,9 @@ The preview binds Claude Code through `CLAUDE_CONFIG_DIR`, Codex through
 detection is not implemented. Native login command shapes are unverified and
 must pass the same version/platform matrix before being promoted.
 
-Automatic switching, quota routing, credential transfer, context capsules,
-encrypted exports, structured adapters, and global-account activation are not
-implemented. See the [roadmap](roadmap.md) for the complete scope and gates.
+Manual encrypted handover packs are available as a draft schema-v0 workflow;
+see [handover](handover.md). These do not promote any native support cell.
+
+Automatic switching, quota routing, credential transfer, the full managed
+capsule-v1 protocol, encrypted account backups, structured adapters, and global
+activation are not implemented. See the [roadmap](roadmap.md).
