@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use super::*;
-use crate::{Harness, Store};
+use crate::{Harness, Store, store::RunCompletion};
 use proptest::prelude::*;
 use rusqlite::params;
 
@@ -41,7 +41,8 @@ fn thousand_event_replay_preserves_all_columns_and_unfinished_runs() {
         let run = s
             .begin_run(&lease, if index % 2 == 0 { "run" } else { "login" })
             .unwrap();
-        s.finish_run(run, 7, "exited").unwrap();
+        s.observe_spawn(&run, index as u32 + 1).unwrap();
+        s.finish_run(run, RunCompletion::ChildExited(7)).unwrap();
         drop(lease);
         s.unmap(temp.path()).unwrap();
         s.map(&p.alias, temp.path()).unwrap();
@@ -61,7 +62,7 @@ fn thousand_event_replay_preserves_all_columns_and_unfinished_runs() {
     }
     let report = s.verify().unwrap();
     assert!(report.consistent);
-    assert_eq!(report.events, 1002);
+    assert_eq!(report.events, 1102);
     assert_eq!(projection_dump(&s.db).unwrap(), before);
     assert_eq!(s.unfinished().unwrap().len(), 1);
 }
@@ -201,13 +202,17 @@ fn backups(root: &Path) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+fn old_dump(db: &Connection) -> Result<Vec<Vec<Vec<rusqlite::types::Value>>>> {
+    projection_dump_with_run_fields(db, "id,profile,kind,exit_code,outcome,started_at")
+}
+
 #[test]
 fn v1_upgrade_backs_up_wal_and_preserves_pending_intents() {
     let temp = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(temp.path()).unwrap().join("state");
     let (mut db, run) = legacy(&root);
-    let before = projection_dump(&db).unwrap();
-    migrate_v1(&mut db, &root).unwrap();
+    let before = old_dump(&db).unwrap();
+    migrate(&mut db, &root, 1).unwrap();
     assert!(verify(&db).unwrap().consistent);
     let files = backups(&root);
     assert_eq!(files.len(), 1);
@@ -219,7 +224,7 @@ fn v1_upgrade_backs_up_wal_and_preserves_pending_intents() {
             .unwrap(),
         1
     );
-    assert_eq!(projection_dump(&backup).unwrap(), before);
+    assert_eq!(old_dump(&backup).unwrap(), before);
     assert_eq!(event_count(&backup), 2);
     let (time, exit): (String, Option<i32>) = db
         .query_row(
@@ -273,7 +278,7 @@ fn every_append_refuses_mismatch_and_schema_drift_without_poisoning_log() {
         }
         let count = event_count(&s.db);
         assert!(matches!(
-            s.finish_run(run, 0, "exited"),
+            s.finish_run(run, RunCompletion::ChildExited(0)),
             Err(Error::ProjectionMismatch)
         ));
         assert!(matches!(
@@ -283,6 +288,23 @@ fn every_append_refuses_mismatch_and_schema_drift_without_poisoning_log() {
         assert_eq!(event_count(&s.db), count);
         assert_eq!(replay(&s.db).unwrap().1 as i64, count);
     }
+}
+
+#[test]
+fn schema_comparison_preserves_token_boundaries_and_quoted_contents() {
+    assert_ne!(
+        sql_tokens("enabled INTEGERNOT NULL"),
+        sql_tokens("enabled INTEGER NOT NULL")
+    );
+    assert_ne!(sql_tokens("DEFAULT 'a b'"), sql_tokens("DEFAULT 'ab'"));
+    assert_eq!(sql_tokens("CHECK (a > 0)"), sql_tokens("CHECK(a>0)"));
+    let (_temp, s) = setup();
+    s.db.execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'enabled INTEGER NOT NULL','enabled INTEGERNOT NULL') WHERE name='profiles'; PRAGMA writable_schema=OFF;").unwrap();
+    assert_eq!(s.verify().unwrap().mismatched_tables, ["sqlite_schema"]);
+    let (_temp, s) = setup();
+    s.db.execute("CREATE TABLE sqliteXextra(value TEXT)", [])
+        .unwrap();
+    assert_eq!(s.verify().unwrap().mismatched_tables, ["sqlite_schema"]);
 }
 
 #[test]
@@ -304,7 +326,7 @@ fn invalid_legacy_log_and_orphan_rows_leave_source_unchanged() {
             )
             .unwrap();
         }
-        let before = projection_dump(&db).unwrap();
+        let before = old_dump(&db).unwrap();
         let events = event_count(&db);
         drop(db);
         assert!(Store::open(&root).is_err());
@@ -314,7 +336,7 @@ fn invalid_legacy_log_and_orphan_rows_leave_source_unchanged() {
                 .unwrap(),
             1
         );
-        assert_eq!(projection_dump(&db).unwrap(), before);
+        assert_eq!(old_dump(&db).unwrap(), before);
         assert_eq!(event_count(&db), events);
     }
 }
@@ -343,10 +365,11 @@ fn interleaved_pending_runs_and_failed_appends_keep_a_contiguous_log() {
         Err(Error::Busy)
     ));
     assert_eq!(event_count(&s.db), before);
-    s.finish_run(b, 0, "exited").unwrap();
+    s.observe_spawn(&b, 42).unwrap();
+    s.finish_run(b, RunCompletion::ChildExited(0)).unwrap();
     assert!(s.verify().unwrap().consistent);
     assert_eq!(s.unfinished().unwrap()[0].id, a);
-    s.finish_run(a, 126, "spawn_failed").unwrap();
+    s.finish_run(a, RunCompletion::FailedToSpawn).unwrap();
     assert!(s.verify().unwrap().consistent);
 }
 
@@ -356,9 +379,9 @@ fn failed_migration_rolls_back_every_source_write_and_retains_backup() {
     let root = dunce::canonicalize(temp.path()).unwrap().join("state");
     let (mut db, _) = legacy(&root);
     db.execute_batch("CREATE TRIGGER injected_failure BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
-    let before = projection_dump(&db).unwrap();
-    assert!(migrate_v1(&mut db, &root).is_err());
-    assert_eq!(projection_dump(&db).unwrap(), before);
+    let before = old_dump(&db).unwrap();
+    assert!(migrate(&mut db, &root, 1).is_err());
+    assert_eq!(old_dump(&db).unwrap(), before);
     assert_eq!(
         db.pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
             .unwrap(),
@@ -371,6 +394,97 @@ fn failed_migration_rolls_back_every_source_write_and_retains_backup() {
         assert!(Store::open(&root).is_err());
     }
     assert_eq!(backups(&root).len(), 1);
+}
+
+#[test]
+fn v2_upgrade_preserves_history_without_inventing_spawn_observations() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+    private_fs::directory(&root, true).unwrap();
+    let path = root.join("registry.sqlite3");
+    private_fs::file(&path).unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch(include_str!("../../../tests/fixtures/registry_v2.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("../../../tests/fixtures/registry_v2_seed.sql"))
+        .unwrap();
+    db.execute(
+        "UPDATE runs SET started_at=(SELECT recorded_at FROM event_log WHERE sequence=2)",
+        [],
+    )
+    .unwrap();
+    let before = old_dump(&db).unwrap();
+    drop(db);
+    let s = Store::open(&root).unwrap();
+    let run = s.runs(20).unwrap().pop().unwrap();
+    assert_eq!(run.custody, crate::store::ProcessCustody::Unknown);
+    assert_eq!(run.observed_pid, None);
+    assert_eq!(run.spawned_at, None);
+    assert_eq!(old_dump(&s.db).unwrap(), before);
+    let files = backups(&root);
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0]
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("schema-2-")
+    );
+    let backup = Connection::open(&files[0]).unwrap();
+    assert_eq!(old_dump(&backup).unwrap(), before);
+    assert_eq!(
+        backup
+            .pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn both_legacy_versions_preserve_every_historical_outcome() {
+    use crate::store::ProcessCustody;
+    for (ddl, seed) in [
+        (
+            include_str!("../../../tests/fixtures/registry_v1.sql"),
+            include_str!("../../../tests/fixtures/registry_v1_seed.sql"),
+        ),
+        (
+            include_str!("../../../tests/fixtures/registry_v2.sql"),
+            include_str!("../../../tests/fixtures/registry_v2_seed.sql"),
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+        private_fs::directory(&root, true).unwrap();
+        private_fs::file(&root.join("registry.sqlite3")).unwrap();
+        let db = Connection::open(root.join("registry.sqlite3")).unwrap();
+        db.execute_batch(ddl).unwrap();
+        db.execute_batch(seed).unwrap();
+        db.execute_batch(include_str!(
+            "../../../tests/fixtures/registry_legacy_outcomes.sql"
+        ))
+        .unwrap();
+        drop(db);
+        let s = Store::open(&root).unwrap();
+        let records = s.runs(20).unwrap();
+        assert_eq!(
+            records.iter().map(|r| r.custody).collect::<Vec<_>>(),
+            [
+                ProcessCustody::Unknown,
+                ProcessCustody::AttestedStopped,
+                ProcessCustody::NeverStarted,
+                ProcessCustody::ExitedUncontained,
+            ]
+        );
+        assert!(
+            records
+                .iter()
+                .all(|r| r.observed_pid.is_none() && r.spawned_at.is_none())
+        );
+        assert_eq!(s.unfinished().unwrap().len(), 1);
+        assert!(s.verify().unwrap().consistent);
+    }
 }
 
 proptest! {
@@ -388,8 +502,9 @@ proptest! {
                 4..=6 if p.enabled => {
                     let lease = s.lease(p.id).unwrap();
                     let id = s.begin_run(&lease, if op == 4 { "login" } else { "run" }).unwrap();
+                    if op != 4 { s.observe_spawn(&id,index as u32 + 1).unwrap(); }
                     let (code, outcome) = match op { 4 => (126,"spawn_failed"), 5 => (125,"user_attested_stopped"), _ => (0,"exited") };
-                    s.finish_run(id, code, outcome).unwrap();
+                    s.finish_run(id, match outcome { "exited"=>RunCompletion::ChildExited(code), "spawn_failed"=>RunCompletion::FailedToSpawn, _=>RunCompletion::OperatorAttested }).unwrap();
                 }
                 7 => { s.remove(&p.alias).unwrap(); p = s.register(Harness::ALL[index%3], "work".parse().unwrap()).unwrap(); }
                 _ => {}

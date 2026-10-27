@@ -32,5 +32,8 @@ assert_cmd = "2"
 predicates = "3"
 insta = "1"
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [lints]
 workspace = true

@@ -14,6 +14,8 @@ aswp profile add kimi --alias research
 aswp list
 aswp profile show work
 aswp status
+aswp runs
+aswp runs RUN_ID --json
 aswp doctor
 aswp registry verify
 aswp tui
@@ -88,6 +90,16 @@ to record that manual attestation. It refuses while any supervisor holds the
 profile lease. This is not independently verified custody and never drives
 automatic routing. Preserve state if you are unsure. A normal
 direct-child exit is recorded but does not prove its descendants have stopped.
+
+`aswp runs` shows the 20 most recent runs in journal order, including across
+wall-clock changes; `--limit` accepts 1 through 200.
+`aswp runs RUN_ID` inspects one run, including retired profiles. Aliases show
+the profile's current label. History includes a PID and spawn time when observed,
+plus a custody state: `unknown`, `exited_uncontained`, `never_started`, or
+`attested_stopped`. A pending intent remains unknown even with a recorded PID.
+These observations never authorize an automatic switch; stored PIDs are
+diagnostics and are never used for process termination. Argument contents are
+absent from history.
 
 ## Manual handover packs
 

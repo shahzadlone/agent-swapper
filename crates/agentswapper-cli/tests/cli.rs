@@ -113,6 +113,52 @@ fn help_and_alias_work_without_opening_storage() {
 }
 
 #[test]
+fn run_history_records_pid_and_custody_without_argument_contents() {
+    let s = Sandbox::new();
+    s.command()
+        .arg("runs")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No runs recorded"));
+    s.add("claude", "work");
+    s.run("work")
+        .args(["--", "private-argument-canary"])
+        .assert()
+        .success();
+    let output = s
+        .command()
+        .args(["runs", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    let record = &value["data"][0];
+    assert_eq!(record["custody"], "exited_uncontained");
+    assert_eq!(record["exitCode"], 0);
+    assert!(record["observedPid"].as_u64().unwrap() > 0);
+    assert!(record["spawnedAt"].is_string());
+    let id = record["id"].as_str().unwrap();
+    s.command()
+        .args(["profile", "remove", "work"])
+        .assert()
+        .success();
+    s.command()
+        .args(["runs", id, "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("exited_uncontained"))
+        .stdout(predicate::str::contains("private-argument-canary").not());
+    s.command().args(["runs", "--limit", "0"]).assert().code(2);
+    s.command()
+        .args(["runs", "missing", "--json"])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("run_not_found"));
+}
+
+#[test]
 fn registry_verify_reports_full_replay_in_json() {
     let s = Sandbox::new();
     let output = s
@@ -125,7 +171,7 @@ fn registry_verify_reports_full_replay_in_json() {
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["schemaVersion"], 0);
-    assert_eq!(value["data"]["schemaVersion"], 2);
+    assert_eq!(value["data"]["schemaVersion"], 3);
     assert_eq!(value["data"]["events"], 0);
     assert_eq!(value["data"]["consistent"], true);
     s.add("claude", "work");
@@ -139,7 +185,7 @@ fn registry_verify_reports_full_replay_in_json() {
         .stdout
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["data"]["events"], 3);
+    assert_eq!(value["data"]["events"], 4);
     assert_eq!(value["data"]["consistent"], true);
     assert_eq!(value["data"]["mismatchedTables"], serde_json::json!([]));
 }
@@ -455,4 +501,51 @@ fn supervisor_crash_leaves_a_durable_block_even_after_lock_release() {
         .assert()
         .success();
     s.run("work").assert().success();
+}
+
+#[cfg(unix)]
+#[test]
+fn foreground_sigint_reaches_child_while_supervisor_records_exit() {
+    use rustix::process::{Pid, Signal, kill_process_group};
+    use std::os::unix::process::CommandExt;
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    let ready = s.temp.path().join("ready");
+    let stop = s.temp.path().join("stop");
+    let mut command = s.native_command();
+    command
+        .args(["run", "work", "--experimental-native", "--executable"])
+        .arg(fixture())
+        .args(["--", "--wait"])
+        .arg(&ready)
+        .arg(&stop)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().unwrap();
+    let started = Instant::now();
+    while !ready.exists() {
+        if started.elapsed() >= Duration::from_secs(8) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("signal fixture failed to start");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Only this owned, unreaped child's group is signalled. No stored PID is used.
+    kill_process_group(Pid::from_child(&child), Signal::INT).unwrap();
+    let result = child.wait().unwrap();
+    assert_eq!(result.code(), Some(130));
+    let output = s
+        .command()
+        .args(["runs", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["data"][0]["custody"], "exited_uncontained");
+    assert_eq!(value["data"][0]["exitCode"], 130);
 }

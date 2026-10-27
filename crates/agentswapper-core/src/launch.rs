@@ -6,7 +6,7 @@ use std::{
 
 use serde::Serialize;
 
-use crate::{Error, Profile, Result, Store};
+use crate::{Error, Profile, Result, Store, store::RunCompletion};
 
 /// The executable and environment used by execute(). Arguments are deliberately
 /// excluded from Debug and serialization: user-supplied arguments may be secrets.
@@ -102,26 +102,39 @@ impl LaunchPlan {
 
     /// Requires explicit opt-in until version/platform isolation gates pass.
     /// The intent is durable before spawning; ambiguous failures leave it pending.
+    /// The caller installs a catching interrupt handler before using foreground
+    /// mode. The CLI does this without changing the child's exec disposition.
     pub fn execute(&self, store: &mut Store, experimental: bool) -> Result<i32> {
         if !experimental {
             return Err(Error::UnverifiedNative);
         }
         self.check_environment(|key| std::env::var_os(key))?;
+        self.execute_prepared(store)
+    }
+
+    fn execute_prepared(&self, store: &mut Store) -> Result<i32> {
         let lease = store.lease(self.profile.id)?;
         let id = store.begin_run(&lease, if self.login { "login" } else { "run" })?;
         let child = self.command().spawn();
         let mut child = match child {
             Ok(child) => child,
             Err(error) => {
-                store.finish_run(id, 126, "spawn_failed")?;
+                store.finish_run(id, RunCompletion::FailedToSpawn)?;
                 return Err(error.into());
             }
         };
+        if let Err(error) = store.observe_spawn(&id, child.id()) {
+            // The durable intent remains unresolved. Only signal the owned,
+            // unreaped direct child; descendant custody is still unknown.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         // No transaction is held while a native interactive CLI owns the terminal.
         // A wait error or supervisor crash leaves an unfinished intent, blocking reuse.
         let status = child.wait()?;
         let code = exit_code(status);
-        store.finish_run(id, code, "exited")?;
+        store.finish_run(id, RunCompletion::ChildExited(code))?;
         drop(lease);
         Ok(code)
     }
@@ -208,6 +221,36 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::Harness;
+
+    #[test]
+    fn spawn_error_keeps_original_io_kind_and_records_never_started() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let p = store
+            .register(Harness::Kimi, "work".parse().unwrap())
+            .unwrap();
+        let directory = temp.path().join("removed-cwd");
+        std::fs::create_dir(&directory).unwrap();
+        let binary = std::env::current_exe().unwrap();
+        let plan = LaunchPlan::build(
+            &store,
+            p.clone(),
+            Some(&binary),
+            &directory,
+            Vec::new(),
+            false,
+        )
+        .unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+        // No child can start, and this private entry avoids inspecting real
+        // inherited auth variables in an otherwise credential-free unit test.
+        let error = plan.execute_prepared(&mut store).unwrap_err();
+        assert!(matches!(error,Error::Io(ref e) if e.kind()==std::io::ErrorKind::NotFound));
+        let run = store.runs(1).unwrap().pop().unwrap();
+        assert_eq!(run.custody, crate::store::ProcessCustody::NeverStarted);
+        assert_eq!(run.observed_pid, None);
+        assert!(store.lease(p.id).is_ok());
+    }
 
     #[test]
     fn preview_redacts_arguments_and_reports_unknowns() {

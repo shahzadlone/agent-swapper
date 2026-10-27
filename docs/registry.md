@@ -21,16 +21,17 @@ authenticate the database against a process running as the same user.
 
 ## Upgrades and backups
 
-Opening a schema-1 registry upgrades it to schema 2. Before changing it, the
+Opening a schema-1 or schema-2 registry upgrades it to schema 3. Before changing it, the
 upgrade writes a consistent SQLite snapshot, including committed WAL data, to
-`STATE_DIR/registry-backups/schema-1-SHA256.sqlite3`. An unchanged retry reuses
+`STATE_DIR/registry-backups/schema-N-SHA256.sqlite3`. An unchanged retry reuses
 an identical snapshot without overwriting it. Files use private permissions
 on POSIX. Windows ACL privacy remains unverified. Backups contain the same
 plaintext local metadata as the registry and need the same protection.
 
-Schema 2 makes the journal envelope timestamp authoritative for each run's
-start. The upgrade reconciles legacy timestamps, verifies all projections, and
-commits atomically. A failed upgrade rolls back its database changes and leaves
+Schema 2 made the journal envelope timestamp authoritative for each run's
+start. Schema 3 adds optional PID and spawn-time observations. The upgrade
+reconciles schema-1 timestamps, preserves missing observations as unknown,
+verifies all projections, and commits atomically. A failed upgrade rolls back its database changes and leaves
 the backup available. Pending runs stay pending. No vendor profile files are
 opened or backed up by this migration.
 

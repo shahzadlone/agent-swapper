@@ -62,24 +62,68 @@ pub(super) fn verify_snapshot(db: &Connection) -> Result<VerificationReport> {
     })
 }
 
-fn schema_dump(db: &Connection) -> Result<Vec<(String, String)>> {
-    let mut query = db.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY name")?;
+fn schema_dump(db: &Connection) -> Result<Vec<(String, Vec<String>)>> {
+    let mut query = db.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY name")?;
     let rows = query.query_map([], |row| {
         let name: String = row.get(0)?;
         let sql: String = row.get(1)?;
         // The sole permitted legacy DDL difference: v1's unused run default.
-        let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        let sql = if name == "runs" {
-            sql.replace(
+        let mut sql = sql_tokens(&sql);
+        if name == "runs" {
+            let legacy = sql_tokens(
                 "started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-                "started_at TEXT NOT NULL",
-            )
-        } else {
-            sql
-        };
+            );
+            if let Some(index) = sql
+                .windows(legacy.len())
+                .position(|window| window == legacy)
+            {
+                sql.splice(
+                    index..index + legacy.len(),
+                    sql_tokens("started_at TEXT NOT NULL"),
+                );
+            }
+        }
         Ok((name, sql))
     })?;
     rows.collect::<rusqlite::Result<_>>().map_err(Error::from)
+}
+
+fn sql_tokens(sql: &str) -> Vec<String> {
+    // Ignore formatting between tokens, preserving boundaries and quoted
+    // contents. INTEGERNOT NULL must never equal INTEGER NOT NULL.
+    let mut characters = sql.chars().peekable();
+    let mut tokens = Vec::new();
+    while let Some(character) = characters.next() {
+        if character.is_whitespace() {
+            continue;
+        }
+        let mut token = character.to_string();
+        if matches!(character, '\'' | '"' | '`' | '[') {
+            let close = if character == '[' { ']' } else { character };
+            while let Some(next) = characters.next() {
+                token.push(next);
+                if next == close {
+                    if characters.peek() == Some(&close) && close != ']' {
+                        token.push(close);
+                        characters.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else if character.is_alphanumeric() || matches!(character, '_' | '$') {
+            while characters
+                .peek()
+                .is_some_and(|next| next.is_alphanumeric() || matches!(next, '_' | '$'))
+            {
+                if let Some(next) = characters.next() {
+                    token.push(next);
+                }
+            }
+        }
+        tokens.push(token);
+    }
+    tokens
 }
 
 fn replay(source: &Connection) -> Result<(Connection, u64)> {
@@ -111,9 +155,17 @@ fn replay(source: &Connection) -> Result<(Connection, u64)> {
 }
 
 fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
+    projection_dump_with_run_fields(
+        db,
+        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation",
+    )
+}
+
+fn projection_dump_with_run_fields(db: &Connection, fields: &str) -> Result<Vec<Vec<Vec<Value>>>> {
+    let run_sql = format!("SELECT {fields} FROM runs ORDER BY id");
     [
         "SELECT id,alias,harness,enabled,retired FROM profiles ORDER BY id",
-        "SELECT id,profile,kind,exit_code,outcome,started_at FROM runs ORDER BY id",
+        run_sql.as_str(),
         "SELECT directory,profile FROM mappings ORDER BY directory",
     ]
     .into_iter()
@@ -133,6 +185,11 @@ fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
 
 pub(super) fn validate_event(event: &Event) -> Result<()> {
     match event {
+        Event::RunSpawned { id, pid } => {
+            if !canonical_uuid(id) || *pid == 0 {
+                return Err(Error::CorruptRegistry);
+            }
+        }
         Event::RunPlanned { id, kind, .. } => {
             if !canonical_uuid(id) || !matches!(kind.as_str(), "run" | "login") {
                 return Err(Error::CorruptRegistry);
@@ -180,10 +237,10 @@ fn valid_timestamp(value: &str) -> bool {
         })
 }
 
-pub(super) fn migrate_v1(db: &mut Connection, root: &Path) -> Result<()> {
+pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != 1 {
+    if version != from || !matches!(from, 1 | 2) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -204,7 +261,7 @@ pub(super) fn migrate_v1(db: &mut Connection, root: &Path) -> Result<()> {
     reader.execute("VACUUM INTO ?1", [destination])?;
     file.as_file().sync_all()?;
     let digest = fingerprint(file.as_file())?;
-    let published = directory.join(format!("schema-1-{digest}.sqlite3"));
+    let published = directory.join(format!("schema-{from}-{digest}.sqlite3"));
     match file.persist_noclobber(&published) {
         Ok(_) => {}
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -223,17 +280,19 @@ pub(super) fn migrate_v1(db: &mut Connection, root: &Path) -> Result<()> {
     // Validate every event before changing the live projection. The envelope
     // timestamp is canonical, including for legacy events without a JSON time.
     let (rebuilt, _) = replay(&tx)?;
-    let mut query = rebuilt.prepare("SELECT id,started_at FROM runs")?;
-    let mut rows = query.query([])?;
-    let mut update = tx.prepare("UPDATE runs SET started_at=?1 WHERE id=?2")?;
-    while let Some(row) = rows.next()? {
-        update.execute(rusqlite::params![
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(0)?
-        ])?;
+    if from == 1 {
+        let mut query = rebuilt.prepare("SELECT id,started_at FROM runs")?;
+        let mut rows = query.query([])?;
+        let mut update = tx.prepare("UPDATE runs SET started_at=?1 WHERE id=?2")?;
+        while let Some(row) = rows.next()? {
+            update.execute(rusqlite::params![
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(0)?
+            ])?;
+        }
+        drop(update);
     }
-    drop(update);
-    tx.execute_batch("PRAGMA user_version=2;")?;
+    tx.execute_batch("ALTER TABLE runs ADD COLUMN observed_pid INTEGER CHECK(observed_pid>0); ALTER TABLE runs ADD COLUMN spawned_at TEXT; ALTER TABLE runs ADD COLUMN requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1)); PRAGMA user_version=3;")?;
     if !verify_snapshot(&tx)?.consistent {
         return Err(Error::ProjectionMismatch);
     }

@@ -62,6 +62,12 @@ enum RegistryCommands {
     List,
     /// Show profiles and unfinished native runs.
     Status,
+    /// Inspect recent runs or one run ID, including process-custody observations.
+    Runs {
+        id: Option<String>,
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=200))]
+        limit: u16,
+    },
     /// Check local storage and discover native CLIs without executing them.
     Doctor,
     /// Resolve an unfinished run only after you have stopped its native processes.
@@ -327,6 +333,21 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 &text,
             )?;
         }
+        RegistryCommands::Runs { id, limit } => {
+            if let Some(id) = id {
+                let record = store.run(&id)?;
+                let text = run_line(&record);
+                emit(cli.json, &record, &text)?;
+            } else {
+                let records = store.runs(limit)?;
+                let text = if records.is_empty() {
+                    "No runs recorded. Inspect a launch with: aswp run PROFILE --dry-run".to_owned()
+                } else {
+                    records.iter().map(run_line).collect::<Vec<_>>().join("\n")
+                };
+                emit(cli.json, &records, &text)?;
+            }
+        }
         RegistryCommands::Doctor => {
             let issue = store
                 .check()
@@ -510,6 +531,29 @@ fn launch_native(
     ctrlc::set_handler(|| {})
         .map_err(|_| Error::Io(io::Error::other("could not install interrupt handler")))?;
     plan.execute(store, true)
+}
+
+fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
+    use agentswapper_core::store::ProcessCustody;
+    let custody = match run.custody {
+        ProcessCustody::Unknown => "unknown; descendant custody unresolved",
+        ProcessCustody::ExitedUncontained => "child exited; descendants unverified",
+        ProcessCustody::NeverStarted => "native process did not start",
+        ProcessCustody::AttestedStopped => "operator attested stopped; not independently verified",
+    };
+    format!(
+        "{}  {} / {} / {}\n  {} | exit={}\n  Custody: {}\n  Observed PID={} (may be reused; do not signal this ID)",
+        run.id,
+        run.alias,
+        run.harness,
+        terminal_text(&run.kind),
+        terminal_text(&run.started_at),
+        run.exit_code
+            .map_or_else(|| "pending".to_owned(), |code| code.to_string()),
+        custody,
+        run.observed_pid
+            .map_or_else(|| "unrecorded".to_owned(), |pid| pid.to_string())
+    )
 }
 
 fn profile_view(p: &Profile) -> serde_json::Value {

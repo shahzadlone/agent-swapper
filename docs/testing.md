@@ -11,13 +11,13 @@ them to make failures explicit.
 | Layer | Meaningful checks |
 | --- | --- |
 | Domain | Generated valid/invalid aliases, checked deserialization, terminal escape handling |
-| SQLite | Event/projection rollback together, append-only triggers, full 1,002-event projection replay, migration backup with WAL contents, failed-upgrade rollback, launch refusal on mismatch, future-schema refusal |
+| SQLite | Event/projection rollback together, append-only triggers, full 1,102-event projection replay, migration backup with WAL contents, schema-2 upgrade preserving unknown observations, failed-upgrade rollback, launch refusal on mismatch, future-schema refusal |
 | Filesystem | Missing profile directory refusal, POSIX private modes, trusted parent links, internal symlink and hardlinked lease refusal |
 | Concurrency | Concurrent fresh opens and duplicate registration, stale mapping race rollback, OS leases, unresolved intent blocking, manual recovery refused under a live supervisor |
-| Native subprocess | All three home-variable bindings, exact hostile/empty argv forwarding, POSIX non-UTF-8 arguments, child exit status, opt-in enforcement |
+| Native subprocess | All three home-variable bindings, exact hostile/empty argv forwarding, POSIX non-UTF-8 arguments, child exit status, spawn-error recovery, foreground-group SIGINT recording, opt-in enforcement |
 | Crash | Kill the supervisor while a fixture agent is running; a second launch remains blocked after the OS lock releases |
 | Disclosure | Canary auth values and argument contents are absent from wrapper error/preview output; the fixture writes only the chosen profile home |
-| CLI | Both binary names, help without opening state, profile lifecycle, duplicate aliases, JSON shape |
+| CLI | Both binary names, help without opening state, profile lifecycle, duplicate aliases, JSON shape, bounded run history including retired profiles and conservative custody |
 | Handover | Authenticated encrypted round trip, wrong password and tamper refusal, chunk-boundary truncation, bounded work, concurrent exclusive output, source-link/credential-location checks, invisible-character and fence handling, AltGr/repeat input, actual HEAD drift, and broken-pipe failure |
 | Terminal | Reviewed empty and narrow/masked snapshots, literal unknown quota, very small viewport rendering |
 
@@ -64,6 +64,6 @@ matrix. No test should read a user's native credential files to satisfy a gate.
 Future handover work needs property-tested state transitions, capsule redaction,
 workspace preservation, sandboxed side-effect tests, deterministic crash
 injection at every durable boundary, and protocol fixtures tied to exact vendor
-versions. The schema-1 to schema-2 upgrade backs up the old database before changing it;
+versions. The schema-1/schema-2 to schema-3 upgrade backs up the old database before changing it;
 tests reopen that backup and compare its complete projection dump with the
 source. No automatic live restore is implemented. See [registry integrity](registry.md).

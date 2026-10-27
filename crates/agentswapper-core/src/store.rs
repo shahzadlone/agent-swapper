@@ -10,9 +10,18 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 2;
+const SCHEMA: i64 = 3;
 mod journal;
+mod runs;
 pub use journal::VerificationReport;
+pub use runs::{ProcessCustody, RunRecord};
+
+/// Internal producer outcomes. External callers cannot declare a run finished.
+pub(crate) enum RunCompletion {
+    ChildExited(i32),
+    FailedToSpawn,
+    OperatorAttested,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -35,11 +44,17 @@ enum Event {
         id: String,
         profile: ProfileId,
         kind: String,
+        #[serde(default)]
+        requires_spawn_observation: bool,
     },
     RunFinished {
         id: String,
         exit_code: i32,
         outcome: String,
+    },
+    RunSpawned {
+        id: String,
+        pid: u32,
     },
     Mapped {
         directory: String,
@@ -130,8 +145,8 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current == 1 {
-            journal::migrate_v1(&mut db, &root)?;
+        if matches!(current, 1 | 2) {
+            journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
         }
@@ -299,7 +314,7 @@ impl Store {
             .optional()?
             .ok_or(Error::RunNotFound)?;
         let _lease = self.acquire_lease(profile.parse()?)?;
-        self.finish_run(id, 125, "user_attested_stopped")
+        self.finish_run(id, RunCompletion::OperatorAttested)
     }
 
     pub(crate) fn begin_run(&mut self, lease: &ProfileLease, kind: &str) -> Result<String> {
@@ -308,17 +323,27 @@ impl Store {
             id: id.clone(),
             profile: lease.profile,
             kind: kind.to_owned(),
+            requires_spawn_observation: true,
         })?;
         Ok(id)
     }
 
-    pub(crate) fn finish_run(&mut self, id: String, exit_code: i32, outcome: &str) -> Result<()> {
+    pub(crate) fn finish_run(&mut self, id: String, completion: RunCompletion) -> Result<()> {
+        let (exit_code, outcome) = match completion {
+            RunCompletion::ChildExited(code) => (code, "exited"),
+            RunCompletion::FailedToSpawn => (126, "spawn_failed"),
+            RunCompletion::OperatorAttested => (125, "user_attested_stopped"),
+        };
+        self.record_lifecycle(Event::RunFinished {
+            id,
+            exit_code,
+            outcome: outcome.to_owned(),
+        })
+    }
+
+    fn record_lifecycle(&mut self, event: Event) -> Result<()> {
         for attempt in 0..3 {
-            match self.record(Event::RunFinished {
-                id: id.clone(),
-                exit_code,
-                outcome: outcome.to_owned(),
-            }) {
+            match self.record(event.clone()) {
                 Err(Error::Database(rusqlite::Error::SqliteFailure(ref code, _)))
                     if attempt < 2
                         && matches!(
@@ -332,6 +357,13 @@ impl Store {
             }
         }
         Err(Error::Busy)
+    }
+
+    pub(crate) fn observe_spawn(&mut self, id: &str, pid: u32) -> Result<()> {
+        self.record_lifecycle(Event::RunSpawned {
+            id: id.to_owned(),
+            pid,
+        })
     }
 
     pub fn map(&mut self, alias: &Alias, directory: &Path) -> Result<()> {
@@ -537,7 +569,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             }
             tx.execute("DELETE FROM mappings WHERE profile=?1", [id.to_string()])?;
         }
-        Event::RunPlanned { id, profile, kind } => {
+        Event::RunPlanned { id, profile, kind, requires_spawn_observation } => {
             let enabled: Option<bool> = tx
                 .query_row(
                     "SELECT enabled FROM profiles WHERE id=?1 AND retired=0",
@@ -551,8 +583,8 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 None => return Err(Error::NotFound),
             }
             tx.execute(
-                "INSERT INTO runs(id,profile,kind,started_at) VALUES(?1,?2,?3,?4)",
-                params![id, profile.to_string(), kind, recorded_at],
+                "INSERT INTO runs(id,profile,kind,started_at,requires_spawn_observation) VALUES(?1,?2,?3,?4,?5)",
+                params![id, profile.to_string(), kind, recorded_at, requires_spawn_observation],
             )?;
         }
         Event::RunFinished {
@@ -561,10 +593,18 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             outcome,
         } => {
             if tx.execute(
-                "UPDATE runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL",
+                "UPDATE runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2<>'exited' OR requires_spawn_observation=0 OR observed_pid IS NOT NULL)",
                 params![exit_code, outcome, id],
             )? != 1
             {
+                return Err(Error::CorruptRegistry);
+            }
+        }
+        Event::RunSpawned { id, pid } => {
+            if tx.execute(
+                "UPDATE runs SET observed_pid=?1,spawned_at=?2 WHERE id=?3 AND exit_code IS NULL AND observed_pid IS NULL",
+                params![pid, recorded_at, id],
+            )? != 1 {
                 return Err(Error::CorruptRegistry);
             }
         }
@@ -623,7 +663,8 @@ mod tests {
         drop(lease);
         assert!(matches!(s.lease(p.id), Err(Error::Busy)));
         assert!(matches!(s.remove(&p.alias), Err(Error::Busy)));
-        s.finish_run(run, 0, "exited").unwrap();
+        s.observe_spawn(&run, 42).unwrap();
+        s.finish_run(run, RunCompletion::ChildExited(0)).unwrap();
         assert!(s.lease(p.id).is_ok());
     }
 

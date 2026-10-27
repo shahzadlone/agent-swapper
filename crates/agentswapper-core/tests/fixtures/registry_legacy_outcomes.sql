@@ -1,0 +1,12 @@
+INSERT INTO event_log(payload) VALUES('{"type":"run_finished","id":"cafe0000-0000-4000-8000-000000000002","exit_code":42,"outcome":"exited"}');
+UPDATE runs SET exit_code=42,outcome='exited';
+INSERT INTO event_log(payload) VALUES('{"type":"run_planned","id":"cafe0000-0000-4000-8000-000000000003","profile":"cafe0000-0000-4000-8000-000000000001","kind":"run"}');
+INSERT INTO runs(id,profile,kind,started_at) SELECT 'cafe0000-0000-4000-8000-000000000003',id,'run',(SELECT recorded_at FROM event_log WHERE sequence=4) FROM profiles;
+INSERT INTO event_log(payload) VALUES('{"type":"run_finished","id":"cafe0000-0000-4000-8000-000000000003","exit_code":126,"outcome":"spawn_failed"}');
+UPDATE runs SET exit_code=126,outcome='spawn_failed' WHERE id='cafe0000-0000-4000-8000-000000000003';
+INSERT INTO event_log(payload) VALUES('{"type":"run_planned","id":"cafe0000-0000-4000-8000-000000000004","profile":"cafe0000-0000-4000-8000-000000000001","kind":"login"}');
+INSERT INTO runs(id,profile,kind,started_at) SELECT 'cafe0000-0000-4000-8000-000000000004',id,'login',(SELECT recorded_at FROM event_log WHERE sequence=6) FROM profiles;
+INSERT INTO event_log(payload) VALUES('{"type":"run_finished","id":"cafe0000-0000-4000-8000-000000000004","exit_code":125,"outcome":"user_attested_stopped"}');
+UPDATE runs SET exit_code=125,outcome='user_attested_stopped' WHERE id='cafe0000-0000-4000-8000-000000000004';
+INSERT INTO event_log(payload) VALUES('{"type":"run_planned","id":"cafe0000-0000-4000-8000-000000000005","profile":"cafe0000-0000-4000-8000-000000000001","kind":"run"}');
+INSERT INTO runs(id,profile,kind,started_at) SELECT 'cafe0000-0000-4000-8000-000000000005',id,'run',(SELECT recorded_at FROM event_log WHERE sequence=8) FROM profiles;

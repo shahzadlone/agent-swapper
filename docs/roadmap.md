@@ -66,10 +66,12 @@ Implemented, unreleased:
 - validated profile aliases and opaque IDs; register, list, show, rename,
   enable, disable, and unregister without deleting vendor files;
 - SQLite append-only events and projections in one transaction, full replay
-  verification, and a backed-up schema-1 to schema-2 migration;
+  verification, and backed-up schema-1/schema-2 to schema-3 migrations;
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;
+- durable PID/spawn observations and bounded run history with conservative
+  process-custody states;
 - native launch plans, argument redaction, direct argv forwarding, known
   inherited-auth conflict refusal, and explicit experimental launch opt-in;
 - nearest-directory mapping and JSON schema v0;
