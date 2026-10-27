@@ -31,13 +31,17 @@ The probe never signals a PID read from a file. All fixtures have deadlines.
 | --- | --- |
 | Detached writer survives original group kill | Demonstrated locally on WSL2, Linux 6.18.54.1-microsoft-standard-WSL2, 2026-10-27 |
 | Linux delegated cgroup | Not available to the current user on that host; hierarchy and control files are root-owned |
-| macOS detached-writer probe | Awaiting CI for this probe |
+| macOS detached-writer probe | Passed in CI at `67d06fa` on `macos-latest`; exact build was not yet recorded |
 | Windows strict Job containment | Not implemented or verified |
 | Real provider isolation and custody | Unverified for every harness |
 
 Process groups remain useful for interrupt delivery. This probe establishes why
 they cannot provide the stop evidence needed for automatic handover. A fixture
 result does not promote a real-provider support cell.
+
+CI records OS release, build, architecture, and the exact Rust compiler in
+`target/platform-evidence.json` and a public `Platform evidence` check
+annotation. A runner alias alone does not establish a verified OS version.
 
 ## Strict supervision gates
 
