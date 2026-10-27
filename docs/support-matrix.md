@@ -1,0 +1,26 @@
+# Native support and verification
+
+All real-provider cells start **unsupported for verified isolation**. The
+developer preview has explicit experimental native execution, not a promoted
+adapter. A fixture test is not evidence about a vendor's login storage.
+
+| Harness | Linux | WSL2 | macOS | Windows |
+| --- | --- | --- | --- | --- |
+| Claude Code | unverified | unverified | unverified | unverified |
+| Codex | unverified | unverified | unverified | unverified |
+| Kimi Code | unverified | unverified | unverified | unverified |
+
+For every promoted cell, record exact CLI version/build, OS build, executable
+packaging, authentication/storage mode, selected home variable, native login
+arguments, file/credential-store traces, refresh persistence, interruption,
+descendant cleanup, and native resume results. Keep dedicated account evidence
+outside public source if it contains identifiers.
+
+The preview binds Claude Code through `CLAUDE_CONFIG_DIR`, Codex through
+`CODEX_HOME`, and current Kimi Code through `KIMI_CODE_HOME`. Kimi legacy layout
+detection is not implemented. Native login command shapes are unverified and
+must pass the same version/platform matrix before being promoted.
+
+Automatic switching, quota routing, credential transfer, context capsules,
+encrypted exports, structured adapters, and global-account activation are not
+implemented. See the [roadmap](roadmap.md) for the complete scope and gates.

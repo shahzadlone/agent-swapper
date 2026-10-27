@@ -1,0 +1,38 @@
+name: Rust quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+      - name: Format
+        run: cargo +1.98.0 fmt --all --check
+      - name: Clippy
+        run: cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
+      - name: Install test runner
+        run: cargo +1.98.0 install cargo-nextest --version 0.9.150 --locked
+      - name: Tests
+        run: cargo +1.98.0 nextest run --locked --workspace --profile ci
+      - name: Documentation examples
+        run: cargo +1.98.0 test --locked --workspace --doc
+
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: rustup toolchain install 1.98.0 --profile minimal
+      - run: cargo +1.98.0 install cargo-deny --version 0.20.2 --locked
+      - run: cargo +1.98.0 deny --locked check

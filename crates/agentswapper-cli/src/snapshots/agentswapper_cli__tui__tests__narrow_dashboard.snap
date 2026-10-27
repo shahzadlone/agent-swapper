@@ -1,0 +1,21 @@
+---
+source: crates/agentswapper-cli/src/tui.rs
+expression: screen
+---
+ aswp  / AgentSwapper
+ Local profiles / developer preview
+
+ Profiles ──────────────────────────────────
+  Profile                 Harness  Quota
+> profile-1               codex    unknown
+
+
+
+
+────────────────────────────────────────────
+Selected: codex | enabled
+Account: unverified
+Quota: unknown / no auto switch
+Unfinished runs: 0
+ j/k move  / search  Enter preflight
+ m mask  r refresh  ? help  q quit

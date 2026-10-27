@@ -1,0 +1,23 @@
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Unlicense", "Zlib"]
+confidence-threshold = 0.9
+private = { ignore = true }
+
+# Unmodified transitive dependency of directories. Preserve its MPL notices
+# and source availability when packaging binaries; it is not project licensing.
+[[licenses.exceptions]]
+name = "option-ext"
+version = "=0.2.0"
+allow = ["MPL-2.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
