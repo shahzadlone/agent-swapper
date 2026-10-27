@@ -42,6 +42,8 @@ pub enum Error {
     ProjectionMismatch,
     #[error("registry schema changed while this process was open; restart AgentSwapper")]
     RegistrySchemaChanged,
+    #[error("registry connection settings changed; restart AgentSwapper before writing")]
+    RegistryConnectionChanged,
     #[error("registry event exceeds the 64 KiB metadata limit")]
     RegistryEventTooLarge,
     #[error("run history limit must be between 1 and 200")]
@@ -126,6 +128,7 @@ impl Error {
             Self::CorruptRegistry => "corrupt_registry",
             Self::ProjectionMismatch => "projection_mismatch",
             Self::RegistrySchemaChanged => "registry_schema_changed",
+            Self::RegistryConnectionChanged => "registry_connection_changed",
             Self::RegistryEventTooLarge => "registry_event_too_large",
             Self::InvalidHistoryLimit => "invalid_history_limit",
             Self::ExecutableNotFound => "executable_not_found",

@@ -30,6 +30,7 @@ winapi-util = "0.1"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+rusqlite = { version = "0.41", features = ["bundled", "hooks"] }
 tempfile.workspace = true
 proptest.workspace = true
 

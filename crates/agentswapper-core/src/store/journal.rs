@@ -11,6 +11,56 @@ use crate::{Error, Result, private_fs};
 pub(super) const SCHEMA_SQL: &str = include_str!("schema.sql");
 pub(super) const MAX_EVENT_BYTES: usize = 64 * 1024;
 
+/// Only compared on this same connection, under its IMMEDIATE transaction.
+/// Other-connection commits, own DML, and own DDL each invalidate the baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StateStamp {
+    external_version: i64,
+    schema_cookie: i64,
+    temp_schema_cookie: i64,
+    own_changes: u64,
+}
+
+impl StateStamp {
+    pub(super) fn read(db: &Connection) -> Result<Self> {
+        check_semantics(db)?;
+        Ok(Self {
+            external_version: db.pragma_query_value(None, "data_version", |r| r.get(0))?,
+            schema_cookie: db.pragma_query_value(None, "schema_version", |r| r.get(0))?,
+            temp_schema_cookie: db
+                .pragma_query_value(Some("temp"), "schema_version", |r| r.get(0))?,
+            own_changes: db.total_changes(),
+        })
+    }
+}
+
+pub(super) fn configure(db: &Connection) -> Result<()> {
+    for (name, value) in [
+        ("foreign_keys", true),
+        ("recursive_triggers", true),
+        ("ignore_check_constraints", false),
+        ("defer_foreign_keys", false),
+    ] {
+        db.pragma_update(None, name, value)?;
+    }
+    Ok(())
+}
+
+fn check_semantics(db: &Connection) -> Result<()> {
+    for (name, expected) in [
+        ("foreign_keys", true),
+        ("recursive_triggers", true),
+        ("ignore_check_constraints", false),
+        ("defer_foreign_keys", false),
+    ] {
+        let actual: bool = db.pragma_query_value(None, name, |r| r.get(0))?;
+        if actual != expected {
+            return Err(Error::RegistryConnectionChanged);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerificationReport {
@@ -30,6 +80,7 @@ pub(super) fn verify(db: &Connection) -> Result<VerificationReport> {
 }
 
 pub(super) fn verify_snapshot(db: &Connection) -> Result<VerificationReport> {
+    check_semantics(db)?;
     let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version > SCHEMA {
         return Err(Error::NewerSchema);
@@ -54,6 +105,13 @@ pub(super) fn verify_snapshot(db: &Connection) -> Result<VerificationReport> {
     if schema_dump(db)? != schema_dump(&rebuilt)? {
         mismatched_tables.push("sqlite_schema");
     }
+    let temporary_objects: bool =
+        db.query_row("SELECT EXISTS(SELECT 1 FROM temp.sqlite_schema)", [], |r| {
+            r.get(0)
+        })?;
+    if temporary_objects {
+        mismatched_tables.push("temp.sqlite_schema");
+    }
     Ok(VerificationReport {
         schema_version: version,
         events: count,
@@ -63,7 +121,7 @@ pub(super) fn verify_snapshot(db: &Connection) -> Result<VerificationReport> {
 }
 
 fn schema_dump(db: &Connection) -> Result<Vec<(String, Vec<String>)>> {
-    let mut query = db.prepare("SELECT name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY name")?;
+    let mut query = db.prepare("SELECT name,sql FROM main.sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY name")?;
     let rows = query.query_map([], |row| {
         let name: String = row.get(0)?;
         let sql: String = row.get(1)?;
@@ -128,10 +186,10 @@ fn sql_tokens(sql: &str) -> Vec<String> {
 
 fn replay(source: &Connection) -> Result<(Connection, u64)> {
     let mut rebuilt = Connection::open_in_memory()?;
-    rebuilt.pragma_update(None, "foreign_keys", "ON")?;
+    configure(&rebuilt)?;
     rebuilt.execute_batch(SCHEMA_SQL)?;
     let tx = rebuilt.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let mut query = source.prepare("SELECT sequence,CASE WHEN length(CAST(payload AS BLOB))<=?1 THEN payload ELSE NULL END,recorded_at FROM event_log ORDER BY sequence")?;
+    let mut query = source.prepare("SELECT sequence,CASE WHEN length(CAST(payload AS BLOB))<=?1 THEN payload ELSE NULL END,recorded_at FROM main.event_log ORDER BY sequence")?;
     let mut rows = query.query([MAX_EVENT_BYTES as i64])?;
     let mut count = 0_u64;
     while let Some(row) = rows.next()? {
@@ -162,11 +220,11 @@ fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
 }
 
 fn projection_dump_with_run_fields(db: &Connection, fields: &str) -> Result<Vec<Vec<Vec<Value>>>> {
-    let run_sql = format!("SELECT {fields} FROM runs ORDER BY id");
+    let run_sql = format!("SELECT {fields} FROM main.runs ORDER BY id");
     [
-        "SELECT id,alias,harness,enabled,retired FROM profiles ORDER BY id",
+        "SELECT id,alias,harness,enabled,retired FROM main.profiles ORDER BY id",
         run_sql.as_str(),
-        "SELECT directory,profile FROM mappings ORDER BY directory",
+        "SELECT directory,profile FROM main.mappings ORDER BY directory",
     ]
     .into_iter()
     .map(|sql| {
@@ -281,9 +339,9 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
     // timestamp is canonical, including for legacy events without a JSON time.
     let (rebuilt, _) = replay(&tx)?;
     if from == 1 {
-        let mut query = rebuilt.prepare("SELECT id,started_at FROM runs")?;
+        let mut query = rebuilt.prepare("SELECT id,started_at FROM main.runs")?;
         let mut rows = query.query([])?;
-        let mut update = tx.prepare("UPDATE runs SET started_at=?1 WHERE id=?2")?;
+        let mut update = tx.prepare("UPDATE main.runs SET started_at=?1 WHERE id=?2")?;
         while let Some(row) = rows.next()? {
             update.execute(rusqlite::params![
                 row.get::<_, String>(1)?,

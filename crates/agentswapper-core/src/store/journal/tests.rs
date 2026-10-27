@@ -54,12 +54,8 @@ fn thousand_event_replay_preserves_all_columns_and_unfinished_runs() {
     let lease = s.lease(p.id).unwrap();
     s.begin_run(&lease, "run").unwrap();
     let before = projection_dump(&s.db).unwrap();
-    // Any accidental write to live projections makes verification fail.
-    for table in ["profiles", "runs", "mappings"] {
-        for action in ["INSERT", "UPDATE", "DELETE"] {
-            s.db.execute_batch(&format!("CREATE TEMP TRIGGER guard_{table}_{action} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT,'verification must not write'); END;")).unwrap();
-        }
-    }
+    // SQLite itself rejects a write to the source connection during verify.
+    s.db.pragma_update(None, "query_only", true).unwrap();
     let report = s.verify().unwrap();
     assert!(report.consistent);
     assert_eq!(report.events, 1102);
@@ -180,6 +176,7 @@ fn legacy(root: &Path) -> (Connection, String) {
     let path = root.join("registry.sqlite3");
     private_fs::file(&path).unwrap();
     let db = Connection::open(path).unwrap();
+    configure(&db).unwrap();
     db.pragma_update(None, "journal_mode", "WAL").unwrap();
     db.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
     db.execute_batch(include_str!("../../../tests/fixtures/registry_v1.sql"))
@@ -288,6 +285,169 @@ fn every_append_refuses_mismatch_and_schema_drift_without_poisoning_log() {
         assert_eq!(event_count(&s.db), count);
         assert_eq!(replay(&s.db).unwrap().1 as i64, count);
     }
+}
+
+#[test]
+fn peer_connection_edits_invalidate_a_previously_verified_writer() {
+    for edit in [
+        "UPDATE profiles SET alias='tampered'",
+        "DROP INDEX unique_alias",
+        "INSERT INTO event_log(payload) VALUES('{}')",
+    ] {
+        let (_temp, mut first) = setup();
+        first
+            .register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        let peer = Connection::open(first.root().join("registry.sqlite3")).unwrap();
+        peer.execute_batch(edit).unwrap();
+        let count = event_count(&peer);
+        assert!(matches!(
+            first.register(Harness::Codex, "other".parse().unwrap()),
+            Err(Error::ProjectionMismatch | Error::CorruptRegistry)
+        ));
+        assert_eq!(event_count(&peer), count);
+    }
+}
+
+#[test]
+fn peer_commits_and_rolled_back_attempts_preserve_full_replay() {
+    let (_temp, mut first) = setup();
+    let p = first
+        .register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    let mut peer = Store::open(first.root()).unwrap();
+    peer.rename(&p.alias, "renamed".parse().unwrap()).unwrap();
+    first
+        .register(Harness::Codex, "other".parse().unwrap())
+        .unwrap();
+    assert!(matches!(
+        first.register(Harness::Kimi, "other".parse().unwrap()),
+        Err(Error::DuplicateAlias)
+    ));
+    first.enable(&"renamed".parse().unwrap(), false).unwrap();
+    peer.register(Harness::Kimi, "last".parse().unwrap())
+        .unwrap();
+    assert!(first.verify().unwrap().consistent);
+    assert!(peer.verify().unwrap().consistent);
+    assert_eq!(event_count(&first.db), 5);
+}
+
+#[test]
+fn cached_writer_checks_peer_commit_after_acquiring_the_write_lock() {
+    let (_temp, mut first) = setup();
+    first
+        .register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    let mut peer = Connection::open(first.root().join("registry.sqlite3")).unwrap();
+    let tx = peer
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    tx.execute("UPDATE profiles SET alias='tampered'", [])
+        .unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let worker_barrier = barrier.clone();
+    let worker = std::thread::spawn(move || {
+        worker_barrier.wait();
+        first.register(Harness::Codex, "other".parse().unwrap())
+    });
+    barrier.wait();
+    tx.commit().unwrap();
+    assert!(matches!(
+        worker.join().unwrap(),
+        Err(Error::ProjectionMismatch)
+    ));
+    assert_eq!(event_count(&peer), 1);
+}
+
+#[test]
+fn cached_writes_refuse_temporary_shadows_and_changed_connection_semantics() {
+    let (_temp, mut s) = setup();
+    s.register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    s.db.execute("CREATE TEMP TABLE profiles(id TEXT)", [])
+        .unwrap();
+    assert_eq!(
+        s.verify().unwrap().mismatched_tables,
+        ["temp.sqlite_schema"]
+    );
+    assert!(matches!(
+        s.register(Harness::Codex, "other".parse().unwrap()),
+        Err(Error::ProjectionMismatch)
+    ));
+    assert_eq!(event_count(&s.db), 1);
+    for (name, value) in [
+        ("foreign_keys", false),
+        ("recursive_triggers", false),
+        ("ignore_check_constraints", true),
+        ("defer_foreign_keys", true),
+    ] {
+        let (_temp, mut s) = setup();
+        s.register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        s.db.pragma_update(None, name, value).unwrap();
+        assert!(
+            matches!(
+                s.register(Harness::Codex, "other".parse().unwrap()),
+                Err(Error::RegistryConnectionChanged)
+            ),
+            "{name}"
+        );
+        assert_eq!(event_count(&s.db), 1);
+    }
+}
+
+#[test]
+fn baseline_reuse_and_invalidation_are_exercised_including_commit_failure() {
+    let (_temp, mut s) = setup();
+    let p = s
+        .register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    assert_eq!(s.full_write_checks, 1);
+    s.enable(&p.alias, false).unwrap();
+    assert_eq!(s.full_write_checks, 1);
+    assert!(matches!(
+        s.register(Harness::Codex, p.alias.clone()),
+        Err(Error::DuplicateAlias)
+    ));
+    s.enable(&p.alias, true).unwrap();
+    assert_eq!(s.full_write_checks, 2);
+    // SQLite rejects commit after the stamp was captured. No success baseline
+    // may be published for that transaction.
+    let before = event_count(&s.db);
+    s.db.commit_hook(Some(|| true)).unwrap();
+    assert!(
+        s.register(Harness::Kimi, "aborted".parse().unwrap())
+            .is_err()
+    );
+    s.db.commit_hook(None::<fn() -> bool>).unwrap();
+    assert_eq!(event_count(&s.db), before);
+    s.register(Harness::Kimi, "last".parse().unwrap()).unwrap();
+    assert_eq!(s.full_write_checks, 3);
+    let peer = Connection::open(s.root().join("registry.sqlite3")).unwrap();
+    peer.execute(
+        "UPDATE profiles SET alias='tampered' WHERE alias='last'",
+        [],
+    )
+    .unwrap();
+    assert!(matches!(
+        s.register(Harness::Codex, "after".parse().unwrap()),
+        Err(Error::ProjectionMismatch)
+    ));
+    assert_eq!(s.full_write_checks, 4);
+}
+
+#[test]
+fn warm_cache_still_refuses_a_peer_schema_version_change() {
+    let (_temp, mut s) = setup();
+    s.register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    let peer = Connection::open(s.root().join("registry.sqlite3")).unwrap();
+    peer.pragma_update(None, "user_version", 999).unwrap();
+    assert!(matches!(
+        s.register(Harness::Kimi, "after".parse().unwrap()),
+        Err(Error::NewerSchema)
+    ));
+    assert_eq!(event_count(&peer), 1);
 }
 
 #[test]

@@ -13,6 +13,20 @@ committing. A mismatch prevents a new child from starting and prevents metadata
 commands from appending events against inconsistent projections. If recording
 a child exit fails, its intent stays unresolved and reuse remains blocked.
 
+An open writer can reuse its verified baseline while SQLite's external-change
+counter, main and temporary schema counters, and connection-local change count
+remain unchanged. It reads those values under the write lock and publishes a
+new baseline only after commit succeeds. A peer write or local edit forces a
+full replay. Changed connection settings and temporary schema objects are
+refused. Every new connection starts without a baseline.
+
+Explicit verification, doctor, and run-history reads always perform full
+verification. This optimization relies on SQLite writes and working local
+filesystem locks; it does not authenticate raw database-file edits or detect
+every storage fault between full checks. See SQLite's
+[data-version reference](https://www.sqlite.org/pragma.html#pragma_data_version)
+and [connection change counter](https://www.sqlite.org/c3ref/total_changes.html).
+
 Events and projections commit together. Event sequence gaps, unknown fields or
 event kinds, invalid transitions, and payloads above 64 KiB are refused during
 replay. The log records local metadata, not credentials or handover contents.

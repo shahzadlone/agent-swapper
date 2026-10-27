@@ -83,6 +83,11 @@ pub struct Mapping {
 pub struct Store {
     root: PathBuf,
     db: Connection,
+    // Connection-local only. Any future restore, deserialize, incremental-blob
+    // mutation, or reconnect must clear this baseline before another write.
+    verified: Option<journal::StateStamp>,
+    #[cfg(test)]
+    full_write_checks: u64,
 }
 
 /// An advisory profile lease. A free lease does not prove a previous child stopped.
@@ -126,7 +131,7 @@ impl Store {
         }
         let mut db = Connection::open(&path)?;
         db.busy_timeout(Duration::from_secs(3))?;
-        db.pragma_update(None, "foreign_keys", "ON")?;
+        journal::configure(&db)?;
         let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > SCHEMA {
             return Err(Error::NewerSchema);
@@ -150,7 +155,13 @@ impl Store {
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
         }
-        Ok(Self { root, db })
+        Ok(Self {
+            root,
+            db,
+            verified: None,
+            #[cfg(test)]
+            full_write_checks: 0,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -165,7 +176,7 @@ impl Store {
 
     pub fn profiles(&self) -> Result<Vec<Profile>> {
         let mut query = self.db.prepare(
-            "SELECT id,alias,harness,enabled FROM profiles WHERE retired=0 ORDER BY alias",
+            "SELECT id,alias,harness,enabled FROM main.profiles WHERE retired=0 ORDER BY alias",
         )?;
         let rows = query.query_map([], |r| {
             Ok((
@@ -239,7 +250,7 @@ impl Store {
     }
 
     pub fn unfinished(&self) -> Result<Vec<UnfinishedRun>> {
-        let mut query = self.db.prepare("SELECT r.id,p.alias,r.kind,r.started_at FROM runs r JOIN profiles p ON p.id=r.profile WHERE r.exit_code IS NULL ORDER BY r.started_at")?;
+        let mut query = self.db.prepare("SELECT r.id,p.alias,r.kind,r.started_at FROM main.runs r JOIN main.profiles p ON p.id=r.profile WHERE r.exit_code IS NULL ORDER BY r.started_at")?;
         let rows = query.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -289,7 +300,7 @@ impl Store {
 
     fn ensure_no_unfinished_run(&self, id: ProfileId) -> Result<()> {
         let pending: bool = self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE profile=?1 AND exit_code IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM main.runs WHERE profile=?1 AND exit_code IS NULL)",
             [id.to_string()],
             |r| r.get(0),
         )?;
@@ -307,7 +318,7 @@ impl Store {
         let profile: String = self
             .db
             .query_row(
-                "SELECT profile FROM runs WHERE id=?1 AND exit_code IS NULL",
+                "SELECT profile FROM main.runs WHERE id=?1 AND exit_code IS NULL",
                 [&id],
                 |r| r.get(0),
             )
@@ -385,7 +396,7 @@ impl Store {
     }
 
     pub fn mappings(&self) -> Result<Vec<Mapping>> {
-        let mut query = self.db.prepare("SELECT m.directory,p.alias FROM mappings m JOIN profiles p ON p.id=m.profile WHERE p.retired=0 ORDER BY m.directory")?;
+        let mut query = self.db.prepare("SELECT m.directory,p.alias FROM main.mappings m JOIN main.profiles p ON p.id=m.profile WHERE p.retired=0 ORDER BY m.directory")?;
         let rows = query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         rows.map(|row| {
             let (directory, alias) = row?;
@@ -444,21 +455,32 @@ impl Store {
             return Err(Error::RegistrySchemaChanged);
         }
         journal::validate_event(&event)?;
-        if !journal::verify_snapshot(&tx)?.consistent {
-            return Err(Error::ProjectionMismatch);
+        let before = journal::StateStamp::read(&tx)?;
+        if self.verified != Some(before) {
+            #[cfg(test)]
+            {
+                self.full_write_checks += 1;
+            }
+            if !journal::verify_snapshot(&tx)?.consistent {
+                return Err(Error::ProjectionMismatch);
+            }
         }
         let json = serde_json::to_string(&event)?;
         if json.len() > journal::MAX_EVENT_BYTES {
             return Err(Error::RegistryEventTooLarge);
         }
-        tx.execute("INSERT INTO event_log(payload) VALUES(?1)", [json])?;
+        tx.execute("INSERT INTO main.event_log(payload) VALUES(?1)", [json])?;
         let recorded_at: String = tx.query_row(
-            "SELECT recorded_at FROM event_log WHERE sequence=last_insert_rowid()",
+            "SELECT recorded_at FROM main.event_log WHERE sequence=last_insert_rowid()",
             [],
             |row| row.get(0),
         )?;
         apply(&tx, &event, &recorded_at)?;
+        // Capture while this write transaction fences every other writer.
+        // Reading data_version after commit could cache an unverified peer write.
+        let verified = journal::StateStamp::read(&tx)?;
         tx.commit()?;
+        self.verified = Some(verified);
         Ok(())
     }
 }
@@ -508,7 +530,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
     match event {
         Event::Registered { profile: p } => {
             let duplicate: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM profiles WHERE alias=?1 AND retired=0)",
+                "SELECT EXISTS(SELECT 1 FROM main.profiles WHERE alias=?1 AND retired=0)",
                 [p.alias.to_string()],
                 |r| r.get(0),
             )?;
@@ -516,7 +538,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 return Err(Error::DuplicateAlias);
             }
             tx.execute(
-                "INSERT INTO profiles(id,alias,harness,enabled) VALUES(?1,?2,?3,?4)",
+                "INSERT INTO main.profiles(id,alias,harness,enabled) VALUES(?1,?2,?3,?4)",
                 params![
                     p.id.to_string(),
                     p.alias.to_string(),
@@ -527,7 +549,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
         }
         Event::Renamed { id, alias } => {
             let duplicate: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM profiles WHERE alias=?1 AND id<>?2 AND retired=0)",
+                "SELECT EXISTS(SELECT 1 FROM main.profiles WHERE alias=?1 AND id<>?2 AND retired=0)",
                 params![alias.to_string(), id.to_string()],
                 |r| r.get(0),
             )?;
@@ -535,7 +557,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 return Err(Error::DuplicateAlias);
             }
             if tx.execute(
-                "UPDATE profiles SET alias=?1 WHERE id=?2 AND retired=0",
+                "UPDATE main.profiles SET alias=?1 WHERE id=?2 AND retired=0",
                 params![alias.to_string(), id.to_string()],
             )? != 1
             {
@@ -544,7 +566,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
         }
         Event::Enabled { id, enabled } => {
             if tx.execute(
-                "UPDATE profiles SET enabled=?1 WHERE id=?2 AND retired=0",
+                "UPDATE main.profiles SET enabled=?1 WHERE id=?2 AND retired=0",
                 params![enabled, id.to_string()],
             )? != 1
             {
@@ -553,7 +575,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
         }
         Event::Removed { id } => {
             let pending: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM runs WHERE profile=?1 AND exit_code IS NULL)",
+                "SELECT EXISTS(SELECT 1 FROM main.runs WHERE profile=?1 AND exit_code IS NULL)",
                 [id.to_string()],
                 |row| row.get(0),
             )?;
@@ -561,18 +583,18 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 return Err(Error::Busy);
             }
             if tx.execute(
-                "UPDATE profiles SET retired=1 WHERE id=?1 AND retired=0",
+                "UPDATE main.profiles SET retired=1 WHERE id=?1 AND retired=0",
                 [id.to_string()],
             )? != 1
             {
                 return Err(Error::NotFound);
             }
-            tx.execute("DELETE FROM mappings WHERE profile=?1", [id.to_string()])?;
+            tx.execute("DELETE FROM main.mappings WHERE profile=?1", [id.to_string()])?;
         }
         Event::RunPlanned { id, profile, kind, requires_spawn_observation } => {
             let enabled: Option<bool> = tx
                 .query_row(
-                    "SELECT enabled FROM profiles WHERE id=?1 AND retired=0",
+                    "SELECT enabled FROM main.profiles WHERE id=?1 AND retired=0",
                     [profile.to_string()],
                     |r| r.get(0),
                 )
@@ -583,7 +605,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 None => return Err(Error::NotFound),
             }
             tx.execute(
-                "INSERT INTO runs(id,profile,kind,started_at,requires_spawn_observation) VALUES(?1,?2,?3,?4,?5)",
+                "INSERT INTO main.runs(id,profile,kind,started_at,requires_spawn_observation) VALUES(?1,?2,?3,?4,?5)",
                 params![id, profile.to_string(), kind, recorded_at, requires_spawn_observation],
             )?;
         }
@@ -593,7 +615,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             outcome,
         } => {
             if tx.execute(
-                "UPDATE runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2<>'exited' OR requires_spawn_observation=0 OR observed_pid IS NOT NULL)",
+                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2<>'exited' OR requires_spawn_observation=0 OR observed_pid IS NOT NULL)",
                 params![exit_code, outcome, id],
             )? != 1
             {
@@ -602,17 +624,17 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
         }
         Event::RunSpawned { id, pid } => {
             if tx.execute(
-                "UPDATE runs SET observed_pid=?1,spawned_at=?2 WHERE id=?3 AND exit_code IS NULL AND observed_pid IS NULL",
+                "UPDATE main.runs SET observed_pid=?1,spawned_at=?2 WHERE id=?3 AND exit_code IS NULL AND observed_pid IS NULL",
                 params![pid, recorded_at, id],
             )? != 1 {
                 return Err(Error::CorruptRegistry);
             }
         }
         Event::Mapped { directory, profile } => {
-            if tx.execute("INSERT INTO mappings(directory,profile) SELECT ?1,id FROM profiles WHERE id=?2 AND retired=0 ON CONFLICT(directory) DO UPDATE SET profile=excluded.profile", params![directory,profile.to_string()])? != 1 { return Err(Error::NotFound); }
+            if tx.execute("INSERT INTO main.mappings(directory,profile) SELECT ?1,id FROM main.profiles WHERE id=?2 AND retired=0 ON CONFLICT(directory) DO UPDATE SET profile=excluded.profile", params![directory,profile.to_string()])? != 1 { return Err(Error::NotFound); }
         }
         Event::Unmapped { directory } => {
-            if tx.execute("DELETE FROM mappings WHERE directory=?1", [directory])? != 1 { return Err(Error::MappingNotFound); }
+            if tx.execute("DELETE FROM main.mappings WHERE directory=?1", [directory])? != 1 { return Err(Error::MappingNotFound); }
         }
     }
     Ok(())
@@ -640,13 +662,13 @@ mod tests {
             Err(Error::DuplicateAlias)
         ));
         let events: i64 =
-            s.db.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0))
+            s.db.query_row("SELECT count(*) FROM main.event_log", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(events, 1);
         assert_eq!(s.profiles().unwrap().len(), 1);
-        assert!(s.db.execute("DELETE FROM event_log", []).is_err());
+        assert!(s.db.execute("DELETE FROM main.event_log", []).is_err());
         assert!(
-            s.db.execute("UPDATE event_log SET payload='{}'", [])
+            s.db.execute("UPDATE main.event_log SET payload='{}'", [])
                 .is_err()
         );
     }
@@ -708,7 +730,7 @@ mod tests {
         let (temp, mut s) = setup();
         s.register(Harness::Claude, "work".parse().unwrap())
             .unwrap();
-        s.db.execute("UPDATE profiles SET alias='../escape'", [])
+        s.db.execute("UPDATE main.profiles SET alias='../escape'", [])
             .unwrap();
         assert!(matches!(s.profiles(), Err(Error::CorruptRegistry)));
         s.db.pragma_update(None, "user_version", 999).unwrap();
@@ -732,8 +754,10 @@ mod tests {
         s.attest_stopped(&run).unwrap();
         assert!(s.unfinished().unwrap().is_empty());
         let outcome: String =
-            s.db.query_row("SELECT outcome FROM runs WHERE id=?1", [&run], |r| r.get(0))
-                .unwrap();
+            s.db.query_row("SELECT outcome FROM main.runs WHERE id=?1", [&run], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(outcome, "user_attested_stopped");
         assert!(matches!(s.attest_stopped(&run), Err(Error::RunNotFound)));
     }
@@ -753,7 +777,7 @@ mod tests {
         assert!(matches!(s.unmap(&directory), Err(Error::MappingNotFound)));
         s.remove(&p.alias).unwrap();
         let count = || {
-            s.db.query_row::<i64, _, _>("SELECT count(*) FROM event_log", [], |r| r.get(0))
+            s.db.query_row::<i64, _, _>("SELECT count(*) FROM main.event_log", [], |r| r.get(0))
                 .unwrap()
         };
         let before = count();
@@ -765,7 +789,7 @@ mod tests {
             Err(Error::NotFound)
         ));
         let after: i64 =
-            s.db.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0))
+            s.db.query_row("SELECT count(*) FROM main.event_log", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(after, before);
     }
@@ -871,10 +895,10 @@ mod tests {
             let p = s.register(Harness::Claude, "work".parse().unwrap()).unwrap();
             for enabled in operations { s.enable(&p.alias, enabled).unwrap(); }
             let before = s.profiles().unwrap();
-            let events: Vec<String> = s.db.prepare("SELECT payload FROM event_log ORDER BY sequence").unwrap()
+            let events: Vec<String> = s.db.prepare("SELECT payload FROM main.event_log ORDER BY sequence").unwrap()
                 .query_map([], |r| r.get(0)).unwrap().collect::<std::result::Result<_,_>>().unwrap();
             let tx = s.db.transaction().unwrap();
-            tx.execute("DELETE FROM profiles", []).unwrap();
+            tx.execute("DELETE FROM main.profiles", []).unwrap();
             for json in events { apply(&tx, &serde_json::from_str(&json).unwrap(), "2026-01-01T00:00:00.000Z").unwrap(); }
             tx.commit().unwrap();
             prop_assert_eq!(s.profiles().unwrap(), before);

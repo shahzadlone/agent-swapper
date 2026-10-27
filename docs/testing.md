@@ -14,6 +14,7 @@ them to make failures explicit.
 | SQLite | Event/projection rollback together, append-only triggers, full 1,102-event projection replay, migration backup with WAL contents, schema-2 upgrade preserving unknown observations, failed-upgrade rollback, launch refusal on mismatch, future-schema refusal |
 | Filesystem | Missing profile directory refusal, POSIX private modes, trusted parent links, internal symlink and hardlinked lease refusal |
 | Concurrency | Concurrent fresh opens and duplicate registration, stale mapping race rollback, OS leases, unresolved intent blocking, manual recovery refused under a live supervisor |
+| Integrity reuse | Warm writer refuses peer corruption, local edits, temporary shadow objects, and changed pragmas; aborted commit never publishes a successful baseline |
 | Native subprocess | All three home-variable bindings, exact hostile/empty argv forwarding, POSIX non-UTF-8 arguments, child exit status, spawn-error recovery, foreground-group SIGINT recording, opt-in enforcement |
 | Crash | Kill the supervisor while a fixture agent is running; a second launch remains blocked after the OS lock releases |
 | Process groups | A reparented session writer keeps writing after the original group is killed; bounded provider-free probe with cleanup |

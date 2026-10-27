@@ -65,7 +65,7 @@ impl Store {
 }
 
 fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRecord>> {
-    let mut query = db.prepare("SELECT r.id,r.profile,p.alias,p.harness,r.kind,r.started_at,r.spawned_at,r.observed_pid,r.exit_code,r.outcome FROM runs r JOIN profiles p ON p.id=r.profile JOIN event_log e ON json_extract(e.payload,'$.type')='run_planned' AND json_extract(e.payload,'$.id')=r.id WHERE (?1 IS NULL OR r.id=?1) ORDER BY e.sequence DESC LIMIT ?2")?;
+    let mut query = db.prepare("SELECT r.id,r.profile,p.alias,p.harness,r.kind,r.started_at,r.spawned_at,r.observed_pid,r.exit_code,r.outcome FROM main.runs r JOIN main.profiles p ON p.id=r.profile JOIN main.event_log e ON json_extract(e.payload,'$.type')='run_planned' AND json_extract(e.payload,'$.id')=r.id WHERE (?1 IS NULL OR r.id=?1) ORDER BY e.sequence DESC LIMIT ?2")?;
     let mut rows = query.query(params![id, limit])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
@@ -170,9 +170,9 @@ mod tests {
             .unwrap();
         let second = s.begin_run(&lease, "run").unwrap();
         s.db.execute_batch("DROP TRIGGER event_no_update;").unwrap();
-        s.db.execute("UPDATE event_log SET recorded_at='1999-01-01T00:00:00.000Z' WHERE json_extract(payload,'$.type')='run_planned' AND json_extract(payload,'$.id')=?1",[&second]).unwrap();
+        s.db.execute("UPDATE main.event_log SET recorded_at='1999-01-01T00:00:00.000Z' WHERE json_extract(payload,'$.type')='run_planned' AND json_extract(payload,'$.id')=?1",[&second]).unwrap();
         s.db.execute(
-            "UPDATE runs SET started_at='1999-01-01T00:00:00.000Z' WHERE id=?1",
+            "UPDATE main.runs SET started_at='1999-01-01T00:00:00.000Z' WHERE id=?1",
             [&second],
         )
         .unwrap();
