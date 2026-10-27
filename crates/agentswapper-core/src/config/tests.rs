@@ -333,8 +333,8 @@ fn config_windows_retries_while_a_normal_read_snapshot_is_held() {
     let mut snapshot = open_checked(&store.path(), false).unwrap();
     std::thread::scope(|scope| {
         let worker = scope.spawn(|| store.set(ConfigKey::UiMask, "false"));
-        // NTFS on the qualified Windows runner denies replacement while this
-        // ordinary read handle is retained, even with std's default sharing.
+        // The Windows CI runner denied replacement while this ordinary read
+        // handle was retained, even with std's default sharing.
         let mut old = Vec::new();
         snapshot.read_to_end(&mut old).unwrap();
         assert_eq!(

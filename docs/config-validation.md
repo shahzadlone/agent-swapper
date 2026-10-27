@@ -67,3 +67,18 @@ Preferences remain plaintext non-secret metadata. Windows ACL privacy,
 Windows directory synchronization, network filesystems and power-loss crash
 injection remain unverified. Automatic recovery never overwrites an unfamiliar
 or malformed document.
+
+## Cross-platform result
+
+[CI run 40595424457](https://github.com/shahzadlone/agent-swapper/actions/runs/40595424457)
+passed all four jobs for implementation commit `ad6676a`: Linux, macOS, Windows
+and dependency policy. Each OS passed the full fixture suite, doctests and
+25 preferences concurrency stress iterations. Windows also passed ten journal
+lifecycle stress iterations and the Job custody probe; Linux passed the delegated
+cgroup probe. The custody probes exercise their own primitives and do not add
+containment to profile launches.
+
+No assertions or privacy checks were removed to obtain the result. The fixes
+separate valid Unix detached read snapshots from lock files, and test Windows
+replacement using its observed handle-lifetime behavior. This evidence remains
+independent of live-provider qualification and power-loss durability.
