@@ -14,11 +14,15 @@ store-failure-output = true
 [test-groups.handover-crypto]
 max-threads = 1
 
+[test-groups.registry-io]
+max-threads = 1
+
 [[profile.default.overrides]]
 filter = 'test(/handover/)'
 test-group = "handover-crypto"
 slow-timeout = { period = "60s", terminate-after = 2 }
 
 [[profile.default.overrides]]
-filter = "test(/thousand_event/)"
+filter = "test(/thousand_event|arbitrary_valid_lifecycles/)"
+test-group = "registry-io"
 slow-timeout = { period = "60s", terminate-after = 3 }

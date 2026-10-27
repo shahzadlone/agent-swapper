@@ -31,6 +31,15 @@ Property tests use 256 cases by default; the filesystem-heavy replay property
 uses 48 generated sequences; full-lifecycle replay uses 32. Regression seeds
 belong in version control.
 
+The 1,102-event replay and randomized full-lifecycle checks share a single
+`registry-io` test group and a bounded 180-second budget. Windows CI exposed a
+60-second runner timeout under the full suite; its captured diagnostic reported
+`test timeout`, not a failed journal invariant. The group avoids competing heavy
+SQLite write workloads without reducing generated cases or assertions. Windows
+also repeats the lifecycle property ten times after the normal suite, stopping
+on the first failure. CI annotations retain bounded stdout/stderr, failure
+categories and the tail containing any minimized input and replay seed.
+
 ## Commands
 
 ```sh
