@@ -266,6 +266,7 @@ fn config_windows_retries_delete_sharing_conflicts_without_losing_old_data() {
     assert!(!store.load().unwrap().ui_mask());
 }
 
+#[cfg(unix)]
 #[test]
 fn config_open_snapshot_remains_valid_after_atomic_replacement() {
     let (_temp, store) = setup();
@@ -319,6 +320,32 @@ fn config_windows_publish_retries_preflight_sharing_violations() {
         let worker = scope.spawn(|| publish(next, &store.path(), &store.root, sync_directory));
         std::thread::sleep(Duration::from_millis(150));
         drop(exclusive);
+        worker.join().unwrap().unwrap();
+    });
+    assert!(!store.load().unwrap().ui_mask());
+}
+
+#[cfg(windows)]
+#[test]
+fn config_windows_retries_while_a_normal_read_snapshot_is_held() {
+    let (_temp, store) = setup();
+    store.set(ConfigKey::UiMask, "true").unwrap();
+    let mut snapshot = open_checked(&store.path(), false).unwrap();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| store.set(ConfigKey::UiMask, "false"));
+        // NTFS on the qualified Windows runner denies replacement while this
+        // ordinary read handle is retained, even with std's default sharing.
+        let mut old = Vec::new();
+        snapshot.read_to_end(&mut old).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Document>(&old)
+                .unwrap()
+                .settings
+                .ui_mask,
+            Some(true)
+        );
+        std::thread::sleep(Duration::from_millis(150));
+        drop(snapshot);
         worker.join().unwrap().unwrap();
     });
     assert!(!store.load().unwrap().ui_mask());

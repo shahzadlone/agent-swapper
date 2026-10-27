@@ -75,7 +75,9 @@ lock, and replace it using a private temporary file in the same directory.
 Cooperating writers preserve unrelated settings; readers see a complete old or
 new document. An unchanged setting is not rewritten. Lock acquisition waits at
 most three seconds. Windows replacement also retries transient sharing/access
-conflicts for up to three seconds, then leaves the original file intact.
+conflicts for up to three seconds, then leaves the original file intact. A retained
+read handle can delay replacement on Windows; readers close their handles after
+the bounded file read.
 
 The file is synchronized before replacement. On Unix, the parent directory is
 synchronized afterward; if that fails, `config_durability_uncertain` explicitly
@@ -83,7 +85,7 @@ reports that the new preferences were applied. Read them back before retrying.
 The parents of newly created state directories are not synchronized, so first-save
 power-loss durability is unverified. Windows directory durability is best effort
 and ACL privacy remains unverified.
-Read snapshots remain valid when atomic replacement unlinks the old file; lock
+On Unix, read snapshots remain valid when atomic replacement unlinks the old file; lock
 files still require one link. Regular-file and handle checks reject symlinks, reparse points, hardlinks and
 nonregular files; Unix owner/private-mode checks also apply. These checks and OS
 locks do not authenticate writes against a malicious process running as you.

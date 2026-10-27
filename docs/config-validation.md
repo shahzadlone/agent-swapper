@@ -23,8 +23,9 @@ post-replacement directory-sync failure. `doctor` distinguishes preference error
 from a healthy registry. Explicit history flags, individual run inspection and
 launch previews remain usable with a malformed preferences file.
 
-The Windows-only replacement test holds the old file without delete sharing,
-releases it during the bounded retry, and checks the new setting. Windows ACL
+Windows replacement fixtures cover ordinary read handles, handles without
+delete sharing, and exclusive handles blocking pre-publication reads. Each
+releases the handle during the bounded retry and checks the applied value. Windows ACL
 privacy and power-loss durability are not established by this fixture.
 
 ## Review and limits
@@ -48,6 +49,14 @@ retaining all owner/mode/regular-file checks and rejecting multiple links;
 lock files retain the strict one-link check. A deterministic retained-handle
 regression covers this state. Local concurrency stress passed 50 iterations;
 CI now repeats the concurrency fixture 25 times on each platform.
+
+CI at `4eee839` passed Linux and macOS, including the new stress gate. Windows
+caught a portability assumption in the deterministic retained-handle fixture:
+replacement was denied while an ordinary read handle remained open for the
+entire retry budget. The old value was preserved. The zero-link snapshot test
+is now Unix-specific; a Windows counterpart verifies completion after the read
+handle is released. The implementation keeps bounded retries and failure without
+replacing the old document.
 
 The resolved tempfile implementation was inspected locally to verify replacement
 and failure ordering; no direct platform-API unsafe code was added.
