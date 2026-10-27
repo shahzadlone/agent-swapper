@@ -10,11 +10,13 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 4;
+const SCHEMA: i64 = 5;
 mod journal;
 mod runs;
+mod sessions;
 pub use journal::VerificationReport;
 pub use runs::{ProcessCustody, RunRecord};
+pub use sessions::{GentsSession, ResumeCandidate};
 
 /// Internal producer outcomes. External callers cannot declare a run finished.
 pub(crate) enum RunCompletion {
@@ -51,6 +53,8 @@ enum Event {
         kind: String,
         #[serde(default)]
         requires_spawn_observation: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gents_session: Option<GentsSession>,
     },
     RunFinished {
         id: String,
@@ -155,7 +159,7 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if matches!(current, 1..=3) {
+        if matches!(current, 1..=4) {
             journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
@@ -374,13 +378,24 @@ impl Store {
         self.finish_run(id, RunCompletion::OperatorAttested)
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_run(&mut self, lease: &ProfileLease, kind: &str) -> Result<String> {
+        self.begin_run_with_session(lease, kind, None)
+    }
+
+    pub(crate) fn begin_run_with_session(
+        &mut self,
+        lease: &ProfileLease,
+        kind: &str,
+        gents_session: Option<GentsSession>,
+    ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         self.record(Event::RunPlanned {
             id: id.clone(),
             profile: lease.profile,
             kind: kind.to_owned(),
             requires_spawn_observation: true,
+            gents_session,
         })?;
         Ok(id)
     }
@@ -658,7 +673,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             }
             tx.execute("DELETE FROM main.mappings WHERE profile=?1", [id.to_string()])?;
         }
-        Event::RunPlanned { id, profile, kind, requires_spawn_observation } => {
+        Event::RunPlanned { id, profile, kind, requires_spawn_observation, gents_session } => {
             let enabled: Option<(bool, String)> = tx
                 .query_row(
                     "SELECT enabled,harness FROM main.profiles WHERE id=?1 AND retired=0",
@@ -672,9 +687,13 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 Some((false, _)) => return Err(Error::Disabled),
                 None => return Err(Error::NotFound),
             }
+            if let Some(session) = gents_session {
+                if kind != "run" { return Err(Error::UnsupportedSession); }
+                sessions::validate_intent(tx, *profile, session)?;
+            }
             tx.execute(
-                "INSERT INTO main.runs(id,profile,kind,started_at,requires_spawn_observation) VALUES(?1,?2,?3,?4,?5)",
-                params![id, profile.to_string(), kind, recorded_at, requires_spawn_observation],
+                "INSERT INTO main.runs(id,profile,kind,started_at,requires_spawn_observation,gents_session) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![id, profile.to_string(), kind, recorded_at, requires_spawn_observation, gents_session.as_ref().map(serde_json::to_string).transpose()?],
             )?;
         }
         Event::RunFinished {

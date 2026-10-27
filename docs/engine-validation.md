@@ -5,7 +5,7 @@ not a managed gents runtime, live subscription or automatic switching engine.
 The source contract is gents 0.21.0 at
 `89f1b6760e2297b3d8a09d347c43eaf6978a8b31`.
 
-## Local checks
+## Initial attached-client checks
 
 Environment: Rust 1.98.0, Linux `6.18.54.1-microsoft-standard-WSL2`.
 
@@ -69,6 +69,47 @@ alias directly. `test(registry): normalize migration fixture roots on macOS`
 resolved the fixture paths before calling the private-path checker, matching the
 existing migration tests. The safety checks and assertions were preserved; the
 corrected run passed on all three CI platforms.
+
+## Durable session continuation checkpoint
+
+The next slice adds a UUID to every new gents launch intent, exact binding
+metadata, an optional resume-source run ID and explicit `run --resume`.
+Schema 5 preserves unknown session IDs on legacy runs and backs up schema 4
+before adding the projection column. Its independent fixture uses schema-4 DDL
+frozen from `6112a37`, a rebound gents profile and an observed pending native run.
+
+On the same local Rust/WSL2 environment, all 105 nextest tests passed (one
+intentionally ignored fixture entry). Formatting, Clippy with warnings denied,
+the doctest and dependency policy passed. No new resolved packages were added.
+Cross-platform results for this slice are recorded separately below when available.
+
+Local regression coverage includes:
+
+- exact UUID agreement between CLI preview, child argv and durable run history;
+- default new sessions, explicit UUID selection and same-session resume chains;
+- resume after rename, refusal after binding drift, and native `-- --resume` forwarding;
+- refusal past failed, nonzero, pending, attested or legacy latest attempts;
+- stale plans after a newer run, wrong session/source/profile references, and
+  rollback without appending an intent on refusal;
+- persistence across supervisor loss before spawn and reopen;
+- journal-order selection across backward clock changes, source read-only replay,
+  invalid historical resume transitions and session projection tampering;
+- schema-4 migration backup, unchanged legacy history and rollback on tampering.
+
+A read-only Opus 5.5 xhigh review found no blockers in source validation,
+transaction ordering or migration. Follow-up changes made preview non-reservation
+explicit in text and JSON, removed argument-position assumptions, exercised a
+second registry connection, expanded invalid replay/property cases and covered
+pending legacy gents runs. UUIDs retain typed parsing and canonical serialization;
+JSON session metadata uses the same camelCase form as run-history output.
+Exact binding restoration permits manual resume, with the identity limitation
+now documented and tested. Long-chain performance beyond the existing replay
+and lifecycle fixtures remains unmeasured.
+
+The client-success gate is local bookkeeping. It does not establish remote
+session existence, runtime shutdown, successful task completion or safe replay
+of unfinished tools. This remains manual continuation behind the experimental
+engine opt-in. No dependencies or provider calls are added.
 
 ## Remaining evidence
 

@@ -81,11 +81,27 @@ pub enum Error {
     #[error("requested execution engine does not match the registered profile")]
     EngineMismatch,
     #[error(
-        "gents profiles accept no forwarded arguments or native login; initialize and authenticate the dedicated home with gents separately; use --session with run to resume"
+        "gents profiles accept no forwarded arguments or native login; initialize and authenticate the dedicated home with gents separately; use run --resume or run --session UUID for continuity"
     )]
     UnsupportedGentsOperation,
-    #[error("--session is supported only for the gents engine")]
+    #[error("--session and --resume are supported only for the gents engine")]
     UnsupportedSession,
+    #[error(
+        "no tracked gents session for the latest run; start a new chat or explicitly select --session UUID"
+    )]
+    NoRecordedSession,
+    #[error(
+        "latest gents client did not record a successful exit; inspect `aswp runs` and runtime work before explicitly selecting a session"
+    )]
+    SessionNotResumable,
+    #[error(
+        "gents binding changed since that session; inspect the runtime and agent before explicitly selecting --session UUID"
+    )]
+    SessionBindingChanged,
+    #[error(
+        "a newer run changed the resume selection; inspect `aswp runs` and build a fresh launch plan"
+    )]
+    StaleSession,
     #[error(
         "interactive mode requires a terminal and cannot be combined with --json; use `aswp list --json` or `aswp run --dry-run --json`"
     )]
@@ -169,6 +185,10 @@ impl Error {
             Self::EngineMismatch => "engine_mismatch",
             Self::UnsupportedGentsOperation => "unsupported_gents_operation",
             Self::UnsupportedSession => "unsupported_session",
+            Self::NoRecordedSession => "no_recorded_session",
+            Self::SessionNotResumable => "session_not_resumable",
+            Self::SessionBindingChanged => "session_binding_changed",
+            Self::StaleSession => "stale_session",
             Self::InteractiveMode => "interactive_mode",
             Self::NonUtf8Path => "non_utf8_path",
             Self::HandoverTooLarge => "handover_too_large",

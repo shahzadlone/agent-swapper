@@ -34,6 +34,7 @@ pub struct RunRecord {
     pub exit_code: Option<i32>,
     pub outcome: Option<String>,
     pub custody: ProcessCustody,
+    pub gents_session: Option<super::GentsSession>,
 }
 
 impl Store {
@@ -66,7 +67,7 @@ impl Store {
 }
 
 fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRecord>> {
-    let mut query = db.prepare("SELECT r.id,r.profile,p.alias,p.harness,r.kind,r.started_at,r.spawned_at,r.observed_pid,r.exit_code,r.outcome FROM main.runs r JOIN main.profiles p ON p.id=r.profile JOIN main.event_log e ON json_extract(e.payload,'$.type')='run_planned' AND json_extract(e.payload,'$.id')=r.id WHERE (?1 IS NULL OR r.id=?1) ORDER BY e.sequence DESC LIMIT ?2")?;
+    let mut query = db.prepare("SELECT r.id,r.profile,p.alias,p.harness,r.kind,r.started_at,r.spawned_at,r.observed_pid,r.exit_code,r.outcome,r.gents_session FROM main.runs r JOIN main.profiles p ON p.id=r.profile JOIN main.event_log e ON json_extract(e.payload,'$.type')='run_planned' AND json_extract(e.payload,'$.id')=r.id WHERE (?1 IS NULL OR r.id=?1) ORDER BY e.sequence DESC LIMIT ?2")?;
     let mut rows = query.query(params![id, limit])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
@@ -97,6 +98,11 @@ fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRe
             exit_code: row.get(8)?,
             outcome,
             custody,
+            gents_session: row
+                .get::<_, Option<String>>(10)?
+                .map(|json| serde_json::from_str(&json))
+                .transpose()
+                .map_err(|_| Error::CorruptRegistry)?,
         });
     }
     Ok(records)

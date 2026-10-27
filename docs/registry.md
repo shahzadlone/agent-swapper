@@ -35,7 +35,7 @@ authenticate the database against a process running as the same user.
 
 ## Upgrades and backups
 
-Opening a schema-1, schema-2 or schema-3 registry upgrades it to schema 4. Before changing it, the
+Opening a schema-1 through schema-4 registry upgrades it to schema 5. Before changing it, the
 upgrade writes a consistent SQLite snapshot, including committed WAL data, to
 `STATE_DIR/registry-backups/schema-N-SHA256.sqlite3`. An unchanged retry reuses
 an identical snapshot without overwriting it. Files use private permissions
@@ -45,7 +45,11 @@ plaintext local metadata as the registry and need the same protection.
 Schema 2 made the journal envelope timestamp authoritative for each run's
 start. Schema 3 adds optional PID and spawn-time observations. Schema 4 adds validated
 gents bindings, unique active runtime addresses and engine-specific completion
-outcomes. Bindings and rebinds are metadata in the journal, never credentials.
+outcomes. Schema 5 adds optional gents session references to run intents and
+projections: UUID, binding snapshot and resume-source run ID. Legacy runs retain
+unknown session IDs. Resume validation uses journal order and the exact preceding
+state; replay reconstructs that order in memory without modifying the source.
+Bindings and session references are metadata, never credentials or transcripts.
 The upgrade checks old DDL before replacing projection tables and copies actual
 rows; projection corruption cannot disappear into a replay rebuild. The upgrade
 reconciles schema-1 timestamps, preserves missing observations as unknown,
@@ -55,7 +59,9 @@ opened or backed up by this migration.
 
 Keep all AgentSwapper processes on the same build during an upgrade. Current
 writers recheck the schema in every event transaction and refuse a changed or
-newer schema. This does not retrofit that protection into older binaries.
+newer schema. A schema-4 supervisor still running during the schema-5 upgrade
+will refuse to record its exit; its intent remains pending and requires manual
+reconciliation. This does not retrofit schema guards into binaries that predate them.
 
 ## A mismatch
 

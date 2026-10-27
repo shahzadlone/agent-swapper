@@ -731,7 +731,7 @@ fn v3_upgrade_preserves_observed_pending_run_and_exact_backup() {
     let before = v3_dump(&db);
     migrate(&mut db, &root, 3).unwrap();
     assert_eq!(v3_dump(&db), before);
-    assert_eq!(verify(&db).unwrap().schema_version, 4);
+    assert_eq!(verify(&db).unwrap().schema_version, 5);
     assert!(verify(&db).unwrap().consistent);
     assert_eq!(backups(&root).len(), 1);
     let backup = Connection::open(&backups(&root)[0]).unwrap();
@@ -800,7 +800,8 @@ fn gents_rebinding_is_leased_durable_and_keeps_home_identity() {
             id: Uuid::new_v4().to_string(),
             profile: p.id,
             kind: "run".to_owned(),
-            requires_spawn_observation: false
+            requires_spawn_observation: false,
+            gents_session: None,
         })
         .is_err()
     );
@@ -871,7 +872,7 @@ fn v3_with_v1_default_and_appended_columns_upgrades_without_losing_history() {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
     #[test]
-    fn gents_lifecycles_rebind_and_replay(operations in prop::collection::vec(0_u8..7, 0..24)) {
+    fn gents_lifecycles_rebind_and_replay(operations in prop::collection::vec(0_u8..9, 0..24)) {
         let (_temp, mut s) = setup();
         let binding = |port| crate::GentsBinding::new(format!("127.0.0.1:{port}").parse().unwrap(), "web_persona".parse().unwrap()).unwrap();
         let mut p = s.register_gents("relay".parse().unwrap(), binding(9191)).unwrap();
@@ -890,6 +891,24 @@ proptest! {
                     }).unwrap();
                     prop_assert_eq!(s.run(&id).unwrap().custody, crate::store::ProcessCustody::ExternalRuntimeUnknown);
                 }
+                7..=8 if p.enabled => {
+                    let session = if op == 7 {
+                        match s.latest_gents_session(p.id) {
+                            Ok(candidate) => crate::store::GentsSession::new(candidate.session.id(), p.gents.clone().unwrap(), Some(candidate.run_id)),
+                            Err(Error::NoRecordedSession | Error::SessionNotResumable | Error::SessionBindingChanged) => {
+                                prop_assert!(s.verify().unwrap().consistent);
+                                continue;
+                            }
+                            Err(error) => return Err(TestCaseError::fail(error.to_string())),
+                        }
+                    } else {
+                        crate::store::GentsSession::new(Uuid::new_v4(), p.gents.clone().unwrap(), None)
+                    };
+                    let lease = s.lease(p.id).unwrap();
+                    let id = s.begin_run_with_session(&lease, "run", Some(session)).unwrap();
+                    s.observe_spawn(&id, index as u32 + 1).unwrap();
+                    s.finish_run(id, RunCompletion::ExternalClientExited(0)).unwrap();
+                }
                 5 => p = s.rename(&p.alias, format!("relay-{index}").parse().unwrap()).unwrap(),
                 6 => { s.remove(&p.alias).unwrap(); p = s.register_gents("relay".parse().unwrap(), binding(9191)).unwrap(); }
                 _ => {}
@@ -897,4 +916,121 @@ proptest! {
             prop_assert!(s.verify().unwrap().consistent);
         }
     }
+}
+
+fn legacy_v4(root: &Path) -> Connection {
+    private_fs::directory(root, true).unwrap();
+    private_fs::file(&root.join("registry.sqlite3")).unwrap();
+    let db = Connection::open(root.join("registry.sqlite3")).unwrap();
+    configure(&db).unwrap();
+    db.pragma_update(None, "journal_mode", "WAL").unwrap();
+    db.execute_batch(include_str!("../../../tests/fixtures/registry_v4.sql"))
+        .unwrap();
+    db.execute_batch(include_str!("../../../tests/fixtures/registry_v4_seed.sql"))
+        .unwrap();
+    db
+}
+fn v4_dump(db: &Connection) -> Vec<Vec<Vec<Value>>> {
+    projection_dump_with_run_fields(db, "id,alias,harness,enabled,retired,gents", "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation").unwrap()
+}
+
+#[test]
+fn v4_upgrade_preserves_gents_binding_and_native_pending_history_without_inventing_sessions() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+    let mut db = legacy_v4(&root);
+    let before = v4_dump(&db);
+    migrate(&mut db, &root, 4).unwrap();
+    assert_eq!(v4_dump(&db), before);
+    assert!(verify(&db).unwrap().consistent);
+    assert_eq!(verify(&db).unwrap().schema_version, 5);
+    assert_eq!(backups(&root).len(), 1);
+    let backup = Connection::open(&backups(&root)[0]).unwrap();
+    assert_eq!(v4_dump(&backup), before);
+    assert_eq!(
+        backup
+            .pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(event_count(&backup), 8);
+    assert_eq!(
+        db.query_row::<i64, _, _>(
+            "SELECT count(*) FROM runs WHERE gents_session IS NOT NULL",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        0
+    );
+    // Migration still leaves the legacy gents session explicitly unknown.
+    assert!(matches!(
+        super::super::sessions::latest(
+            &db,
+            "cafe0000-0000-4000-8000-000000000001".parse().unwrap()
+        ),
+        Err(Error::NoRecordedSession)
+    ));
+}
+
+#[test]
+fn v4_failed_migration_rolls_back_schema_and_rows_and_keeps_backup() {
+    for mutation in [
+        "UPDATE profiles SET gents=json_set(gents,'$.agent','tampered') WHERE harness='gents'",
+        "UPDATE runs SET observed_pid=99",
+        "CREATE INDEX injected ON runs(kind)",
+        "DROP INDEX unique_gents_address",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+        let mut db = legacy_v4(&root);
+        db.execute_batch(mutation).unwrap();
+        let before = v4_dump(&db);
+        let schema = schema_dump(&db).unwrap();
+        assert!(migrate(&mut db, &root, 4).is_err(), "{mutation}");
+        assert_eq!(v4_dump(&db), before);
+        assert_eq!(schema_dump(&db).unwrap(), schema);
+        assert_eq!(
+            db.pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+                .unwrap(),
+            4
+        );
+        assert_eq!(backups(&root).len(), 1);
+    }
+}
+
+#[test]
+fn migrated_pending_gents_run_requires_reconciliation_and_retains_unknown_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+    let db = legacy_v4(&root);
+    db.execute_batch(r#"
+        INSERT INTO event_log(payload,recorded_at) VALUES('{"type":"run_planned","id":"cafe0000-0000-4000-8000-000000000009","profile":"cafe0000-0000-4000-8000-000000000001","kind":"run","requires_spawn_observation":true}', '2026-01-01T00:00:08.000Z');
+        INSERT INTO runs(id,profile,kind,started_at,requires_spawn_observation) VALUES('cafe0000-0000-4000-8000-000000000009','cafe0000-0000-4000-8000-000000000001','run','2026-01-01T00:00:08.000Z',1);
+    "#).unwrap();
+    drop(db);
+    let mut s = Store::open(&root).unwrap();
+    let p = s.find(&"relay".parse().unwrap()).unwrap();
+    // Fixture creates the vendor home that a real schema-4 profile already owns.
+    private_fs::directory(&root.join("profiles").join(p.id.to_string()), true).unwrap();
+    assert!(matches!(
+        s.latest_gents_session(p.id),
+        Err(Error::NoRecordedSession)
+    ));
+    assert!(matches!(s.lease(p.id), Err(Error::Busy)));
+    s.attest_stopped("cafe0000-0000-4000-8000-000000000009")
+        .unwrap();
+    assert!(matches!(
+        s.latest_gents_session(p.id),
+        Err(Error::NoRecordedSession)
+    ));
+    let lease = s.lease(p.id).unwrap();
+    let session = crate::store::GentsSession::new(Uuid::new_v4(), p.gents.unwrap(), None);
+    let id = s
+        .begin_run_with_session(&lease, "run", Some(session.clone()))
+        .unwrap();
+    s.observe_spawn(&id, 44).unwrap();
+    s.finish_run(id, RunCompletion::ExternalClientExited(0))
+        .unwrap();
+    assert_eq!(s.latest_gents_session(p.id).unwrap().session, session);
 }

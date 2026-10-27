@@ -23,10 +23,11 @@ CREATE TABLE runs (
     started_at TEXT NOT NULL,
     observed_pid INTEGER CHECK(observed_pid>0),
     spawned_at TEXT,
-    requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1))
+    requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1)),
+    gents_session TEXT CHECK(gents_session IS NULL OR json_valid(gents_session))
 );
 CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE exit_code IS NULL;
 CREATE TABLE mappings (
     directory TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id)
 );
-PRAGMA user_version=4;
+PRAGMA user_version=5;

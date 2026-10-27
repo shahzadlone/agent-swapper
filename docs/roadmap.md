@@ -37,10 +37,11 @@ G0a implemented:
 
 - `aswp engines` comparison; explicit native/gents profile selection;
 - dedicated home, local address and agent binding, with leased rebinds;
-- fixed gents chat arguments, optional session UUID and an environment allowlist;
+- fixed gents chat arguments, durable session UUIDs and an environment allowlist;
+- explicit `--resume` with binding/source revalidation and no fallback past uncertain runs;
 - local `runtime.json` address check, with listener identity explicitly unverified;
 - distinct client-exit history; external runtime custody remains unknown;
-- schema-4 migration with backups and preservation of pending runs;
+- schema-5 migration with backups and preservation of pending runs and unknown legacy sessions;
 - provider-free tests for scope, opt-ins, rebinding, custody and tamper refusal.
 
 The following G0 deliverables and gates remain open; the attached client does
@@ -119,7 +120,7 @@ Implemented, unreleased:
 - validated profile aliases and opaque IDs; register, list, show, rename,
   enable, disable, and unregister without deleting vendor files;
 - SQLite append-only events and projections in one transaction, full replay
-  verification, and backed-up schema-1/schema-2/schema-3 to schema-4 migrations;
+  verification, and backed-up schema-1 through schema-4 to schema-5 migrations;
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;

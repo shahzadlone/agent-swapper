@@ -110,12 +110,21 @@ aswp profile add --engine gents --alias relay --address 127.0.0.1:9191 --agent Y
 aswp profile show relay --json
 aswp run relay --dry-run
 aswp run relay --experimental-gents
+aswp run relay --experimental-gents --resume
+aswp runs
 ```
 
 Initialize, authenticate and start the dedicated gents runtime separately before
 launching. The profile's home, address and agent fix the client's route; forwarded
 arguments and native login are refused. `--session UUID` continues or creates an explicit
-gents session with the bound agent. `profile bind` changes the address/agent without replacing the
+gents session with the bound agent. New launches record a fresh UUID before spawn.
+`--resume` returns to the latest tracked attempt only when its client exited
+successfully and its binding still matches; failed or uncertain attempts block
+resume without falling back. It conflicts with `--session`. These are local
+references, not proof of remote session existence or completed runtime work.
+Native resume arguments still go after `--`.
+
+`profile bind` changes the address/agent without replacing the
 home. `run --engine native|gents` asserts the profile's engine selection.
 
 Gents owns its tools, credentials, permissions and configured workspace. A client

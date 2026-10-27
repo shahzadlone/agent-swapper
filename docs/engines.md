@@ -12,7 +12,7 @@ checks that your selection matches the profile; it never silently changes engine
 | Credentials, tools and permissions | The selected native CLI | The gents runtime and agent configuration |
 | Setup | Install the native CLI; authenticate the isolated profile | Install gents; initialize a dedicated home; configure/authenticate an agent; operate a local runtime |
 | Workspace | Passed as the native client's working directory | Configured on the gents agent; client cwd does **not** set it |
-| Continuity | Native resume where supported; manual handover between brands | Explicit gents session UUID, continued or created with the bound agent; provider switching remains a gents operation |
+| Continuity | Native resume where supported; manual handover between brands | Tracked UUIDs and explicit `--resume` with the bound agent; provider switching remains a gents operation |
 | Main tradeoff | Session formats and features differ across vendors | Separate runtime to maintain; native plugins, sessions and permissions do not automatically transfer |
 | Lifecycle | Direct child observed; descendants unverified | Chat client observed; external runtime work may continue after exit |
 | Verification | Provider isolation unverified on every OS | CLI contract tested with fixtures; real runtime/provider pairs unverified |
@@ -71,6 +71,8 @@ example its `default_agent_id`), replacing `YOUR_AGENT_ID` below:
 aswp profile bind relay --address 127.0.0.1:9191 --agent YOUR_AGENT_ID
 aswp run relay --dry-run
 aswp run relay --engine gents --experimental-gents
+aswp run relay --experimental-gents --resume
+aswp runs
 aswp run relay --experimental-gents --session EXISTING_SESSION_UUID
 ```
 
@@ -79,14 +81,33 @@ underscores, colons and hyphens are supported. A rebind retains the same home an
 credentials. It requires a free client lease and no unresolved launch intent;
 it does not stop work or change configuration in the external runtime.
 
-An existing UUID continues that session; an unknown UUID creates a new session
-with that ID. Every turn uses the profile's bound agent, even when another agent
-started the session. AgentSwapper does not check session existence.
+Every new launch chooses a fresh UUID before spawning the client. The launch
+intent records that UUID, the exact agent/address binding and, for `--resume`,
+the source run ID. `aswp runs` and launch previews show these references;
+conversation text and credentials are not stored. A dry-run UUID is a preview,
+not a reservation.
+
+`--resume` selects this profile's latest recorded attempt in journal order. It
+requires a tracked session, the same binding, an observed client process and a
+zero `external_client_exited` result. It refuses failed, unresolved, manually
+attested, legacy or differently bound attempts without falling back to an older
+conversation. The source is checked again under the profile lease and database
+write transaction before spawn. Renaming a profile preserves its history.
+
+`--session UUID` explicitly continues or creates that UUID under the current
+binding; it cannot be combined with `--resume`. An unknown UUID creates a new
+session in gents. Every turn uses the profile's bound agent, even when another
+agent started the session. AgentSwapper does not check remote session existence
+or detect a replaced runtime behind an unchanged binding. Restoring the exact
+address and agent after a rebind allows manual resume again; binding equality
+is not an identity or configuration-generation check. A recorded successful
+client exit proves neither completed work nor stopped runtime tools. Review
+uncertain work before manually continuing; there is no automatic retry.
 
 The actual launch is limited to `gents chat`, the owned `--home`, bound
-`--graphql` and `--agent-id`, plus an optional session UUID. Without `--session`,
-gents creates a new session. AgentSwapper does not yet discover or persist the
-runtime's session IDs. There is no automatic import of native conversations.
+`--graphql` and `--agent-id`, and the chosen `--session-id`. There is no automatic
+import of native conversations or discovery of sessions created outside this
+wrapper. Older runs remain visible with an unknown session ID.
 Use the gents interactive prompt for messages. Forwarded arguments and
 `aswp login` are refused for gents profiles. `--experimental-native` cannot
 authorize gents, including through the Rust API.

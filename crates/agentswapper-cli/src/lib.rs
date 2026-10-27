@@ -129,6 +129,9 @@ struct LaunchArgs {
     /// Continue or create a gents session UUID; the profile binding selects its agent.
     #[arg(long)]
     session: Option<uuid::Uuid>,
+    /// Gents only: resume the latest attempt if its client succeeded and binding matches.
+    #[arg(long, conflicts_with = "session")]
+    resume: bool,
     /// Absolute path to a trusted executable instead of PATH discovery.
     #[arg(long)]
     executable: Option<PathBuf>,
@@ -596,10 +599,10 @@ fn launch_profile(
     if launch.engine.is_some_and(|requested| requested != engine) {
         return Err(Error::EngineMismatch);
     }
-    if login && launch.session.is_some() {
+    if login && (launch.session.is_some() || launch.resume) {
         return Err(Error::UnsupportedSession);
     }
-    let plan = LaunchPlan::build(
+    let mut plan = LaunchPlan::build(
         store,
         profile,
         launch.executable.as_deref(),
@@ -608,6 +611,9 @@ fn launch_profile(
         login,
     )?
     .with_session(launch.session)?;
+    if launch.resume {
+        plan = plan.with_latest_gents_session(store)?;
+    }
     if launch.dry_run {
         let preview = plan.preview();
         let runtime_check = if engine == ExecutionEngine::Gents {
@@ -628,13 +634,19 @@ fn launch_profile(
                 .as_ref()
                 .ok_or(Error::InvalidEngineBinding)?;
             format!(
-                "\nEngine: gents (attached chat client)\nRuntime: {} | Agent: {}\nHome is passed with --home. Workspace and permissions belong to the gents agent configuration, not this client directory.\nClient exit does not stop the external runtime. Listener unverified; gents presents this home's authentication to the bound address.\nRuntime check: {}\nSession: {}",
+                "\nEngine: gents (attached chat client)\nRuntime: {} | Agent: {}\nHome is passed with --home. Workspace and permissions belong to the gents agent configuration, not this client directory.\nClient exit does not stop the external runtime. Listener unverified; gents presents this home's authentication to the bound address.\nRuntime check: {}\nSession: {}\nSelection: {}; source run: {}\nPreview only; no session is reserved.",
                 binding.address(),
                 binding.agent(),
                 runtime_check.as_deref().unwrap_or("not checked"),
                 preview
                     .session
-                    .map_or_else(|| "new (created by gents)".to_owned(), |id| id.to_string())
+                    .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+                preview
+                    .session_selection
+                    .map_or("none", |selection| selection.as_str()),
+                preview
+                    .resumed_from
+                    .map_or_else(|| "none".to_owned(), |id| id.to_string())
             )
         } else {
             "\nEngine: native".to_owned()
@@ -678,9 +690,16 @@ fn launch_profile(
         plan.profile().harness
     )?;
     if engine == ExecutionEngine::Gents {
+        let preview = plan.preview();
         writeln!(
             io::stderr(),
-            "Attached chat client only. Gents owns credentials, tools, permissions and the configured agent workspace. External runtime work may continue after this client exits."
+            "Attached chat client only. Gents owns credentials, tools, permissions and the configured agent workspace. External runtime work may continue after this client exits.\nSession: {} ({})",
+            preview
+                .session
+                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+            preview
+                .session_selection
+                .map_or("none", |selection| selection.as_str()),
         )?;
     }
     ctrlc::set_handler(|| {})
@@ -702,8 +721,22 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
         ProcessCustody::NeverStarted => "native process did not start",
         ProcessCustody::AttestedStopped => "operator attested stopped; not independently verified",
     };
+    let session = run
+        .gents_session
+        .as_ref()
+        .map(|s| {
+            format!(
+                "\n  Gents session={} | agent={} | runtime={} | resumed from={}",
+                s.id(),
+                s.binding().agent(),
+                s.binding().address(),
+                s.resumed_from()
+                    .map_or_else(|| "none".to_owned(), |id| id.to_string())
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "{}  {} / {} / {}\n  {} | exit={} | outcome={}\n  Custody: {}\n  Observed PID={} (may be reused; do not signal this ID)",
+        "{}  {} / {} / {}\n  {} | exit={} | outcome={}\n  Custody: {}\n  Observed PID={} (may be reused; do not signal this ID){session}",
         run.id,
         run.alias,
         run.harness,

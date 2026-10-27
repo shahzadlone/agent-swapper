@@ -179,8 +179,10 @@ Screen-scraped text never drives a switch, a quota estimate, or a "verified"
 claim.
 
 Optional engine mode: the implemented first slice attaches `gents chat` to a
-separately operated local runtime, with fixed home/address/agent bindings and
-explicitly unknown external runtime custody. The full design below still needs
+separately operated local runtime, with fixed home/address/agent bindings,
+durable session references and explicit `--resume`. Resume sources are revalidated
+under the client lease and journal transaction. External runtime custody and
+remote session existence remain unknown. The full design below still needs
 qualification. Qualify gents through a pinned, authenticated local process
 adapter. Keep AgentSwapper's SQLite journal, policy and supervision independent;
 gents owns its history, credentials and tools. Use a dedicated agent/profile per

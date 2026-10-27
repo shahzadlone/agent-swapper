@@ -206,6 +206,12 @@ fn replay(source: &Connection) -> Result<(Connection, u64)> {
         }
         let event: Event = serde_json::from_str(&json).map_err(|_| Error::CorruptRegistry)?;
         validate_event(&event)?;
+        // Resume references depend on journal order. Replay metadata as well as
+        // projections so transition checks see exactly the preceding history.
+        tx.execute(
+            "INSERT INTO main.event_log(sequence,payload,recorded_at) VALUES(?1,?2,?3)",
+            rusqlite::params![sequence, json, recorded_at],
+        )?;
         apply(&tx, &event, &recorded_at).map_err(|_| Error::CorruptRegistry)?;
     }
     tx.commit()?;
@@ -216,7 +222,7 @@ fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
     projection_dump_with_run_fields(
         db,
         "id,alias,harness,enabled,retired,gents",
-        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation",
+        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session",
     )
 }
 
@@ -305,7 +311,7 @@ fn valid_timestamp(value: &str) -> bool {
 pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != from || !matches!(from, 1..=3) {
+    if version != from || !matches!(from, 1..=4) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -357,28 +363,38 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         }
         drop(update);
     }
-    if from < 3 {
-        tx.execute_batch("ALTER TABLE runs ADD COLUMN observed_pid INTEGER CHECK(observed_pid>0); ALTER TABLE runs ADD COLUMN spawned_at TEXT; ALTER TABLE runs ADD COLUMN requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1));")?;
-    }
-    // Check the old DDL before replacing tables so extra triggers, indexes, or
-    // altered constraints cannot disappear into an apparently valid migration.
-    let legacy_schema = Connection::open_in_memory()?;
-    legacy_schema.execute_batch(include_str!("schema_v3.sql"))?;
-    if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
-        return Err(Error::ProjectionMismatch);
-    }
-    // Copy actual projections, not the replay: corrupted rows must still fail
-    // verification. Keep foreign keys enabled, dropping children before parents.
-    tx.execute_batch("CREATE TEMP TABLE migration_profiles AS SELECT id,alias,harness,enabled,retired FROM main.profiles;
+    if from == 4 {
+        let legacy_schema = Connection::open_in_memory()?;
+        legacy_schema.execute_batch(include_str!("schema_v4.sql"))?;
+        if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
+            return Err(Error::ProjectionMismatch);
+        }
+        tx.execute_batch("ALTER TABLE runs ADD COLUMN gents_session TEXT CHECK(gents_session IS NULL OR json_valid(gents_session));")?;
+    } else {
+        if from < 3 {
+            tx.execute_batch("ALTER TABLE runs ADD COLUMN observed_pid INTEGER CHECK(observed_pid>0); ALTER TABLE runs ADD COLUMN spawned_at TEXT; ALTER TABLE runs ADD COLUMN requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1));")?;
+        }
+        // Check the old DDL before replacing tables so extra triggers, indexes, or
+        // altered constraints cannot disappear into an apparently valid migration.
+        let legacy_schema = Connection::open_in_memory()?;
+        legacy_schema.execute_batch(include_str!("schema_v3.sql"))?;
+        if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
+            return Err(Error::ProjectionMismatch);
+        }
+        // Copy actual projections, not the replay: corrupted rows must still fail
+        // verification. Keep foreign keys enabled, dropping children before parents.
+        tx.execute_batch("CREATE TEMP TABLE migration_profiles AS SELECT id,alias,harness,enabled,retired FROM main.profiles;
         CREATE TEMP TABLE migration_runs AS SELECT * FROM main.runs;
         CREATE TEMP TABLE migration_mappings AS SELECT * FROM main.mappings;
         DROP TABLE main.mappings; DROP TABLE main.runs; DROP TABLE main.profiles;")?;
-    tx.execute_batch(include_str!("projections.sql"))?;
-    tx.execute_batch("INSERT INTO main.profiles(id,alias,harness,enabled,retired) SELECT * FROM temp.migration_profiles;
-        INSERT INTO main.runs SELECT * FROM temp.migration_runs;
+        tx.execute_batch(include_str!("projections.sql"))?;
+        tx.execute_batch("INSERT INTO main.profiles(id,alias,harness,enabled,retired) SELECT * FROM temp.migration_profiles;
+        INSERT INTO main.runs(id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation) SELECT * FROM temp.migration_runs;
         INSERT INTO main.mappings SELECT * FROM temp.migration_mappings;
         DROP TABLE temp.migration_profiles; DROP TABLE temp.migration_runs; DROP TABLE temp.migration_mappings;
-        PRAGMA user_version=4;")?;
+")?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA)?;
     if !verify_snapshot(&tx)?.consistent {
         return Err(Error::ProjectionMismatch);
     }

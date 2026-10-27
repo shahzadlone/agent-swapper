@@ -171,7 +171,7 @@ fn registry_verify_reports_full_replay_in_json() {
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["schemaVersion"], 0);
-    assert_eq!(value["data"]["schemaVersion"], 4);
+    assert_eq!(value["data"]["schemaVersion"], 5);
     assert_eq!(value["data"]["events"], 0);
     assert_eq!(value["data"]["consistent"], true);
     s.add("claude", "work");
@@ -895,4 +895,165 @@ fn engine_registration_refuses_ambiguous_or_nonlocal_bindings() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"data\":[]"));
+}
+
+fn run_history(s: &Sandbox) -> Vec<Value> {
+    let output = s
+        .command()
+        .args(["runs", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice::<Value>(&output).unwrap()["data"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn gents_new_explicit_and_resumed_sessions_match_argv_and_durable_history() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    runtime_state(&home, "127.0.0.1:9191");
+    gents_run(&s)
+        .arg("--resume")
+        .arg("--json")
+        .arg("--dry-run")
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("no_recorded_session"));
+    let output = gents_run(&s)
+        .args(["--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(preview["data"]["plan"]["session_selection"], "new");
+    assert!(preview["data"]["plan"]["session"].as_str().is_some());
+    assert_eq!(preview["data"]["plan"]["session_reserved"], false);
+    assert!(run_history(&s).is_empty());
+    assert!(!home.join("fixture-owned.txt").exists());
+
+    let output = gents_run(&s).assert().success().get_output().clone();
+    let first = run_history(&s).remove(0);
+    let session = first["gentsSession"]["id"].as_str().unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("arg={}", hex(OsStr::new(session))))
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains(session));
+    assert!(first["gentsSession"]["resumedFrom"].is_null());
+    assert_eq!(first["gentsSession"]["binding"]["agent"], "worker");
+    gents_run(&s)
+        .args(["--resume", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Preview only; no session is reserved.",
+        ));
+    let resumed = gents_run(&s)
+        .arg("--resume")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("(resume)"))
+        .get_output()
+        .stdout
+        .clone();
+    let actual: Vec<_> = String::from_utf8(resumed)
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("arg=").map(str::to_owned))
+        .collect();
+    let expected = [
+        OsStr::new("chat"),
+        OsStr::new("--home"),
+        home.as_os_str(),
+        OsStr::new("--graphql"),
+        OsStr::new("http://127.0.0.1:9191/api/v0/graphql"),
+        OsStr::new("--agent-id=worker"),
+        OsStr::new("--session-id"),
+        OsStr::new(session),
+    ]
+    .map(hex);
+    assert_eq!(actual, expected);
+    let second = run_history(&s).remove(0);
+    assert_eq!(second["gentsSession"]["id"], session);
+    assert_eq!(second["gentsSession"]["resumedFrom"], first["id"]);
+    gents_run(&s).assert().success();
+    let fresh = run_history(&s).remove(0);
+    assert_ne!(fresh["gentsSession"]["id"], session);
+    assert!(fresh["gentsSession"]["resumedFrom"].is_null());
+    gents_run(&s)
+        .args(["--session", session])
+        .assert()
+        .success();
+    let explicit = run_history(&s).remove(0);
+    assert_eq!(explicit["gentsSession"]["id"], session);
+    assert!(explicit["gentsSession"]["resumedFrom"].is_null());
+    s.command()
+        .args(["runs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("Gents session={session}")));
+    s.command().args(["registry", "verify"]).assert().success();
+}
+
+#[test]
+fn resume_rejects_rebinding_and_conflicts_but_native_forwarding_is_untouched() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    runtime_state(&home, "127.0.0.1:9191");
+    gents_run(&s).assert().success();
+    let history = run_history(&s);
+    let session = history[0]["gentsSession"]["id"].as_str().unwrap();
+    gents_run(&s)
+        .args(["--resume", "--session", session])
+        .assert()
+        .code(2);
+    s.command()
+        .args([
+            "profile",
+            "bind",
+            "relay",
+            "--address",
+            "127.0.0.1:9191",
+            "--agent",
+            "different_worker",
+        ])
+        .assert()
+        .success();
+    gents_run(&s)
+        .args(["--resume", "--dry-run", "--json"])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("session_binding_changed"));
+    assert_eq!(run_history(&s), history);
+    // Explicit UUID is a conscious create-or-continue choice under the new binding.
+    gents_run(&s)
+        .args(["--session", session])
+        .assert()
+        .success();
+    assert_eq!(
+        run_history(&s)[0]["gentsSession"]["binding"]["agent"],
+        "different_worker"
+    );
+    s.add("claude", "native");
+    s.run("native")
+        .arg("--resume")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("only for the gents engine"));
+    s.run("native")
+        .args(["--", "--resume"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "arg={}",
+            hex(OsStr::new("--resume"))
+        )));
+    assert!(run_history(&s)[0]["gentsSession"].is_null());
 }

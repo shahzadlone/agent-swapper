@@ -20,6 +20,26 @@ pub struct LaunchPlan {
     args: Vec<OsString>,
     login: bool,
     session: Option<Uuid>,
+    resumed_from: Option<Uuid>,
+    selection: Option<SessionSelection>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSelection {
+    New,
+    Explicit,
+    Resume,
+}
+
+impl SessionSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Explicit => "explicit",
+            Self::Resume => "resume",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -38,6 +58,9 @@ pub struct LaunchPreview<'a> {
     pub runtime_owner: &'static str,
     pub workspace_owner: &'static str,
     pub session: Option<Uuid>,
+    pub resumed_from: Option<Uuid>,
+    pub session_selection: Option<SessionSelection>,
+    pub session_reserved: bool,
 }
 
 impl LaunchPlan {
@@ -85,6 +108,7 @@ impl LaunchPlan {
                 }
             }
         }
+        let session = (profile.harness == Harness::Gents).then(Uuid::new_v4);
         let args = if let Some(binding) = &profile.gents {
             vec![
                 "chat".into(),
@@ -111,7 +135,9 @@ impl LaunchPlan {
             cwd: dunce::simplified(cwd).to_owned(),
             args,
             login,
-            session: None,
+            session,
+            resumed_from: None,
+            selection: session.map(|_| SessionSelection::New),
         })
     }
 
@@ -119,20 +145,32 @@ impl LaunchPlan {
         &self.profile
     }
 
-    /// Resume only the explicit gents session; native session formats differ.
+    /// Continue or create the explicit gents session; native formats differ.
     pub fn with_session(mut self, session: Option<Uuid>) -> Result<Self> {
         if let Some(session) = session {
             if self.profile.harness != Harness::Gents {
                 return Err(Error::UnsupportedSession);
             }
-            // Replacing a session cannot leave conflicting duplicate flags.
-            if self.session.is_some() {
-                self.args.truncate(6);
-            }
-            self.args
-                .extend(["--session-id".into(), session.to_string().into()]);
             self.session = Some(session);
+            self.resumed_from = None;
+            self.selection = Some(SessionSelection::Explicit);
         }
+        Ok(self)
+    }
+
+    /// Resolve the latest attempt only when its tracked client succeeded. The event transaction
+    /// rechecks this source under the lease; previews do not reserve a session.
+    pub fn with_latest_gents_session(mut self, store: &Store) -> Result<Self> {
+        if self.profile.harness != Harness::Gents {
+            return Err(Error::UnsupportedSession);
+        }
+        let candidate = store.latest_gents_session(self.profile.id)?;
+        if self.profile.gents.as_ref() != Some(candidate.session.binding()) {
+            return Err(Error::SessionBindingChanged);
+        }
+        self = self.with_session(Some(candidate.session.id()))?;
+        self.resumed_from = Some(candidate.run_id);
+        self.selection = Some(SessionSelection::Resume);
         Ok(self)
     }
 
@@ -144,7 +182,7 @@ impl LaunchPlan {
             home_variable: (self.profile.harness != Harness::Gents)
                 .then(|| self.profile.harness.home_variable()),
             working_directory: &self.cwd,
-            argument_count: self.args.len(),
+            argument_count: self.args.len() + if self.session.is_some() { 2 } else { 0 },
             operation: if self.login { "login" } else { "run" },
             isolation: "unverified",
             quota: "unknown",
@@ -161,6 +199,9 @@ impl LaunchPlan {
                 "native_cli_working_directory"
             },
             session: self.session,
+            resumed_from: self.resumed_from,
+            session_selection: self.selection,
+            session_reserved: false,
         }
     }
 
@@ -206,7 +247,20 @@ impl LaunchPlan {
         if current.harness != self.profile.harness || current.gents != self.profile.gents {
             return Err(Error::EngineMismatch);
         }
-        let id = store.begin_run(&lease, if self.login { "login" } else { "run" })?;
+        let gents_session = match (self.session, &self.profile.gents) {
+            (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
+                id,
+                binding.clone(),
+                self.resumed_from,
+            )),
+            (None, None) => None,
+            _ => return Err(Error::InvalidEngineBinding),
+        };
+        let id = store.begin_run_with_session(
+            &lease,
+            if self.login { "login" } else { "run" },
+            gents_session,
+        )?;
         let child = self.command().spawn();
         let mut child = match child {
             Ok(child) => child,
@@ -303,6 +357,9 @@ impl LaunchPlan {
             command.env_remove(harness.home_variable());
         }
         command.args(&self.args).current_dir(&self.cwd);
+        if let Some(session) = self.session {
+            command.arg("--session-id").arg(session.to_string());
+        }
         if self.profile.harness == Harness::Gents {
             // Keep only terminal/OS integration. In particular, never inherit
             // provider secrets, dynamic-loader hooks, proxies or GENTS_* routing.
@@ -516,6 +573,52 @@ mod engine_tests {
             Err(Error::EngineMismatch)
         ));
         assert!(store.runs(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resume_plan_is_rechecked_after_another_run_before_spawn() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let binding =
+            crate::GentsBinding::new("127.0.0.1:9191".parse().unwrap(), "worker".parse().unwrap())
+                .unwrap();
+        let p = store
+            .register_gents("relay".parse().unwrap(), binding.clone())
+            .unwrap();
+        let complete = |s: &mut Store| {
+            let lease = s.lease(p.id).unwrap();
+            let id = s
+                .begin_run_with_session(
+                    &lease,
+                    "run",
+                    Some(crate::store::GentsSession::new(
+                        Uuid::new_v4(),
+                        binding.clone(),
+                        None,
+                    )),
+                )
+                .unwrap();
+            s.observe_spawn(&id, 42).unwrap();
+            s.finish_run(id, RunCompletion::ExternalClientExited(0))
+                .unwrap();
+        };
+        complete(&mut store);
+        let binary = std::env::current_exe().unwrap();
+        let plan = LaunchPlan::build(&store, p.clone(), Some(&binary), temp.path(), vec![], false)
+            .unwrap()
+            .with_latest_gents_session(&store)
+            .unwrap();
+        let old_source = plan.preview().resumed_from.unwrap();
+        let mut peer = Store::open(&temp.path().join("state")).unwrap();
+        complete(&mut peer);
+        assert_ne!(store.latest_gents_session(p.id).unwrap().run_id, old_source);
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::StaleSession)
+        ));
+        assert_eq!(store.runs(20).unwrap().len(), 2);
+        assert!(store.unfinished().unwrap().is_empty());
+        assert!(store.verify().unwrap().consistent);
     }
 
     #[test]

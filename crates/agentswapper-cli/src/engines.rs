@@ -36,7 +36,7 @@ const ENGINES: [Engine; 2] = [
         strengths: &[
             "Optional common agent runtime with canonical history across supported providers.",
             "Gents manages its own accounts, tools and provider routing.",
-            "Explicit session UUID continues or creates a gents conversation using the bound agent.",
+            "Tracked session UUIDs and explicit --resume use the bound agent; --session selects a UUID.",
         ],
         limitations: &[
             "Requires separate installation, home initialization, authentication and runtime setup.",
