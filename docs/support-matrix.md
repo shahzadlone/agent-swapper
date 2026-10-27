@@ -27,3 +27,8 @@ see [handover](handover.md). These do not promote any native support cell.
 Automatic switching, quota routing, credential transfer, the full managed
 capsule-v1 protocol, encrypted account backups, structured adapters, and global
 activation are not implemented. See the [roadmap](roadmap.md).
+
+The optional gents execution-engine track is evaluated but **not implemented or
+promoted**. Its provider-free consumers and replay tests do not qualify a native
+CLI, subscription, engine/provider pair or platform. Keep engine support separate
+from the native matrix above; see [evaluation](gents-evaluation.md) and roadmap G0.

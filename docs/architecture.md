@@ -29,8 +29,12 @@ holder may be active per credential lineage.
 
 A model gateway is not a harness migration and does not transfer subscription
 entitlement. Anthropic documents that routing Claude Code to non-Claude models
-is not supported. Cross-vendor continuation therefore always means stopping one
-official CLI and starting another.
+is not supported. In native mode, cross-vendor continuation therefore means
+stopping one official CLI and starting another. An optional execution engine
+can instead retain its own canonical conversation while changing providers.
+The [gents evaluation](gents-evaluation.md) selects this as an early parallel
+qualification track, not a replacement for native adapters. It is not yet
+implemented or promoted.
 
 ## 2. Identity model
 
@@ -39,6 +43,8 @@ official CLI and starting another.
 | provider  | Billing/legal vendor (anthropic, openai, moonshot)         | enum                              |
 | account   | One login lineage at one provider, owned by the vendor CLI | random `account_ref`, masked label |
 | harness   | Agent program plus exact version                           | name + semver + build             |
+| engine    | Owner of tools, permissions and conversation execution      | native harness or qualified external runtime |
+| frontend  | Visible interface, which may connect to a different engine  | name + version + protocol binding |
 | model     | Model requested inside a harness; a capability, not an entitlement | vendor model id            |
 | profile   | Directory + env binding where a harness keeps config/auth for one account | path + env var name  |
 | session   | Harness-native conversation/thread id                      | scoped to (harness, profile)      |
@@ -88,6 +94,12 @@ exports, with no stored encryption key. See [handover](handover.md) and
 [dependency decisions](dependencies.md) for its draft format and boundaries.
 
 ## 4. Profiles and CLI auth ownership
+
+These rules describe native profiles. A future external engine owns its own
+login and refresh flow, with separate opaque account references and qualified
+entitlements. AgentSwapper does not import native tokens into it. The engine
+identity is part of the account/session scope; matching provider names do not
+make credentials or sessions interchangeable.
 
 - The vendor CLI owns login, token storage and refresh. AgentSwapper creates a
   profile directory and runs the vendor's own login command inside it via the
@@ -166,10 +178,21 @@ PTY fallback: `portable-pty` only hosts native sessions inside the TUI.
 Screen-scraped text never drives a switch, a quota estimate, or a "verified"
 claim.
 
+Optional engine mode: qualify gents through a pinned, authenticated local process
+adapter. Keep AgentSwapper's SQLite journal, policy and supervision independent;
+gents owns its history, credentials and tools. Use a dedicated agent/profile per
+lineage to avoid agent-wide model changes affecting unrelated sessions. Show
+frontend, engine, provider, account and permission owner separately. Provider
+projection may retain the conversation while dropping incompatible reasoning;
+moving between gents and a native harness uses the handover capsule. No direct
+database mutation or copied credential lineage is part of this integration.
+See roadmap G0 and the [evaluation](gents-evaluation.md) for qualification gates.
+
 ## 6. Supervisor and process custody
 
-Each session gets a supervisor process. There is no always-on daemon before the
-tray milestone. Containment:
+Each session gets a supervisor process. There is no AgentSwapper always-on daemon
+before the tray milestone. An optional external engine may need its own runtime
+process; that does not waive ownership and shutdown verification. Containment:
 
 - Windows: Job Object with kill-on-close.
 - Linux: cgroup v2 user scope where available, else process group, pidfd and

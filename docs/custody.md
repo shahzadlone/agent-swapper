@@ -31,6 +31,7 @@ The probe never signals a PID read from a file. All fixtures have deadlines.
 | --- | --- |
 | Detached writer survives original group kill | Demonstrated locally on WSL2, Linux 6.18.54.1-microsoft-standard-WSL2, and in CI on Ubuntu kernel 7.0.0-1017-azure, 2026-10-27 |
 | Linux delegated cgroup | Not available to the current user on that host; hierarchy and control files are root-owned |
+| Linux delegated cgroup fixture in CI | Admission refusals, cooperative detached-writer cleanup, outside control survival and retired-handle rejection passed on Linux `7.0.0-1017-azure` x86_64, Rust 1.98.0, at `639dac2` in [CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40477921157/job/122100633637) |
 | macOS detached-writer probe | Passed on macOS 26.6.2 arm64 / Darwin 25.6.0, Rust 1.98.0, at `11ab437` |
 | Windows Job fixture | Targeted termination, supervisor crash cleanup and breakaway refusal passed at `c728e58` in [CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40465056279/job/122058337169); not integrated into native launch |
 | Real provider isolation and custody | Unverified for every harness |
@@ -112,7 +113,10 @@ on disposable GitHub-hosted Linux, delegates it to the runner user and executes
 the probe unprivileged. Privileged setup is confined to that workflow; it is not
 run on the user's host or a self-hosted runner. See systemd's
 [delegation settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html).
-Runtime results remain pending until that CI checkpoint completes.
+The CI checkpoint at `639dac2` passed all three recorded assertions: exact
+admission refusals; cooperative setsid-writer termination with an empty, retired
+group and surviving outside control; and ENODEV for the previously opened late
+admission handle. The table above records the measured kernel and compiler.
 
 This tests admission and explicit subtree cleanup, not supervisor-crash recovery,
 credential isolation, a hostile process migrating itself out of the delegation,

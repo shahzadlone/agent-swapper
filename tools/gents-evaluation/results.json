@@ -1,0 +1,74 @@
+{
+  "review_date": "2026-10-27",
+  "platform": {
+    "system": "Linux",
+    "release": "6.18.54.1-microsoft-standard-WSL2",
+    "machine": "x86_64",
+    "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "lean": "4.18.0"
+  },
+  "checks": [
+    {
+      "suite": "upstream-loop",
+      "revision": "89f1b6760e2297b3d8a09d347c43eaf6978a8b31",
+      "passed": 218,
+      "failed": 0,
+      "log_sha256": "ccebc77c8a16d48c219239fdfe7e79c2f25ba84aceaa8a1e7115d255746f7839"
+    },
+    {
+      "suite": "upstream-protocol",
+      "revision": "89f1b6760e2297b3d8a09d347c43eaf6978a8b31",
+      "passed": 69,
+      "failed": 0,
+      "log_sha256": "0baea5681957a4b5425cbcae00d12ea8ccc41345497bec24faaa00edbc27037d"
+    },
+    {
+      "suite": "minimal-consumer",
+      "revision": "89f1b6760e2297b3d8a09d347c43eaf6978a8b31",
+      "passed": 4,
+      "failed": 0,
+      "log_sha256": "6779db4c15c95795b233965f1eba751846ea9762bc0e4eb9da0f8efd0d33d4dc"
+    },
+    {
+      "suite": "replay-consumer-main",
+      "revision": "89f1b6760e2297b3d8a09d347c43eaf6978a8b31",
+      "passed": 1,
+      "failed": 2,
+      "log_sha256": "e726b8d42a402e48b18570837859e2cb5255fba740182dbf2718cad94326fea7"
+    },
+    {
+      "suite": "replay-consumer-fix",
+      "revision": "b4755abe7b737c91b386908fffeb045333d73eb1",
+      "passed": 3,
+      "failed": 0,
+      "log_sha256": "019e22d6f4ebd9c7e5bcdc5105dfce4a3e7dcd4e63af89d2fedbd740191b12b1"
+    },
+    {
+      "suite": "upstream-codex-wire-and-fs-runner",
+      "revision": "89f1b6760e2297b3d8a09d347c43eaf6978a8b31",
+      "passed": 44,
+      "failed": 0,
+      "scope": "5 Codex wire fixtures plus 39 filesystem integration tests; initial combined run later stopped on missing Lean for loop conformance",
+      "log_sha256": "b5f4bf85805dec370dc862a282cc2c1c842ff2480067dd089e3cfc684fe97a27"
+    },
+    {
+      "suite": "minimal-consumer-windows-msvc",
+      "revision": "89f1b6760e2297b3d8a09d347c43eaf6978a8b31",
+      "outcome": "cross-typecheck-passed",
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_executed": false,
+      "log_sha256": "9e8ae2985382d8b27795bfd5a4091d77ac8781f9f8247723d7cb8d07bcf0c9bb"
+    }
+  ],
+  "limits": [
+    "No live provider/account compatibility tests",
+    "Replay fix was an unmerged branch at review",
+    "Full gents runtime unit-test compiler stopped for shared-host memory pressure before tests ran; no runtime encryption/OAuth/switch tests claimed",
+    "Log hashes identify local evaluation records, not independently signed attestations"
+  ],
+  "reviewers": [
+    "Primary source/test review",
+    "Claude Opus 5.5 xhigh, read-only integration review",
+    "Claude Opus 5.5 xhigh, read-only security review"
+  ]
+}

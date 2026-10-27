@@ -23,6 +23,43 @@ was measured on.
 Support-matrix cell states: `unsupported`, `native-verified`,
 `controlled-candidate`, `controlled-promoted`, `revoked`.
 
+## G0 - Optional gents engine qualification
+
+Run alongside M0/M1, independently of the native adapter sequence. The
+[deep evaluation](gents-evaluation.md) selects a hybrid design: native support
+plus an optional gents process adapter for canonical conversation continuation.
+Provider-free consumer contracts live in
+[`tools/gents-evaluation`](../tools/gents-evaluation/README.md). No production
+gents dependency, engine launch command, or provider support cell is promoted.
+
+Deliverables:
+
+- A pinned local contract for capabilities, scoped account/usage metadata,
+  interrupt, switch/resume receipts, reconnect and context export.
+- Dedicated engine agent/profile scope per AgentSwapper lineage; explicit
+  frontend/engine/provider/account identities and permission ownership.
+- Authenticated local transport, P2P disabled, engine-owned credentials, and
+  metadata-only journal references. No direct writes to the engine database.
+- Canonical history projection within the engine and capsule-based handover
+  between engines; native modes remain independently usable.
+- Selected small-crate reuse only when an implemented consumer needs it, with
+  pinned versions, license notices, dependency review and protocol drift tests.
+
+Gates:
+
+- The reviewed tool-call identity fix and expanded cross-provider fixtures
+  pass, including incomplete/parallel tools, compaction and reasoning affinity.
+- Agent/profile isolation tests prove one session's switch cannot move another.
+- Unauthorized local metadata/mutation requests fail; tokens never appear in
+  argv values, journal entries or logs. No copied native credential lineage.
+- Crash injection between profile switch and goal resume reconciles the same
+  durable source request without duplicate continuation or uncertain tool replay.
+- Selected runtime dependency findings are resolved for the shipped targets.
+- Actual frontend permission tests and provider/account-pair tests pass before
+  claiming same-conversation switching; no promotion from serialization alone.
+- Runtime launch, reconnect and full-writer stop are measured per OS. Unknown
+  custody blocks automatic transfer, including transfers out of the engine.
+
 ## M0 - Verification spike (no product code)
 
 M0 verification runs in parallel with fixture-based foundation development.
@@ -297,6 +334,7 @@ Gate: every review finding is fixed or accepted in writing.
 
 | Area | Milestone |
 |---|---|
+| Optional gents engine, canonical continuation, scoped local contract | G0, alongside M0/M1 |
 | Native launch, all three harnesses | M1 |
 | Account add/list/status/remove/alias/enable/disable | M1 |
 | Config, doctor, JSON schema v1, exit codes, purge | M1 |
