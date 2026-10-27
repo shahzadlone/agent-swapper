@@ -129,6 +129,18 @@ pub(crate) fn validate_file(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn validate_file_metadata(meta: &fs::Metadata) -> Result<()> {
+    validate_metadata(meta, false)
+}
+
+/// An open read snapshot may have been atomically replaced and now have no
+/// directory links. Multiple links remain forbidden. Never use for lock files.
+pub(crate) fn validate_snapshot_metadata(meta: &fs::Metadata) -> Result<()> {
+    validate_metadata(meta, true)
+}
+
+fn validate_metadata(meta: &fs::Metadata, allow_detached: bool) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = allow_detached;
     if !meta.is_file() || meta.file_type().is_symlink() {
         return Err(Error::UnsafePath);
     }
@@ -136,7 +148,8 @@ pub(crate) fn validate_file_metadata(meta: &fs::Metadata) -> Result<()> {
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         if meta.permissions().mode() & 0o077 != 0
-            || meta.nlink() != 1
+            || meta.nlink() > 1
+            || (meta.nlink() == 0 && !allow_detached)
             || meta.uid() != rustix::process::geteuid().as_raw()
         {
             return Err(Error::UnsafePath);

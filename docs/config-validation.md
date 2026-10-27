@@ -8,7 +8,7 @@ provider routing, credential storage, registry schema or vendor-owned files.
 
 Rust 1.98.0 on Linux/WSL2:
 
-- 120 nextest tests passed; one intentionally ignored custody fixture entry.
+- 122 nextest tests passed; one intentionally ignored custody fixture entry.
 - Clippy with warnings denied, formatting, doctests and dependency policy passed.
 - No new dependency or lockfile change.
 - Existing terminal snapshots remain unchanged; the masked first-frame fixture
@@ -33,6 +33,22 @@ A read-only Claude Opus 5.5 xhigh design review covered command dispatch,
 read-only defaults, strict parsing, file-handle checks, lock/replace behavior,
 first-frame masking and explicit overrides. The implementation uses a separate
 lock, bounded handle-based reads and same-directory atomic replacement.
+A second read-only Opus 5.5 xhigh audit found no implementation blockers,
+while flagging a Windows retry gap and durability/error-reporting limits. The
+pre-publication handle check now shares the replacement retry budget. Oversized
+files get a distinct, preserving size error; bounded reads take priority over
+classifying an arbitrarily large future format. First-save parent-directory
+power-loss durability is explicitly unverified.
+
+The first CI pass at `93f3de1` exposed two issues: the Unix FIFO fixture used a
+rustix API unavailable on Apple targets, and a reader could reject a legitimate
+old inode unlinked by atomic replacement. The FIFO fixture now uses the POSIX
+`mkfifo` utility. A distinct read-snapshot validator accepts zero links while
+retaining all owner/mode/regular-file checks and rejecting multiple links;
+lock files retain the strict one-link check. A deterministic retained-handle
+regression covers this state. Local concurrency stress passed 50 iterations;
+CI now repeats the concurrency fixture 25 times on each platform.
+
 The resolved tempfile implementation was inspected locally to verify replacement
 and failure ordering; no direct platform-API unsafe code was added.
 

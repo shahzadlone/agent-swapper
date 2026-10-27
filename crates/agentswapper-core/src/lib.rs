@@ -19,10 +19,12 @@ pub enum Error {
         "invalid preference value; history.limit accepts integers 1-200 and ui.mask accepts true or false"
     )]
     InvalidConfigValue,
-    #[error(
-        "config.json is invalid or exceeds 4 KiB; preserve it and inspect `aswp config path` before editing"
-    )]
+    #[error("config.json is invalid; preserve it and inspect `aswp config path` before editing")]
     InvalidConfig,
+    #[error(
+        "config.json exceeds this build's 4 KiB limit; preserve the file and check whether a newer AgentSwapper is required"
+    )]
+    ConfigTooLarge,
     #[error("config.json uses a newer format; update AgentSwapper before changing preferences")]
     NewerConfig,
     #[error("preferences are busy; another config writer holds the lock")]
@@ -179,6 +181,7 @@ impl Error {
             Self::UnknownConfigKey => "unknown_config_key",
             Self::InvalidConfigValue => "invalid_config_value",
             Self::InvalidConfig => "invalid_config",
+            Self::ConfigTooLarge => "config_too_large",
             Self::NewerConfig => "newer_config",
             Self::ConfigBusy => "config_busy",
             Self::ConfigDurability => "config_durability_uncertain",

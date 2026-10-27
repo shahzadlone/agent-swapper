@@ -162,12 +162,12 @@ impl ConfigStore {
             Err(e) => return Err(e),
         };
         if file.metadata()?.len() > MAX_BYTES {
-            return Err(Error::InvalidConfig);
+            return Err(Error::ConfigTooLarge);
         }
         let mut bytes = Vec::new();
         file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
         if bytes.len() as u64 > MAX_BYTES {
-            return Err(Error::InvalidConfig);
+            return Err(Error::ConfigTooLarge);
         }
         #[derive(Deserialize)]
         struct VersionHeader {
@@ -284,6 +284,10 @@ fn publish(
         match open_checked(path, false) {
             Ok(_) => {}
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(Error::Io(e)) if retry_replace(&e, started) => {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
             Err(e) => return Err(e),
         }
         match file.persist(path) {
@@ -332,7 +336,14 @@ enum Edit {
 
 fn open_checked(path: &Path, create: bool) -> Result<File> {
     private_fs::reject_links(path)?;
-    private_fs::validate_file(path)?;
+    // Path checks also allow a detached snapshot: an atomic replacement can
+    // unlink the old inode even while metadata(path) is completing.
+    match fs::symlink_metadata(path) {
+        Ok(meta) if create => private_fs::validate_file_metadata(&meta)?,
+        Ok(meta) => private_fs::validate_snapshot_metadata(&meta)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
     let mut options = OpenOptions::new();
     options
         .read(true)
@@ -352,17 +363,25 @@ fn open_checked(path: &Path, create: bool) -> Result<File> {
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path)?;
-    private_fs::validate_file_metadata(&file.metadata()?)?;
+    validate_handle(&file, create)?;
+    Ok(file)
+}
+
+fn validate_handle(file: &File, create: bool) -> Result<()> {
+    if create {
+        private_fs::validate_file_metadata(&file.metadata()?)?;
+    } else {
+        private_fs::validate_snapshot_metadata(&file.metadata()?)?;
+    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if file.metadata()?.file_attributes() & 0x400 != 0
-            || winapi_util::file::information(&file)?.number_of_links() != 1
-        {
+        let links = winapi_util::file::information(file)?.number_of_links();
+        if file.metadata()?.file_attributes() & 0x400 != 0 || links > 1 || (create && links == 0) {
             return Err(Error::UnsafePath);
         }
     }
-    Ok(file)
+    Ok(())
 }
 
 #[cfg(test)]

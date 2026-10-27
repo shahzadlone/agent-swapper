@@ -41,6 +41,9 @@ jobs:
           key: nextest-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.150
       - name: Tests
         run: cargo +1.98.0 nextest run --locked --workspace --profile ci
+      - name: Preferences concurrency stress
+        timeout-minutes: 3
+        run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(config_concurrent_setters)' --stress-count 25 --fail-fast
       - name: Windows journal lifecycle stress
         if: runner.os == 'Windows'
         timeout-minutes: 12

@@ -230,12 +230,14 @@ fn config_directory_sync_failure_reports_applied_value_and_noop_preserves_bytes(
 fn config_fifo_is_rejected_without_waiting_for_a_writer() {
     let (_temp, store) = setup();
     private_fs::directory(&store.root, true).unwrap();
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        store.path(),
-        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-    )
-    .unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .args(["-m", "600"])
+            .arg(store.path())
+            .status()
+            .unwrap()
+            .success()
+    );
     assert!(matches!(store.load(), Err(Error::UnsafePath)));
     assert!(matches!(
         store.set(ConfigKey::UiMask, "true"),
@@ -259,6 +261,64 @@ fn config_windows_retries_delete_sharing_conflicts_without_losing_old_data() {
         std::thread::sleep(Duration::from_millis(150));
         assert!(store.load().unwrap().ui_mask());
         drop(reader);
+        worker.join().unwrap().unwrap();
+    });
+    assert!(!store.load().unwrap().ui_mask());
+}
+
+#[test]
+fn config_open_snapshot_remains_valid_after_atomic_replacement() {
+    let (_temp, store) = setup();
+    store.set(ConfigKey::UiMask, "true").unwrap();
+    let mut snapshot = open_checked(&store.path(), false).unwrap();
+    store.set(ConfigKey::UiMask, "false").unwrap();
+    validate_handle(&snapshot, false).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(snapshot.metadata().unwrap().nlink(), 0);
+        assert!(validate_handle(&snapshot, true).is_err()); // Locks stay strict.
+    }
+    let mut bytes = Vec::new();
+    snapshot.read_to_end(&mut bytes).unwrap();
+    let old: Document = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(old.settings.ui_mask, Some(true));
+    assert!(!store.load().unwrap().ui_mask());
+}
+
+#[test]
+fn config_oversized_future_documents_have_a_distinct_size_error_and_are_preserved() {
+    let (_temp, store) = setup();
+    store.set(ConfigKey::UiMask, "true").unwrap();
+    let large = format!("{{\"version\":2,\"future\":\"{}\"}}", "x".repeat(4096));
+    fs::write(store.path(), &large).unwrap();
+    assert!(matches!(store.load(), Err(Error::ConfigTooLarge)));
+    assert!(matches!(
+        store.unset(ConfigKey::UiMask),
+        Err(Error::ConfigTooLarge)
+    ));
+    assert_eq!(fs::read_to_string(store.path()).unwrap(), large);
+}
+
+#[cfg(windows)]
+#[test]
+fn config_windows_publish_retries_preflight_sharing_violations() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let (_temp, store) = setup();
+    store.set(ConfigKey::UiMask, "true").unwrap();
+    let mut next = tempfile::NamedTempFile::new_in(&store.root).unwrap();
+    next.write_all(b"{\"version\":1,\"settings\":{\"ui.mask\":false}}")
+        .unwrap();
+    next.as_file().sync_all().unwrap();
+    let exclusive = OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(store.path())
+        .unwrap();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| publish(next, &store.path(), &store.root, sync_directory));
+        std::thread::sleep(Duration::from_millis(150));
+        drop(exclusive);
         worker.join().unwrap().unwrap();
     });
     assert!(!store.load().unwrap().ui_mask());
