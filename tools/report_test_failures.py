@@ -25,7 +25,8 @@ def main():
                 output = failure.text or failure.get("message", "Test failed")
                 stdout = case.findtext("system-out", "")
                 stderr = case.findtext("system-err", "")
-                diagnostic = f"{name}: {output}\n{stdout}\n{stderr}"
+                kind = failure.get("type", tag)
+                diagnostic = f"{name} ({kind}): {output}\n{stdout}\n{stderr}"
                 if len(diagnostic) > 6000:
                     # Proptest puts the minimized input and replay seed at the end.
                     diagnostic = diagnostic[:2500] + "\n[output truncated]\n" + diagnostic[-3400:]

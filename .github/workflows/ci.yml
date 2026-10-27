@@ -41,6 +41,10 @@ jobs:
           key: nextest-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.150
       - name: Tests
         run: cargo +1.98.0 nextest run --locked --workspace --profile ci
+      - name: Windows journal lifecycle stress
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(arbitrary_valid_lifecycles_replay_exactly)' --stress-count 10 --fail-fast
       - name: Report failing tests
         if: failure()
         run: python tools/report_test_failures.py target/nextest/ci/junit.xml
