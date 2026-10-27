@@ -204,7 +204,7 @@ fn backups(root: &Path) -> Vec<std::path::PathBuf> {
 #[test]
 fn v1_upgrade_backs_up_wal_and_preserves_pending_intents() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("state");
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
     let (mut db, run) = legacy(&root);
     let before = projection_dump(&db).unwrap();
     migrate_v1(&mut db, &root).unwrap();
@@ -289,7 +289,7 @@ fn every_append_refuses_mismatch_and_schema_drift_without_poisoning_log() {
 fn invalid_legacy_log_and_orphan_rows_leave_source_unchanged() {
     for fault in ["unknown_event", "orphan"] {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("state");
+        let root = dunce::canonicalize(temp.path()).unwrap().join("state");
         let (db, _) = legacy(&root);
         if fault == "unknown_event" {
             db.execute(
@@ -353,7 +353,7 @@ fn interleaved_pending_runs_and_failed_appends_keep_a_contiguous_log() {
 #[test]
 fn failed_migration_rolls_back_every_source_write_and_retains_backup() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("state");
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
     let (mut db, _) = legacy(&root);
     db.execute_batch("CREATE TRIGGER injected_failure BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
     let before = projection_dump(&db).unwrap();
