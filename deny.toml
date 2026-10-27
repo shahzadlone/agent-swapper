@@ -5,7 +5,7 @@ yanked = "deny"
 [licenses]
 allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Unlicense", "Zlib"]
 confidence-threshold = 0.9
-private = { ignore = true }
+private = { ignore = false }
 
 # Unmodified transitive dependency of directories. Preserve its MPL notices
 # and source availability when packaging binaries; it is not project licensing.

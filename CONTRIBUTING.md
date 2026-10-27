@@ -39,5 +39,5 @@ credentials, private state, or recorded production sessions.
 
 Review snapshot diffs before accepting them. Commit proptest regression seeds;
 do not ignore or automatically bless failures. Dependencies belong in Cargo.lock
-and must pass the advisory/license policy. Licensing for this project's own
-code is awaiting the maintainer's selection; Apache-2.0 is recommended.
+and must pass the advisory/license policy. Contributions are licensed under
+[Apache-2.0](LICENSE). Preserve dependency and artwork notices when redistributing.

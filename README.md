@@ -37,3 +37,5 @@ Checkpoint the work. Switch accounts or agents. Verify the workspace. Continue.
 Resume an existing session where supported. When changing agents, use a checked handover to carry the task forward.
 
 [CLI guide](docs/cli.md) / [Build and contribute](CONTRIBUTING.md) / [Architecture](docs/architecture.md) / [Roadmap](docs/roadmap.md)
+
+Licensed under [Apache-2.0](LICENSE). Artwork notices are in [THIRD_PARTY_NOTICES](assets/brand/THIRD_PARTY_NOTICES.txt).
