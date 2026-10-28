@@ -23,6 +23,7 @@ isolation or external work. Automatic switching remains disabled.
 | `9a103fa` | [CI 40674249458](https://github.com/shahzadlone/agent-swapper/actions/runs/40674249458) | All four jobs passed; independent stdin/stdout/stderr offsets and routes, with incomplete handoff refused before execution |
 | `ca14ce4` | [CI 40675289731](https://github.com/shahzadlone/agent-swapper/actions/runs/40675289731) | All four jobs passed; dashboard restoration and original termination for external POSIX INT/TERM/HUP, including a concurrently closing terminal peer |
 | `d15cdd8` | [CI 40676819389](https://github.com/shahzadlone/agent-swapper/actions/runs/40676819389) | All four jobs passed; private shared cgroup module with sealed fields, unchanged rollback/capability boundaries and both supervisor-loss cases |
+| `458329c` | [CI 40678122151](https://github.com/shahzadlone/agent-swapper/actions/runs/40678122151) | All four jobs passed; independent original standard-stream descriptors forwarded through the guardian across the six shell cases |
 
 At `6d0e394`, platform annotations recorded Rust 1.98.0 and:
 

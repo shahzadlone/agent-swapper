@@ -99,9 +99,10 @@ See [Linux supervision](linux-supervision.md) for the remaining integration gate
 
 Build `linux_terminal_guardian_probe`, then run
 `python tools/check_linux_terminal_guardian.py target/debug/examples/linux_terminal_guardian_probe`
-on Linux for the six isolated bash/PTY cases. This tests foreground process
+on Linux for the seven isolated bash/PTY cases. This tests foreground process
 groups, suspend/resume, resize, interrupts, inherited ignored signals and terminal
-closure and parent-only SIGKILL without privileged setup or a real provider. The scope of each assertion
+closure, parent-only SIGKILL and actual stderr redirection without privileged
+setup or a real provider. The scope of each assertion
 is recorded in [Linux supervision](linux-supervision.md).
 
 The delegated Linux cgroup probe also includes a combined guardian/lease case.

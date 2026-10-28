@@ -99,18 +99,22 @@ streams remain detached from the terminal. The tests check:
 - Closing the PTY terminates the target through HUP, guardian cleanup, or an
   explicitly recorded input EOF/EIO. Ordinary completion separately requires
   proof that the target received the exact typed `exit` line.
+- A real bash `2>` redirection preserves stderr's non-terminal identity and
+  writes the target's exact diagnostic only to its separate file.
 
 The original six scenarios passed 50 local iterations (300 scenarios).
 Independent three-stream forwarding then passed 25 more iterations of the six
 cases (150 scenarios). Fixture waits,
 socket reads and target lifetime are bounded. The controller signals only its
 unreaped shell child during failure cleanup; it never signals metadata PIDs.
+The expanded seven-case suite, including stderr redirection from an 80 x 24
+terminal, passed 25 iterations (175 scenarios).
 These checks do not use a cgroup or journal, contain descendants, forward target
-exit codes through a production protocol, or test shell pipelines/redirected
-output in the guardian topology. Signal handling and terminal topology still need combined testing
+exit codes through a production protocol, or test shell pipelines.
+Signal handling and terminal topology still need combined testing
 with admission, leases, detached writers and the real supervisor state machine.
 
-The next combined case is in the delegated cgroup probe's private
+The combined case is in the delegated cgroup probe's private
 `linux_probe/guardian_cgroup.rs` module. A surrogate foreground supervisor
 transfers parent-directory, child-directory and locked-lease descriptors to a
 guardian in another process group. Before using `cgroup.kill`, the guardian
@@ -127,8 +131,8 @@ busy and an outside writer is still advancing, then retires the scope. Only
 after that independent retirement may the guardian release the lease. The
 controller verifies writer SIGKILL, guardian success and renewed lock acquisition.
 
-The combined case is compiled locally; actual cgroup execution requires the
-explicitly delegated CI service. It does not combine interactive PTY behavior
+The combined case executes in the explicitly delegated Linux CI service; local
+checks compile it without creating a delegation. It does not combine interactive PTY behavior
 with cgroup admission, integrate the journal, or qualify
 real providers. Its controller is an observation and failure-cleanup backstop;
 production will require its own measured reconciliation paths.

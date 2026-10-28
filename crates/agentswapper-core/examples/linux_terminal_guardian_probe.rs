@@ -29,8 +29,9 @@ mod fixture {
     };
     use serde_json::json;
     use std::{
+        ffi::OsString,
         fs::{self, File},
-        io::{self, BufRead, IsTerminal},
+        io::{self, BufRead, IsTerminal, Write},
         os::unix::process::{CommandExt, ExitStatusExt},
         path::{Path, PathBuf},
         process::{Child, Command, ExitStatus, Stdio},
@@ -44,6 +45,25 @@ mod fixture {
     use wait_timeout::ChildExt;
 
     const BUDGET: Duration = Duration::from_secs(30);
+    const DIAGNOSTIC: &[u8] = b"target diagnostic stays on stderr\n";
+
+    fn encode_flags(flags: [bool; 3]) -> String {
+        flags
+            .into_iter()
+            .map(|flag| if flag { '1' } else { '0' })
+            .collect()
+    }
+
+    fn decode_flags(value: Option<OsString>) -> io::Result<[bool; 3]> {
+        let value = value
+            .and_then(|value| value.into_string().ok())
+            .filter(|value| {
+                value.len() == 3 && value.bytes().all(|byte| byte == b'0' || byte == b'1')
+            })
+            .ok_or_else(|| io::Error::other("invalid terminal flags"))?;
+        let bytes = value.as_bytes();
+        Ok([bytes[0] == b'1', bytes[1] == b'1', bytes[2] == b'1'])
+    }
 
     fn require(value: bool, message: &'static str) -> io::Result<()> {
         if value {
@@ -99,6 +119,11 @@ mod fixture {
         // not kill it; channel EOF, rather than a parent destructor, triggers cleanup.
         let mut helper = command("guardian", dir)?
             .arg(getpgrp().to_string())
+            .arg(encode_flags([
+                io::stdin().is_terminal(),
+                io::stdout().is_terminal(),
+                io::stderr().is_terminal(),
+            ]))
             .stdin(Stdio::from(gate))
             .process_group(0)
             .spawn()?;
@@ -127,7 +152,7 @@ mod fixture {
         require(status.success(), "guardian failed")
     }
 
-    fn guardian(dir: &Path, foreground: Pid) -> io::Result<()> {
+    fn guardian(dir: &Path, foreground: Pid, flags: [bool; 3]) -> io::Result<()> {
         require(
             getpgrp() == getpid() && getpgrp() != foreground,
             "guardian group mismatch",
@@ -147,6 +172,7 @@ mod fixture {
         let diagnostic = File::from(receive(io::stdin())?);
         let mut target = Target(
             command("target", dir)?
+                .arg(encode_flags(flags))
                 .stdin(input)
                 .stdout(output)
                 .stderr(diagnostic)
@@ -203,10 +229,15 @@ mod fixture {
         u64::from_str_radix(mask.trim(), 16).map_err(io::Error::other)
     }
 
-    fn target(dir: &Path) -> io::Result<()> {
+    fn target(dir: &Path, expected: [bool; 3]) -> io::Result<()> {
+        let actual = [
+            io::stdin().is_terminal(),
+            io::stdout().is_terminal(),
+            io::stderr().is_terminal(),
+        ];
         require(
-            io::stdin().is_terminal() && io::stdout().is_terminal() && io::stderr().is_terminal(),
-            "target lost terminal streams",
+            actual == expected,
+            "target standard-stream terminal identities changed",
         )?;
         let group = getpgrp();
         require(tcgetpgrp(io::stdin())? == group, "target is not foreground")?;
@@ -222,10 +253,12 @@ mod fixture {
             let result = io::stdin().lock().read_line(&mut line).map(|_| line);
             let _ = sender.send(result);
         });
+        io::stdout().write_all(b"target stdout stays in terminal\n")?;
+        io::stderr().write_all(DIAGNOSTIC)?;
         publish(
             dir,
             "target",
-            json!({"pid":getpid().as_raw_pid(),"group":group.as_raw_pid(),"ignored":ignored}),
+            json!({"pid":getpid().as_raw_pid(),"group":group.as_raw_pid(),"ignored":ignored,"terminals":actual}),
         )?;
         let deadline = Instant::now() + BUDGET;
         loop {
@@ -269,7 +302,7 @@ mod fixture {
         );
         let result = match role.to_str() {
             Some("parent") => parent(&dir),
-            Some("target") => target(&dir),
+            Some("target") => target(&dir, decode_flags(args.next())?),
             Some("guardian") => {
                 let raw: i32 = args
                     .next()
@@ -280,6 +313,7 @@ mod fixture {
                     &dir,
                     Pid::from_raw(raw)
                         .ok_or_else(|| io::Error::other("missing foreground group"))?,
+                    decode_flags(args.next())?,
                 )
             }
             _ => Err(io::Error::other("unknown fixture role")),

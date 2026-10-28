@@ -28,6 +28,7 @@ class Shell:
         self.output = bytearray()
         self.status = None
         try:
+            fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             self.wait_for(lambda: b"__ASWP_READY__ " in self.output)
         except BaseException:
             self.close()
@@ -103,12 +104,15 @@ def run_case(binary, mode):
             command = f"{shlex.quote(str(binary))} parent {shlex.quote(str(root))}"
             if mode == "ignored-signals":
                 command = "trap '' INT HUP; " + command + "; rc=$?; trap - INT HUP; (exit $rc)"
+            if mode == "redirected-stderr":
+                command += f" 2>{shlex.quote(str(root / 'stderr.txt'))}"
             shell.send((command + "\n").encode())
             target = marker(shell, root, "target")
             parent = marker(shell, root, "parent")
             guardian = marker(shell, root, "guardian")
             assert target["group"] == parent["group"] == parent["pid"]
             assert guardian["group"] == guardian["pid"] != parent["group"]
+            assert target["terminals"] == [True, True, mode != "redirected-stderr"]
             assert os.tcgetpgrp(shell.master) == target["group"]
             active_settings = termios.tcgetattr(shell.master)
 
@@ -146,6 +150,8 @@ def run_case(binary, mode):
                 shell.hangup()
             elif mode == "parent-kill":
                 (root / "kill-parent").touch()
+            elif mode == "redirected-stderr":
+                shell.send(b"exit\n")
             else:
                 raise AssertionError(f"unknown mode: {mode}")
 
@@ -170,6 +176,10 @@ def run_case(binary, mode):
             else:
                 assert finished["exit"] == 0 and finished["signal"] is None
                 assert marker(shell, root, "input") == {"line": "exit\n"}
+            if mode == "redirected-stderr":
+                diagnostic = b"target diagnostic stays on stderr\n"
+                assert (root / "stderr.txt").read_bytes() == diagnostic
+                assert diagnostic.rstrip() not in shell.output
 
             if shell.master is not None:
                 foreground(shell, shell.pid)
@@ -187,7 +197,7 @@ def main():
     if sys.platform != "linux" or len(sys.argv) != 2:
         raise SystemExit("Usage on Linux: check_linux_terminal_guardian.py PATH_TO_FIXTURE")
     binary = Path(sys.argv[1]).resolve(strict=True)
-    for mode in ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close"]:
+    for mode in ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr"]:
         run_case(binary, mode)
 
 
