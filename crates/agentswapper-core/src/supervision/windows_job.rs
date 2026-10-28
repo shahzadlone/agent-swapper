@@ -76,6 +76,14 @@ impl WindowsJob {
 
 /// Owns the running scope. Drop requests termination through owned handles;
 /// only `stop_and_observe` can report observed emptiness.
+///
+/// ```compile_fail
+/// use agentswapper_core::supervision::windows_job::JobChild;
+/// fn reuse(child: JobChild) {
+///     let _ = child.stop_and_observe();
+///     let _ = child.id(); // Stop consumes the scope on every outcome.
+/// }
+/// ```
 pub struct JobChild {
     scope: WindowsJob,
     child: Box<dyn ChildWrapper>,
@@ -140,12 +148,26 @@ impl Drop for JobChild {
 
 /// Evidence of a kernel-empty, retired local Job. Not serializable/constructible
 /// by callers, not cloneable, and not evidence about external runtime work.
+///
+/// ```compile_fail
+/// use agentswapper_core::supervision::windows_job::StoppedScope;
+/// fn duplicate(receipt: StoppedScope) { let _ = receipt.clone(); }
+/// ```
+///
+/// ```compile_fail
+/// use agentswapper_core::supervision::windows_job::StoppedScope;
+/// let fabricated = StoppedScope { id: uuid::Uuid::new_v4() };
+/// ```
 #[derive(Debug)]
 pub struct StoppedScope {
     id: Uuid,
 }
 
 impl StoppedScope {
+    pub(crate) fn into_id(self) -> Uuid {
+        self.id
+    }
+
     pub fn id(&self) -> Uuid {
         self.id
     }

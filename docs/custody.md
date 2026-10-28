@@ -1,6 +1,7 @@
 # Process custody verification
 
-Current native launches are uncontained. A direct-child exit, a free profile
+Native launches are uncontained by default. Windows users can explicitly opt
+in to the experimental per-run Job backend described below. A direct-child exit, a free profile
 lease, and an operator's stopped-process attestation do not prove that every
 descendant has stopped. Run history reports those observations separately.
 No current outcome enables automatic switching.
@@ -60,11 +61,11 @@ is insufficient. See Microsoft's [Job Objects reference](https://learn.microsoft
 
 An audit of process-wrap 10.0.1 found that its std Job wrapper creates a Job
 without kill-on-close, and its wait helper does not distinguish an empty-Job
-notification from other completion messages. The native launcher does not use
-it. A separate Windows-only verification example combines its suspended
+notification from other completion messages. The default native launcher does not use
+it; the opt-in Windows backend adds separate ownership and empty checks. A separate Windows-only verification example combines its suspended
 assignment with a process-lifetime root Job and independent membership queries.
 Its provider-free runtime probe passed in the CI run linked above; enabling a
-feature by name alone is insufficient. Native launch remains uncontained.
+feature by name alone is insufficient. The default native launch remains uncontained.
 
 Run that provider-free spike on Windows with:
 
@@ -137,7 +138,12 @@ before the nested wrapper resumes it. Root-process exit and local-scope emptines
 are separate observations. Stop consumes the scope, terminates its nested Job,
 and queries the outer Job until empty within five seconds. Errors produce no
 receipt. The receipt is non-cloneable with private fields; no handle or late
-admission operation is exposed. This backend is not yet used by `aswp run`.
+admission operation is exposed. `aswp run` and `aswp login` can select it with
+`--experimental-native --experimental-containment windows-job`. It refuses other
+hosts and gents profiles without fallback. Any error after durable intent keeps
+the run unresolved, including spawn errors where the target may never have run.
+Only a successful matching receipt records `local_scope_empty`. Operator recovery
+still records an attestation, even if crash cleanup happened in the kernel.
 
 Run the backend fixtures on Windows:
 
@@ -149,8 +155,11 @@ They exercise delayed admission, rejection/unwind, immediate descendant creation
 root exit with a live descendant, normal and breakaway child controls, already-empty
 stop, two independent run scopes, failed spawn isolation, drop and supervisor
 crash cleanup. Writer lifetime locks distinguish termination from voluntary exit;
-fixture observations after a crash are not durable recovery receipts. Windows
-runtime validation is pending for this new backend.
+fixture observations after a crash are not durable recovery receipts. The backend passed at `ef6e973` in
+[Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40638824387/job/122651927673),
+alongside successful Linux, macOS and dependency jobs. That checkpoint verified
+the backend fixture, before launch/journal integration; integration evidence is
+tracked separately.
 
 The interval between process creation and first Job assignment is not atomic.
 A hard supervisor crash there may leak a suspended process (no target code has

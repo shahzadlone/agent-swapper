@@ -10,12 +10,12 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 5;
+const SCHEMA: i64 = 6;
 mod journal;
 mod runs;
 mod sessions;
 pub use journal::VerificationReport;
-pub use runs::{ProcessCustody, RunRecord};
+pub use runs::{LocalScope, ProcessCustody, RunRecord};
 pub use sessions::{GentsSession, ResumeCandidate};
 
 /// Internal producer outcomes. External callers cannot declare a run finished.
@@ -24,6 +24,8 @@ pub(crate) enum RunCompletion {
     ExternalClientExited(i32),
     FailedToSpawn,
     OperatorAttested,
+    #[cfg(windows)]
+    LocalScopeStopped(i32, crate::supervision::windows_job::StoppedScope),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,11 +57,15 @@ enum Event {
         requires_spawn_observation: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         gents_session: Option<GentsSession>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_scope: Option<LocalScope>,
     },
     RunFinished {
         id: String,
         exit_code: i32,
         outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stopped_scope: Option<Uuid>,
     },
     RunSpawned {
         id: String,
@@ -159,7 +165,7 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if matches!(current, 1..=4) {
+        if matches!(current, 1..=5) {
             journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
@@ -389,6 +395,16 @@ impl Store {
         kind: &str,
         gents_session: Option<GentsSession>,
     ) -> Result<String> {
+        self.begin_run_with_scope(lease, kind, gents_session, None)
+    }
+
+    pub(crate) fn begin_run_with_scope(
+        &mut self,
+        lease: &ProfileLease,
+        kind: &str,
+        gents_session: Option<GentsSession>,
+        local_scope: Option<LocalScope>,
+    ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         self.record(Event::RunPlanned {
             id: id.clone(),
@@ -396,21 +412,27 @@ impl Store {
             kind: kind.to_owned(),
             requires_spawn_observation: true,
             gents_session,
+            local_scope,
         })?;
         Ok(id)
     }
 
     pub(crate) fn finish_run(&mut self, id: String, completion: RunCompletion) -> Result<()> {
-        let (exit_code, outcome) = match completion {
-            RunCompletion::ChildExited(code) => (code, "exited"),
-            RunCompletion::ExternalClientExited(code) => (code, "external_client_exited"),
-            RunCompletion::FailedToSpawn => (126, "spawn_failed"),
-            RunCompletion::OperatorAttested => (125, "user_attested_stopped"),
+        let (exit_code, outcome, stopped_scope) = match completion {
+            RunCompletion::ChildExited(code) => (code, "exited", None),
+            RunCompletion::ExternalClientExited(code) => (code, "external_client_exited", None),
+            RunCompletion::FailedToSpawn => (126, "spawn_failed", None),
+            RunCompletion::OperatorAttested => (125, "user_attested_stopped", None),
+            #[cfg(windows)]
+            RunCompletion::LocalScopeStopped(code, receipt) => {
+                (code, "local_scope_empty", Some(receipt.into_id()))
+            }
         };
         self.record_lifecycle(Event::RunFinished {
             id,
             exit_code,
             outcome: outcome.to_owned(),
+            stopped_scope,
         })
     }
 
@@ -673,7 +695,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             }
             tx.execute("DELETE FROM main.mappings WHERE profile=?1", [id.to_string()])?;
         }
-        Event::RunPlanned { id, profile, kind, requires_spawn_observation, gents_session } => {
+        Event::RunPlanned { id, profile, kind, requires_spawn_observation, gents_session, local_scope } => {
             let enabled: Option<(bool, String)> = tx
                 .query_row(
                     "SELECT enabled,harness FROM main.profiles WHERE id=?1 AND retired=0",
@@ -683,27 +705,32 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 .optional()?;
             match enabled {
                 Some((_, harness)) if harness == "gents" && (kind != "run" || !requires_spawn_observation) => return Err(Error::UnsupportedGentsOperation),
+                Some((_, harness)) if local_scope.is_some() && (harness == "gents" || !requires_spawn_observation) => return Err(Error::CorruptRegistry),
                 Some((true, _)) => {}
                 Some((false, _)) => return Err(Error::Disabled),
                 None => return Err(Error::NotFound),
+            }
+            if local_scope.as_ref().is_some_and(|scope| scope.id().is_nil() || gents_session.is_some()) {
+                return Err(Error::CorruptRegistry);
             }
             if let Some(session) = gents_session {
                 if kind != "run" { return Err(Error::UnsupportedSession); }
                 sessions::validate_intent(tx, *profile, session)?;
             }
             tx.execute(
-                "INSERT INTO main.runs(id,profile,kind,started_at,requires_spawn_observation,gents_session) VALUES(?1,?2,?3,?4,?5,?6)",
-                params![id, profile.to_string(), kind, recorded_at, requires_spawn_observation, gents_session.as_ref().map(serde_json::to_string).transpose()?],
+                "INSERT INTO main.runs(id,profile,kind,started_at,requires_spawn_observation,gents_session,local_scope) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![id, profile.to_string(), kind, recorded_at, requires_spawn_observation, gents_session.as_ref().map(serde_json::to_string).transpose()?, local_scope.as_ref().map(serde_json::to_string).transpose()?],
             )?;
         }
         Event::RunFinished {
             id,
             exit_code,
             outcome,
+            stopped_scope,
         } => {
             if tx.execute(
-                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2 NOT IN ('exited','external_client_exited') OR requires_spawn_observation=0 OR observed_pid IS NOT NULL) AND (?2<>'exited' OR profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')) AND (?2<>'external_client_exited' OR profile IN (SELECT id FROM main.profiles WHERE harness='gents'))",
-                params![exit_code, outcome, id],
+                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2 NOT IN ('exited','external_client_exited') OR requires_spawn_observation=0 OR observed_pid IS NOT NULL) AND (?2<>'exited' OR profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')) AND (?2<>'external_client_exited' OR profile IN (SELECT id FROM main.profiles WHERE harness='gents')) AND (?2 NOT IN ('exited','external_client_exited','spawn_failed') OR local_scope IS NULL) AND (?2<>'local_scope_empty' OR (observed_pid IS NOT NULL AND local_scope IS NOT NULL AND json_extract(local_scope,'$.id')=?4 AND json_extract(local_scope,'$.backend')='windows_job' AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')))",
+                params![exit_code, outcome, id, stopped_scope.map(|id| id.to_string())],
             )? != 1
             {
                 return Err(Error::CorruptRegistry);

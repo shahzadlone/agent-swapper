@@ -13,6 +13,9 @@ use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "cli/supervision.rs"]
+mod supervision;
+
 fn fixture() -> &'static Path {
     static BUILT: OnceLock<TempDir> = OnceLock::new();
     let dir = BUILT.get_or_init(|| {
@@ -171,7 +174,7 @@ fn registry_verify_reports_full_replay_in_json() {
         .clone();
     let value: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["schemaVersion"], 0);
-    assert_eq!(value["data"]["schemaVersion"], 5);
+    assert_eq!(value["data"]["schemaVersion"], 6);
     assert_eq!(value["data"]["events"], 0);
     assert_eq!(value["data"]["consistent"], true);
     s.add("claude", "work");

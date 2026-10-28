@@ -215,6 +215,7 @@ fn replay_rejects_a_resume_reference_not_valid_at_that_point_in_history() {
     complete(&mut s, &p, Some(new_session()));
     // Append directly, bypassing record's validation; verification must still fail.
     let event = Event::RunPlanned {
+        local_scope: None,
         id: Uuid::new_v4().to_string(),
         profile: p.id,
         kind: "run".to_owned(),
@@ -236,6 +237,7 @@ fn resume_uses_journal_order_across_clock_changes_and_rejects_projection_tamperi
     let id = Uuid::new_v4();
     let session = new_session();
     let event = Event::RunPlanned {
+        local_scope: None,
         id: id.to_string(),
         profile: p.id,
         kind: "run".to_owned(),
@@ -373,6 +375,7 @@ fn replay_refuses_invalid_session_shapes_even_without_matching_projections() {
             }
         };
         let event = Event::RunPlanned {
+            local_scope: None,
             id: Uuid::new_v4().to_string(),
             profile,
             kind: "run".to_owned(),

@@ -75,6 +75,12 @@ Gates:
 - Runtime launch, reconnect and full-writer stop are measured per OS. Unknown
   custody blocks automatic transfer, including transfers out of the engine.
 
+Windows native supervision now has an explicit experimental per-run Job option.
+The backend fixture passed at `ef6e973`; integrated launch/journal validation is
+in progress. Scope receipts remain local and do not enable automatic switching.
+See [custody evidence](custody.md). Linux and macOS native launches remain
+uncontained; real-provider isolation is unverified on every platform.
+
 ## M0 - Verification spike (no product code)
 
 M0 verification runs in parallel with fixture-based foundation development.

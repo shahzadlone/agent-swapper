@@ -8,6 +8,31 @@ fn hex(value: &OsStr) -> String {
 fn main() {
     println!("argv0={}", hex(&std::env::args_os().next().unwrap()));
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    #[cfg(windows)]
+    if args.first().is_some_and(|arg| arg == "--job-leaf") {
+        let dir = PathBuf::from(&args[1]);
+        let lock = std::fs::File::options().read(true).write(true).create_new(true).open(dir.join("leaf-lock")).unwrap();
+        lock.try_lock().unwrap();
+        std::fs::write(dir.join("leaf-ready"), "ready").unwrap();
+        std::thread::sleep(Duration::from_secs(45));
+        std::fs::write(dir.join("leaf-voluntary-exit"), "expired").unwrap();
+        return;
+    }
+    #[cfg(windows)]
+    if args.first().is_some_and(|arg| arg == "--job-orphan" || arg == "--job-wait") {
+        let dir = PathBuf::from(&args[1]);
+        let _leaf = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--job-leaf").arg(&dir).stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
+        let started = Instant::now();
+        while !dir.join("leaf-ready").exists() {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::write(dir.join("root-ready"), std::process::id().to_string()).unwrap();
+        if args[0] == "--job-wait" { std::thread::sleep(Duration::from_secs(45)); }
+        std::process::exit(42);
+    }
     if args.first().is_some_and(|arg| arg == "--wait") {
         let ready = PathBuf::from(&args[1]);
         let stop = PathBuf::from(&args[2]);

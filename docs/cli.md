@@ -66,8 +66,9 @@ Real-provider isolation is not verified on any platform. This preview sets only
 the selected child's profile-home variable: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
 or `KIMI_CODE_HOME`. Native configuration, platform credential stores, workspace
 hooks, and version-specific behavior can reach beyond that directory. A home
-variable is not a sandbox. There is no process-tree containment, native resume
-verification, automatic account rotation, or managed cross-agent takeover yet. Do not
+variable is not a sandbox. Default launches have no process-tree containment.
+Native resume verification, automatic account rotation and managed cross-agent
+takeover are not implemented. Do not
 use experimental profiles for sensitive production work.
 
 Known inherited auth, base-URL, billing-route, and selected home variables cause
@@ -85,8 +86,8 @@ belongs to the child, so actual launches cannot use `--json`.
 A profile lease, stored outside the native home, prevents simultaneous launches by cooperating AgentSwapper
 processes. A durable intent is written before spawn. An interrupted supervisor
 leaves an unfinished run and blocks reuse even after its OS lease disappears.
-`status` exposes the unresolved intent. Independent descendant custody
-verification is not implemented. Once you have independently stopped the
+`status` exposes the unresolved intent. A default native launch does not verify
+descendant custody. Once you have independently stopped the
 native agent and all descendants, use `aswp recover RUN_ID --confirm-stopped`
 to record that manual attestation. It refuses while any supervisor holds the
 profile lease. This is not independently verified custody and never drives
@@ -99,11 +100,33 @@ and `--limit` overrides it. Both accept 1 through 200.
 `aswp runs RUN_ID` inspects one run, including retired profiles. Aliases show
 the profile's current label. History includes a PID and spawn time when observed,
 plus a custody state: `unknown`, `exited_uncontained`, `never_started`, or
-`attested_stopped`. Gents client exits and client-stop attestations report
+`attested_stopped`. The opt-in Windows backend can record `local_scope_empty`,
+with the planned `localScope` backend and UUID. This says its owned Job was
+observed empty; external work remains unverified. Gents client exits and client-stop attestations report
 `external_runtime_unknown`. A pending intent remains unknown even with a recorded PID.
 These observations never authorize an automatic switch; stored PIDs are
 diagnostics and are never used for process termination. Argument contents are
 absent from history.
+
+### Experimental Windows process supervision
+
+```sh
+aswp run work --dry-run --experimental-containment windows-job
+aswp run work --experimental-native --experimental-containment windows-job
+```
+
+Also available for `login`. The native target starts suspended until its owned
+Job assignment and PID record succeed. When the initial CLI exits, remaining
+local descendants are terminated and the Job is queried for emptiness. The
+initial CLI's exit code is preserved. This changes background-child behavior;
+preview the plan before choosing it. Gents and other platforms refuse this option.
+
+Any ambiguous admission, wait, cleanup or journal error leaves an unresolved
+intent. A crashed supervisor's Job may clean up its descendants, but that alone
+does not write an empty receipt or unblock reuse. A crash before first assignment
+can leak a suspended process. This option is not a credential/filesystem sandbox
+and does not contain work delegated to services or external runtimes. See
+[measured custody results and limits](custody.md).
 
 ## Optional gents engine
 

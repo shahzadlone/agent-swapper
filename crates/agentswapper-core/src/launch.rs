@@ -22,6 +22,21 @@ pub struct LaunchPlan {
     session: Option<Uuid>,
     resumed_from: Option<Uuid>,
     selection: Option<SessionSelection>,
+    containment: Option<Containment>,
+}
+
+/// Explicit experimental local-process backend; unsupported hosts never fall back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Containment {
+    WindowsJob,
+}
+
+impl Containment {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WindowsJob => "windows_job",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -138,11 +153,21 @@ impl LaunchPlan {
             session,
             resumed_from: None,
             selection: session.map(|_| SessionSelection::New),
+            containment: None,
         })
     }
 
     pub fn profile(&self) -> &Profile {
         &self.profile
+    }
+
+    /// Local Job ownership never contains an externally owned gents runtime.
+    pub fn with_containment(mut self, containment: Option<Containment>) -> Result<Self> {
+        if containment.is_some() && (!cfg!(windows) || self.profile.harness == Harness::Gents) {
+            return Err(Error::UnsupportedContainment);
+        }
+        self.containment = containment;
+        Ok(self)
     }
 
     /// Continue or create the explicit gents session; native formats differ.
@@ -186,7 +211,7 @@ impl LaunchPlan {
             operation: if self.login { "login" } else { "run" },
             isolation: "unverified",
             quota: "unknown",
-            containment: "none",
+            containment: self.containment.map_or("none", Containment::as_str),
             engine: self.profile.harness.engine(),
             runtime_owner: if self.profile.harness == Harness::Gents {
                 "external_gents_runtime"
@@ -247,6 +272,10 @@ impl LaunchPlan {
         if current.harness != self.profile.harness || current.gents != self.profile.gents {
             return Err(Error::EngineMismatch);
         }
+        #[cfg(windows)]
+        if self.containment == Some(Containment::WindowsJob) {
+            return self.execute_windows_job(store, &lease);
+        }
         let gents_session = match (self.session, &self.profile.gents) {
             (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
                 id,
@@ -287,6 +316,39 @@ impl LaunchPlan {
         };
         store.finish_run(id, completion)?;
         drop(lease);
+        Ok(code)
+    }
+
+    #[cfg(windows)]
+    fn execute_windows_job(
+        &self,
+        store: &mut Store,
+        lease: &crate::store::ProfileLease,
+    ) -> Result<i32> {
+        use crate::{store::LocalScope, supervision::windows_job::WindowsJob};
+        if self.profile.harness == Harness::Gents {
+            return Err(Error::UnsupportedContainment);
+        }
+        let scope = WindowsJob::create()?;
+        let id = store.begin_run_with_scope(
+            lease,
+            if self.login { "login" } else { "run" },
+            None,
+            Some(LocalScope::WindowsJob { id: scope.id() }),
+        )?;
+        let mut admission_error = None;
+        let spawned = scope.spawn(self.command(), |pid| {
+            store.observe_spawn(&id, pid).map_err(|error| {
+                admission_error = Some(error);
+                std::io::Error::other("durable process admission failed")
+            })
+        });
+        // Any spawn/wrapping error may follow partial admission or resume.
+        // Preserve intent even if kill-on-close was requested: no empty receipt.
+        let mut child = spawned.map_err(|error| admission_error.unwrap_or(Error::Io(error)))?;
+        let code = exit_code(child.wait()?);
+        let receipt = child.stop_and_observe()?;
+        store.finish_run(id, RunCompletion::LocalScopeStopped(code, receipt))?;
         Ok(code)
     }
 
@@ -525,6 +587,44 @@ mod tests {
             .check_environment(|key| (key == "ANTHROPIC_API_KEY").then(|| "secret-canary".into()))
             .unwrap_err();
         assert!(!conflict.to_string().contains("secret-canary"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn supervised_spawn_error_preserves_intent_without_inventing_empty_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let cwd = temp.path().join("removed-cwd");
+        std::fs::create_dir(&cwd).unwrap();
+        let plan = LaunchPlan::build(
+            &store,
+            profile.clone(),
+            Some(&std::env::current_exe().unwrap()),
+            &cwd,
+            Vec::new(),
+            false,
+        )
+        .unwrap()
+        .with_containment(Some(Containment::WindowsJob))
+        .unwrap();
+        std::fs::remove_dir(&cwd).unwrap();
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::Io(_))
+        ));
+        let run = store.runs(1).unwrap().pop().unwrap();
+        assert_eq!(run.custody, crate::store::ProcessCustody::Unknown);
+        assert!(run.local_scope.is_some());
+        assert_eq!(run.observed_pid, None);
+        assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
+        store.attest_stopped(&run.id).unwrap();
+        assert_eq!(
+            store.run(&run.id).unwrap().custody,
+            crate::store::ProcessCustody::AttestedStopped
+        );
     }
 }
 

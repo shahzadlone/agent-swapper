@@ -12,7 +12,7 @@ use std::{
 
 use agentswapper_core::{
     Alias, Error, ExecutionEngine, GentsAgentId, GentsBinding, Harness, Profile, Result, Store,
-    launch::{LaunchPlan, discover},
+    launch::{Containment, LaunchPlan, discover},
     terminal_text,
 };
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -136,6 +136,9 @@ struct LaunchArgs {
     /// Opt in to an attached gents chat client. External work may outlive it.
     #[arg(long, conflicts_with = "experimental_native")]
     experimental_gents: bool,
+    /// Windows native only: own a Job; kill remaining local descendants on CLI exit.
+    #[arg(long, value_parser = parse_containment, conflicts_with = "experimental_gents")]
+    experimental_containment: Option<Containment>,
     /// Require this engine to match the registered profile.
     #[arg(long, value_parser = parse_engine)]
     engine: Option<ExecutionEngine>,
@@ -198,6 +201,15 @@ fn parse_engine(value: &str) -> std::result::Result<ExecutionEngine, String> {
     value
         .parse()
         .map_err(|_| "choose native or gents".to_owned())
+}
+
+fn parse_containment(value: &str) -> std::result::Result<Containment, String> {
+    match value {
+        "windows-job" => Ok(Containment::WindowsJob),
+        _ => {
+            Err("supported experimental backend: windows-job (Windows native profiles only)".into())
+        }
+    }
 }
 
 pub fn main_entry(name: &'static str) -> i32 {
@@ -497,11 +509,12 @@ fn dispatch(cli: Cli) -> Result<i32> {
             };
             let executables: Vec<_> = Harness::ALL.into_iter().map(|h| json!({"harness":h,"executable":discover(h),"isolation":"unverified","version":"not_probed"})).collect();
             let pending = store.unfinished()?.len();
+            let available_containment: &[&str] = if cfg!(windows) { &["windows_job"] } else { &[] };
             emit(
                 cli.json,
-                &json!({"storage":health,"issue":issue,"preferences":{"status":preferences_health,"issue":preferences_issue}, "profilePermissions": if cfg!(unix) {"posix_checked"} else {"acl_not_verified"},"executables":executables,"unfinishedRuns":pending,"containment":"none"}),
+                &json!({"storage":health,"issue":issue,"preferences":{"status":preferences_health,"issue":preferences_issue}, "profilePermissions": if cfg!(unix) {"posix_checked"} else {"acl_not_verified"},"executables":executables,"unfinishedRuns":pending,"containment":"none","availableExperimentalContainment":available_containment}),
                 &format!(
-                    "Storage integrity: {health}\nPreferences: {preferences_health}\nAgent CLIs: {}\nProfile isolation: unverified\nVersions: not probed\nProcess containment: none\nUnfinished runs: {pending}\n{}\n{}",
+                    "Storage integrity: {health}\nPreferences: {preferences_health}\nAgent CLIs: {}\nProfile isolation: unverified\nVersions: not probed\nDefault containment: none\nExperimental local backends: {}\nUnfinished runs: {pending}\n{}\n{}",
                     Harness::ALL
                         .into_iter()
                         .map(|h| format!(
@@ -514,6 +527,11 @@ fn dispatch(cli: Cli) -> Result<i32> {
                         ))
                         .collect::<Vec<_>>()
                         .join(", "),
+                    if available_containment.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        available_containment.join(", ")
+                    },
                     if cfg!(unix) {
                         "Private POSIX modes checked."
                     } else {
@@ -655,7 +673,8 @@ fn launch_profile(
         args,
         login,
     )?
-    .with_session(launch.session)?;
+    .with_session(launch.session)?
+    .with_containment(launch.experimental_containment)?;
     if launch.resume {
         plan = plan.with_latest_gents_session(store)?;
     }
@@ -693,6 +712,8 @@ fn launch_profile(
                     .resumed_from
                     .map_or_else(|| "none".to_owned(), |id| id.to_string())
             )
+        } else if launch.experimental_containment.is_some() {
+            "\nEngine: native\nRemaining local Job descendants will be terminated when the initial CLI exits. External work is unverified; ambiguous failures keep the run unresolved.".to_owned()
         } else {
             "\nEngine: native".to_owned()
         };
@@ -704,13 +725,14 @@ fn launch_profile(
             json_mode,
             &json!({"plan":preview,"environmentConflict":conflicts,"runtimeCheck":runtime_check}),
             &format!(
-                "{} {}\nProgram: {}\n{}={}\nArguments: {} (contents redacted)\nIsolation: unverified. Quota: unknown. Containment: none.{scope}\n{}",
+                "{} {}\nProgram: {}\n{}={}\nArguments: {} (contents redacted)\nIsolation: unverified. Quota: unknown. Containment: {}.{scope}\n{}",
                 preview.operation,
                 preview.profile.alias,
                 terminal_text(&preview.program.display().to_string()),
                 preview.home_variable.unwrap_or("--home"),
                 terminal_text(&preview.profile_home.display().to_string()),
                 preview.argument_count,
+                preview.containment,
                 conflicts
                     .as_deref()
                     .unwrap_or("No known inherited routing conflict.")
@@ -730,10 +752,17 @@ fn launch_profile(
     }
     writeln!(
         io::stderr(),
-        "Experimental {engine} launch: {} ({}). Isolation unverified; no containment or automatic swapping.",
+        "Experimental {engine} launch: {} ({}). Isolation unverified; containment: {}; no automatic swapping.",
         plan.profile().alias,
-        plan.profile().harness
+        plan.profile().harness,
+        plan.preview().containment
     )?;
+    if launch.experimental_containment.is_some() {
+        writeln!(
+            io::stderr(),
+            "Remaining local Job descendants will be terminated when the initial CLI exits. External work is unverified; ambiguous failures keep the run unresolved."
+        )?;
+    }
     if engine == ExecutionEngine::Gents {
         let preview = plan.preview();
         writeln!(
@@ -761,6 +790,9 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
         ProcessCustody::Unknown => "unknown; descendant custody unresolved",
         ProcessCustody::ExternalRuntimeUnknown => {
             "external runtime unknown; work may continue independently of this client"
+        }
+        ProcessCustody::LocalScopeEmpty => {
+            "owned local Job observed empty; external work unverified"
         }
         ProcessCustody::ExitedUncontained => "child exited; descendants unverified",
         ProcessCustody::NeverStarted => "native process did not start",

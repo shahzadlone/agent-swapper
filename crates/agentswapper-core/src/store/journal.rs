@@ -222,7 +222,7 @@ fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
     projection_dump_with_run_fields(
         db,
         "id,alias,harness,enabled,retired,gents",
-        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session",
+        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session,local_scope",
     )
 }
 
@@ -270,12 +270,19 @@ pub(super) fn validate_event(event: &Event) -> Result<()> {
             id,
             exit_code,
             outcome,
+            stopped_scope,
         } => {
             if !canonical_uuid(id)
                 || !matches!(
                     outcome.as_str(),
-                    "exited" | "external_client_exited" | "spawn_failed" | "user_attested_stopped"
+                    "exited"
+                        | "external_client_exited"
+                        | "spawn_failed"
+                        | "user_attested_stopped"
+                        | "local_scope_empty"
                 )
+                || ((outcome == "local_scope_empty") != stopped_scope.is_some())
+                || stopped_scope.is_some_and(|id| id.is_nil())
                 || (outcome == "spawn_failed" && *exit_code != 126)
                 || (outcome == "user_attested_stopped" && *exit_code != 125)
             {
@@ -311,7 +318,7 @@ fn valid_timestamp(value: &str) -> bool {
 pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != from || !matches!(from, 1..=4) {
+    if version != from || !matches!(from, 1..=5) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -363,13 +370,20 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         }
         drop(update);
     }
-    if from == 4 {
+    if from >= 4 {
         let legacy_schema = Connection::open_in_memory()?;
-        legacy_schema.execute_batch(include_str!("schema_v4.sql"))?;
+        legacy_schema.execute_batch(if from == 4 {
+            include_str!("schema_v4.sql")
+        } else {
+            include_str!("schema_v5.sql")
+        })?;
         if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
             return Err(Error::ProjectionMismatch);
         }
-        tx.execute_batch("ALTER TABLE runs ADD COLUMN gents_session TEXT CHECK(gents_session IS NULL OR json_valid(gents_session));")?;
+        if from == 4 {
+            tx.execute_batch("ALTER TABLE runs ADD COLUMN gents_session TEXT CHECK(gents_session IS NULL OR json_valid(gents_session));")?;
+        }
+        tx.execute_batch("ALTER TABLE runs ADD COLUMN local_scope TEXT CHECK(local_scope IS NULL OR json_valid(local_scope)); CREATE UNIQUE INDEX unique_local_scope ON runs(json_extract(local_scope,'$.id')) WHERE local_scope IS NOT NULL;")?;
     } else {
         if from < 3 {
             tx.execute_batch("ALTER TABLE runs ADD COLUMN observed_pid INTEGER CHECK(observed_pid>0); ALTER TABLE runs ADD COLUMN spawned_at TEXT; ALTER TABLE runs ADD COLUMN requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1));")?;

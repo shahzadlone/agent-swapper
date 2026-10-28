@@ -1,5 +1,5 @@
 use rusqlite::{Connection, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -7,8 +7,10 @@ use super::RunCompletion;
 use super::{Store, journal};
 use crate::{Alias, Error, Harness, ProfileId, Result};
 
-/// Durable observations do not establish that every descendant has stopped.
-/// None of the current native outcomes is independently verified custody.
+#[cfg(test)]
+mod scope_tests;
+
+/// Durable local-process observations never establish external-work custody.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessCustody {
@@ -17,6 +19,22 @@ pub enum ProcessCustody {
     ExternalRuntimeUnknown,
     NeverStarted,
     AttestedStopped,
+    LocalScopeEmpty,
+}
+
+/// Planned local process ownership. This metadata is not a stop receipt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "backend", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LocalScope {
+    WindowsJob { id: Uuid },
+}
+
+impl LocalScope {
+    pub fn id(&self) -> Uuid {
+        match self {
+            Self::WindowsJob { id } => *id,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +53,7 @@ pub struct RunRecord {
     pub outcome: Option<String>,
     pub custody: ProcessCustody,
     pub gents_session: Option<super::GentsSession>,
+    pub local_scope: Option<LocalScope>,
 }
 
 impl Store {
@@ -67,7 +86,7 @@ impl Store {
 }
 
 fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRecord>> {
-    let mut query = db.prepare("SELECT r.id,r.profile,p.alias,p.harness,r.kind,r.started_at,r.spawned_at,r.observed_pid,r.exit_code,r.outcome,r.gents_session FROM main.runs r JOIN main.profiles p ON p.id=r.profile JOIN main.event_log e ON json_extract(e.payload,'$.type')='run_planned' AND json_extract(e.payload,'$.id')=r.id WHERE (?1 IS NULL OR r.id=?1) ORDER BY e.sequence DESC LIMIT ?2")?;
+    let mut query = db.prepare("SELECT r.id,r.profile,p.alias,p.harness,r.kind,r.started_at,r.spawned_at,r.observed_pid,r.exit_code,r.outcome,r.gents_session,r.local_scope FROM main.runs r JOIN main.profiles p ON p.id=r.profile JOIN main.event_log e ON json_extract(e.payload,'$.type')='run_planned' AND json_extract(e.payload,'$.id')=r.id WHERE (?1 IS NULL OR r.id=?1) ORDER BY e.sequence DESC LIMIT ?2")?;
     let mut rows = query.query(params![id, limit])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
@@ -81,6 +100,7 @@ fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRe
             }
             None => ProcessCustody::Unknown,
             Some("exited") => ProcessCustody::ExitedUncontained,
+            Some("local_scope_empty") => ProcessCustody::LocalScopeEmpty,
             Some("external_client_exited") => ProcessCustody::ExternalRuntimeUnknown,
             Some("spawn_failed") => ProcessCustody::NeverStarted,
             Some("user_attested_stopped") => ProcessCustody::AttestedStopped,
@@ -98,6 +118,11 @@ fn query_runs(db: &Connection, id: Option<&str>, limit: u16) -> Result<Vec<RunRe
             exit_code: row.get(8)?,
             outcome,
             custody,
+            local_scope: row
+                .get::<_, Option<String>>(11)?
+                .map(|json| serde_json::from_str(&json))
+                .transpose()
+                .map_err(|_| Error::CorruptRegistry)?,
             gents_session: row
                 .get::<_, Option<String>>(10)?
                 .map(|json| serde_json::from_str(&json))

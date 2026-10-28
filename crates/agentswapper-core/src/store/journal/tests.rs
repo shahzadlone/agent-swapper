@@ -731,7 +731,7 @@ fn v3_upgrade_preserves_observed_pending_run_and_exact_backup() {
     let before = v3_dump(&db);
     migrate(&mut db, &root, 3).unwrap();
     assert_eq!(v3_dump(&db), before);
-    assert_eq!(verify(&db).unwrap().schema_version, 5);
+    assert_eq!(verify(&db).unwrap().schema_version, 6);
     assert!(verify(&db).unwrap().consistent);
     assert_eq!(backups(&root).len(), 1);
     let backup = Connection::open(&backups(&root)[0]).unwrap();
@@ -797,6 +797,7 @@ fn gents_rebinding_is_leased_durable_and_keeps_home_identity() {
     let home = s.profile_home(p.id).unwrap();
     assert!(
         s.record(Event::RunPlanned {
+            local_scope: None,
             id: Uuid::new_v4().to_string(),
             profile: p.id,
             kind: "run".to_owned(),
@@ -943,7 +944,7 @@ fn v4_upgrade_preserves_gents_binding_and_native_pending_history_without_inventi
     migrate(&mut db, &root, 4).unwrap();
     assert_eq!(v4_dump(&db), before);
     assert!(verify(&db).unwrap().consistent);
-    assert_eq!(verify(&db).unwrap().schema_version, 5);
+    assert_eq!(verify(&db).unwrap().schema_version, 6);
     assert_eq!(backups(&root).len(), 1);
     let backup = Connection::open(&backups(&root)[0]).unwrap();
     assert_eq!(v4_dump(&backup), before);
@@ -1033,4 +1034,111 @@ fn migrated_pending_gents_run_requires_reconciliation_and_retains_unknown_sessio
     s.finish_run(id, RunCompletion::ExternalClientExited(0))
         .unwrap();
     assert_eq!(s.latest_gents_session(p.id).unwrap().session, session);
+}
+
+fn legacy_v5(root: &Path) -> Connection {
+    let mut store = Store::open(root).unwrap();
+    let native = store
+        .register(Harness::Codex, "native".parse().unwrap())
+        .unwrap();
+    let external = store
+        .register_gents(
+            "external".parse().unwrap(),
+            crate::GentsBinding::new("127.0.0.1:9191".parse().unwrap(), "agent".parse().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+    {
+        let lease = store.lease(external.id).unwrap();
+        let session =
+            crate::store::GentsSession::new(Uuid::new_v4(), external.gents.unwrap(), None);
+        let id = store
+            .begin_run_with_session(&lease, "run", Some(session))
+            .unwrap();
+        store.observe_spawn(&id, 42).unwrap();
+        store
+            .finish_run(id, RunCompletion::ExternalClientExited(0))
+            .unwrap();
+    }
+    {
+        let lease = store.lease(native.id).unwrap();
+        store.begin_run(&lease, "run").unwrap();
+    }
+    // No scope metadata was emitted. Restore the exact previous projection DDL.
+    store.db.execute_batch("DROP INDEX unique_local_scope; ALTER TABLE runs DROP COLUMN local_scope; PRAGMA user_version=5;").unwrap();
+    let expected = Connection::open_in_memory().unwrap();
+    expected
+        .execute_batch(include_str!("../schema_v5.sql"))
+        .unwrap();
+    assert_eq!(
+        schema_dump(&store.db).unwrap(),
+        schema_dump(&expected).unwrap()
+    );
+    store.db
+}
+
+fn v5_dump(db: &Connection) -> Vec<Vec<Vec<Value>>> {
+    projection_dump_with_run_fields(db, "id,alias,harness,enabled,retired,gents", "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session").unwrap()
+}
+
+#[test]
+fn v5_migration_keeps_sessions_and_pending_intents_without_inventing_custody() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+    let mut db = legacy_v5(&root);
+    let before = v5_dump(&db);
+    migrate(&mut db, &root, 5).unwrap();
+    assert_eq!(v5_dump(&db), before);
+    assert!(verify(&db).unwrap().consistent);
+    assert_eq!(verify(&db).unwrap().schema_version, 6);
+    assert_eq!(backups(&root).len(), 1);
+    let backup = Connection::open(&backups(&root)[0]).unwrap();
+    assert_eq!(v5_dump(&backup), before);
+    assert_eq!(
+        backup
+            .pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        db.query_row::<i64, _, _>(
+            "SELECT count(*) FROM runs WHERE local_scope IS NOT NULL",
+            [],
+            |r| r.get(0)
+        )
+        .unwrap(),
+        0
+    );
+    drop(db);
+    let store = Store::open(&root).unwrap();
+    let native = store.find(&"native".parse().unwrap()).unwrap();
+    assert!(matches!(store.lease(native.id), Err(Error::Busy)));
+    let external = store.find(&"external".parse().unwrap()).unwrap();
+    assert!(store.latest_gents_session(external.id).is_ok());
+}
+
+#[test]
+fn v5_failed_migration_preserves_original_schema_rows_and_backup() {
+    for mutation in [
+        "UPDATE runs SET observed_pid=99 WHERE observed_pid IS NOT NULL",
+        "UPDATE runs SET gents_session=json_set(gents_session,'$.id','cafe0000-0000-4000-8000-000000000099') WHERE gents_session IS NOT NULL",
+        "CREATE INDEX injected ON runs(kind)",
+        "DROP INDEX unique_gents_address",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap().join("state");
+        let mut db = legacy_v5(&root);
+        db.execute_batch(mutation).unwrap();
+        let before = v5_dump(&db);
+        let schema = schema_dump(&db).unwrap();
+        assert!(migrate(&mut db, &root, 5).is_err(), "{mutation}");
+        assert_eq!(v5_dump(&db), before);
+        assert_eq!(schema_dump(&db).unwrap(), schema);
+        assert_eq!(
+            db.pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+                .unwrap(),
+            5
+        );
+        assert_eq!(backups(&root).len(), 1);
+    }
 }

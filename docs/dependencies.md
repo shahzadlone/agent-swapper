@@ -41,8 +41,8 @@ package's age, version number, or continued compilation.
 
 The experimental Windows supervision backend and its custody examples use
 exact Windows-target dependencies `process-wrap 10.0.1` and `win32job 2.0.3`,
-both MIT OR Apache-2.0, plus the Microsoft Windows bindings. The backend is
-not yet wired into native launch. Only std, Job Object, and creation-flag support is enabled in
+both MIT OR Apache-2.0, plus the Microsoft Windows bindings. Native launch uses it only with the explicit experimental Windows containment
+option. Only std, Job Object, and creation-flag support is enabled in
 process-wrap; Tokio and tracing are disabled. The two libraries currently use
 different Windows binding versions, both recorded and audited in Cargo.lock.
 

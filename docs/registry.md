@@ -35,7 +35,7 @@ authenticate the database against a process running as the same user.
 
 ## Upgrades and backups
 
-Opening a schema-1 through schema-4 registry upgrades it to schema 5. Before changing it, the
+Opening a schema-1 through schema-5 registry upgrades it to schema 6. Before changing it, the
 upgrade writes a consistent SQLite snapshot, including committed WAL data, to
 `STATE_DIR/registry-backups/schema-N-SHA256.sqlite3`. An unchanged retry reuses
 an identical snapshot without overwriting it. Files use private permissions
@@ -50,6 +50,12 @@ projections: UUID, binding snapshot and resume-source run ID. Legacy runs retain
 unknown session IDs. Resume validation uses journal order and the exact preceding
 state; replay reconstructs that order in memory without modifying the source.
 Bindings and session references are metadata, never credentials or transcripts.
+Schema 6 adds optional local-scope metadata (backend and unique UUID). Old runs
+retain absent scope metadata. A local empty outcome requires a matching stop
+receipt, an observed PID and a native profile; a direct exit, failed admission
+or operator attestation cannot be relabelled as empty. The event stores the
+receipt's scope UUID, and replay checks it against the original intent. This
+reports local Job membership only, never external work or credential isolation.
 The upgrade checks old DDL before replacing projection tables and copies actual
 rows; projection corruption cannot disappear into a replay rebuild. The upgrade
 reconciles schema-1 timestamps, preserves missing observations as unknown,
@@ -59,7 +65,7 @@ opened or backed up by this migration.
 
 Keep all AgentSwapper processes on the same build during an upgrade. Current
 writers recheck the schema in every event transaction and refuse a changed or
-newer schema. A schema-4 supervisor still running during the schema-5 upgrade
+newer schema. A schema-5 supervisor still running during the schema-6 upgrade
 will refuse to record its exit; its intent remains pending and requires manual
 reconciliation. This does not retrofit schema guards into binaries that predate them.
 

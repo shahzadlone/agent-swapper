@@ -109,6 +109,10 @@ pub enum Error {
     #[error("--session and --resume are supported only for the gents engine")]
     UnsupportedSession,
     #[error(
+        "windows-job containment requires Windows and a native profile; gents runtime work is externally owned"
+    )]
+    UnsupportedContainment,
+    #[error(
         "no tracked gents session for the latest run; start a new chat or explicitly select --session UUID"
     )]
     NoRecordedSession,
@@ -214,6 +218,7 @@ impl Error {
             Self::EngineMismatch => "engine_mismatch",
             Self::UnsupportedGentsOperation => "unsupported_gents_operation",
             Self::UnsupportedSession => "unsupported_session",
+            Self::UnsupportedContainment => "unsupported_containment",
             Self::NoRecordedSession => "no_recorded_session",
             Self::SessionNotResumable => "session_not_resumable",
             Self::SessionBindingChanged => "session_binding_changed",

@@ -11,13 +11,14 @@ them to make failures explicit.
 | Layer | Meaningful checks |
 | --- | --- |
 | Domain | Generated valid/invalid aliases, checked deserialization, terminal escape handling |
-| SQLite | Event/projection rollback together, append-only triggers, full 1,102-event projection replay, migration backup with WAL contents, schema-1 through schema-4 upgrades preserving unknown observations and session IDs, failed-upgrade rollback, launch refusal on mismatch, future-schema refusal |
+| SQLite | Event/projection rollback together, append-only triggers, full 1,102-event projection replay, migration backup with WAL contents, schema-1 through schema-5 upgrades preserving unknown observations and session IDs, failed-upgrade rollback, launch refusal on mismatch, future-schema refusal |
 | Preferences | Read-only defaults, typed/versioned parsing, no secret echo, concurrent setters/readers, exact flag precedence, preserved malformed files, busy locks and injected post-publication sync failure |
 | Filesystem | Missing profile directory refusal, POSIX private modes, trusted parent links, internal symlink and hardlinked lease refusal |
 | Concurrency | Concurrent fresh opens and duplicate registration, stale mapping race rollback, OS leases, unresolved intent blocking, manual recovery refused under a live supervisor |
 | Integrity reuse | Warm writer refuses peer corruption, local edits, temporary shadow objects, and changed pragmas; aborted commit never publishes a successful baseline |
 | Native subprocess | All three home-variable bindings, exact hostile/empty argv forwarding, POSIX non-UTF-8 arguments, child exit status, spawn-error recovery, foreground-group SIGINT recording, opt-in enforcement |
 | Gents sessions | Pre-spawn UUID persistence, exact argv/history agreement, explicit resume chains, stale/source/binding refusal, no fallback past uncertain runs, backward-clock ordering and migration tamper rollback |
+| Windows local Jobs | Delayed suspended admission, breakaway refusal, sibling survival, orphan cleanup, drop/crash cleanup, local receipt binding, supervisor-crash intent blocking and CLI exit-code preservation |
 | Crash | Kill the supervisor while a fixture agent is running; a second launch remains blocked after the OS lock releases |
 | Process groups | A reparented session writer keeps writing after the original group is killed; bounded provider-free probe with cleanup |
 | Disclosure | Canary auth values and argument contents are absent from wrapper error/preview output; the fixture writes only the chosen profile home |
@@ -70,13 +71,14 @@ entry, confirmation, cancellation, and restoration of terminal settings.
 ## Gates still required
 
 The suite does not establish real-provider auth isolation, quota correctness,
-macOS Keychain behavior, Windows ACL privacy, process-tree containment, or
-refresh-token safety. Those require dedicated test subscriptions and the M0
+macOS Keychain behavior, Windows ACL privacy, containment of external service
+work, or refresh-token safety. Provider-free Windows fixtures establish only
+the scoped local Job behaviors documented in [custody](custody.md). Those require dedicated test subscriptions and the M0
 matrix. No test should read a user's native credential files to satisfy a gate.
 
 Future handover work needs property-tested state transitions, capsule redaction,
 workspace preservation, sandboxed side-effect tests, deterministic crash
 injection at every durable boundary, and protocol fixtures tied to exact vendor
-versions. The schema-1 through schema-4 to schema-5 upgrade backs up the old database before changing it;
+versions. The schema-1 through schema-5 to schema-6 upgrade backs up the old database before changing it;
 tests reopen that backup and compare its complete projection dump with the
 source. No automatic live restore is implemented. See [registry integrity](registry.md).

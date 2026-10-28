@@ -15,9 +15,11 @@ CREATE TABLE runs (
     observed_pid INTEGER CHECK(observed_pid>0),
     spawned_at TEXT,
     requires_spawn_observation INTEGER NOT NULL DEFAULT 0 CHECK(requires_spawn_observation IN (0,1)),
-    gents_session TEXT CHECK(gents_session IS NULL OR json_valid(gents_session))
+    gents_session TEXT CHECK(gents_session IS NULL OR json_valid(gents_session)),
+    local_scope TEXT CHECK(local_scope IS NULL OR json_valid(local_scope))
 );
 CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE exit_code IS NULL;
+CREATE UNIQUE INDEX unique_local_scope ON runs(json_extract(local_scope,'$.id')) WHERE local_scope IS NOT NULL;
 CREATE TABLE mappings (
     directory TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id)
 );
