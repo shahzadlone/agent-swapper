@@ -1,5 +1,8 @@
 //! Provider-free cgroup v2 spike; requires an explicitly delegated parent.
 #![forbid(unsafe_code)]
+#[cfg(target_os = "linux")]
+#[path = "support/linux_admission_transport.rs"]
+mod admission_transport;
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
@@ -21,7 +24,9 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux_probe {
+    use super::admission_transport;
     use rustix::{
+        fd::{AsFd, OwnedFd},
         fs::{
             AtFlags, CWD, Mode, OFlags, ResolveFlags, fstatfs, mkdirat, openat, openat2, unlinkat,
         },
@@ -38,6 +43,40 @@ mod linux_probe {
     use uuid::Uuid;
     const BUDGET: Duration = Duration::from_secs(15);
     const LIFETIME: Duration = Duration::from_secs(45);
+    const SOCKET_INPUT: &[u8] = b"native input survives cgroup admission\0\xff";
+
+    enum Admission {
+        Pipe,
+        Socket(OwnedFd, std::io::PipeReader),
+    }
+
+    impl Admission {
+        fn grant(self, shim: &mut Child) -> io::Result<()> {
+            match self {
+                Self::Pipe => shim
+                    .stdin
+                    .take()
+                    .ok_or_else(|| io::Error::other("admission pipe missing"))?
+                    .write_all(b"GO\n"),
+                Self::Socket(socket, input) => {
+                    admission_transport::send(&socket, admission_transport::GO, &[input.as_fd()])
+                }
+            }
+        }
+    }
+
+    fn socket_shim(directory: &Path, group: &Path) -> io::Result<(OwnedChild, Admission)> {
+        let (parent, child) = admission_transport::pair()?;
+        let (reader, mut writer) = io::pipe()?;
+        writer.write_all(SOCKET_INPUT)?;
+        drop(writer);
+        let shim = OwnedChild(
+            command("admit-socket", directory, group)?
+                .stdin(Stdio::from(child))
+                .spawn()?,
+        );
+        Ok((shim, Admission::Socket(parent, reader)))
+    }
 
     fn require(value: bool, message: &'static str) -> io::Result<()> {
         if value {
@@ -248,17 +287,24 @@ mod linux_probe {
         }
     }
 
-    fn admitted_tree(domain: &Domain) -> io::Result<()> {
+    fn admitted_tree(domain: &Domain, use_socket: bool) -> io::Result<()> {
         let deadline = Instant::now() + BUDGET;
         let directory = tempfile::tempdir()?;
         let mut group = domain.create()?;
         let mut control_writer =
             OwnedChild(command("control", directory.path(), &group.path)?.spawn()?);
-        let mut shim = OwnedChild(
-            command("admit", directory.path(), &group.path)?
-                .stdin(Stdio::piped())
-                .spawn()?,
-        );
+        let (mut shim, admission) = if use_socket {
+            socket_shim(directory.path(), &group.path)?
+        } else {
+            (
+                OwnedChild(
+                    command("admit", directory.path(), &group.path)?
+                        .stdin(Stdio::piped())
+                        .spawn()?,
+                ),
+                Admission::Pipe,
+            )
+        };
         // The supervisor admits its still-owned child. The trusted shim cannot
         // execute the target before receiving GO on its private pipe.
         let admitted = shim.0.id();
@@ -270,13 +316,15 @@ mod linux_probe {
         )?;
         // In production this observation must be journaled before GO. This
         // fixture tests the live admission and retirement kernel primitives.
-        shim.0
-            .stdin
-            .take()
-            .ok_or_else(|| io::Error::other("admission pipe missing"))?
-            .write_all(b"GO\n")?;
+        admission.grant(&mut shim.0)?;
         let leader = until(deadline, || shim.0.try_wait())?;
         require(leader.success(), "admitted fixture failed")?;
+        if use_socket {
+            require(
+                directory.path().join("stdin-restored").exists(),
+                "native stdin was not restored after cgroup admission",
+            )?;
+        }
         let middle = until(deadline, || Ok(pid_file(directory.path(), "middle-pid")))?;
         require(
             reap(middle, deadline)?.exit_status() == Some(0),
@@ -328,7 +376,7 @@ mod linux_probe {
         control_writer.0.kill()?;
         let _ = control_writer.0.wait()?;
         println!(
-            "::notice title=Linux custody probe::cooperative setsid writer killed; cgroup empty and retired; outside control survives"
+            "::notice title=Linux custody probe::cooperative setsid writer killed; cgroup empty and retired; outside control survives; descriptor transport={use_socket}"
         );
         Ok(())
     }
@@ -358,6 +406,36 @@ mod linux_probe {
         )?;
         println!(
             "::notice title=Linux custody probe::retired cgroup rejects a late shim using a previously opened admission handle"
+        );
+        Ok(())
+    }
+
+    fn socket_requires_membership(domain: &Domain) -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let group = domain.create()?;
+        let (mut shim, admission) = socket_shim(directory.path(), &group.path)?;
+        admission.grant(&mut shim.0)?;
+        let status = until(Instant::now() + BUDGET, || shim.0.try_wait())?;
+        require(
+            !status.success(),
+            "socket GO without membership executed target",
+        )?;
+        require(
+            fs::read_to_string(directory.path().join("fixture-failure"))?
+                .contains("supervisor did not admit shim into run cgroup"),
+            "wrong refusal reason for missing membership",
+        )?;
+        require(
+            !directory.path().join("stdin-restored").exists()
+                && !directory.path().join("middle-pid").exists(),
+            "unadmitted target ran",
+        )?;
+        require(
+            !populated(&group.directory)?,
+            "unadmitted group unexpectedly populated",
+        )?;
+        println!(
+            "::notice title=Linux custody probe::descriptor GO without kernel membership refuses target execution"
         );
         Ok(())
     }
@@ -437,6 +515,17 @@ mod linux_probe {
                 let error = command("worker", directory, group)?.exec();
                 Err(error)
             }
+            "admit-socket" => {
+                let input = admission_transport::receive(io::stdin())?;
+                let cg = checked_directory(group)?;
+                require(
+                    contains(&cg, std::process::id())?,
+                    "supervisor did not admit shim into run cgroup",
+                )?;
+                Err(command("worker-socket", directory, group)?
+                    .stdin(Stdio::from(input))
+                    .exec())
+            }
             "late" => {
                 let cg = checked_directory(group)?;
                 let mut admission = control(&cg, "cgroup.procs", OFlags::WRONLY)?;
@@ -462,7 +551,25 @@ mod linux_probe {
                     }
                 }
             }
-            "worker" => {
+            "worker" | "worker-socket" => {
+                if role == "worker-socket" {
+                    let mut actual = vec![0; SOCKET_INPUT.len()];
+                    io::stdin().read_exact(&mut actual)?;
+                    require(
+                        actual == SOCKET_INPUT,
+                        "stdin contents changed during admission",
+                    )?;
+                    let mut extra = [0];
+                    require(
+                        io::stdin().read(&mut extra)? == 0,
+                        "stdin EOF changed during admission",
+                    )?;
+                    publish(
+                        directory,
+                        "stdin-restored",
+                        "native input and EOF preserved",
+                    )?;
+                }
                 setsid()?;
                 let middle = command("middle", directory, group)?.spawn()?;
                 publish(directory, "middle-pid", &middle.id().to_string())
@@ -530,7 +637,9 @@ mod linux_probe {
         let domain = Domain::open(Path::new(&first))?;
         set_child_subreaper(Some(rustix::process::getpid()))?;
         admission_requires_private_go(&domain)?;
-        admitted_tree(&domain)?;
+        admitted_tree(&domain, false)?;
+        admitted_tree(&domain, true)?;
+        socket_requires_membership(&domain)?;
         late_admission(&domain)
     }
 

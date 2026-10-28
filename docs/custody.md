@@ -203,3 +203,11 @@ validate cgroup membership, establish supervisor-crash cleanup, preserve a full
 interactive job-control session, or authorize a native Linux containment option.
 Those need combined tests before integration. Same-user malicious interference
 remains outside this experiment's boundary.
+
+The delegated-cgroup probe also exercises this descriptor transport: it verifies
+membership before releasing GO, restores pipe bytes and EOF in the exec'd worker,
+then repeats the detached-writer stop/empty/retirement and surviving outside-control
+checks. A valid descriptor packet without group membership must fail for that
+specific reason before the worker starts. This combined fixture is compiled and
+its local directory-refusal tests pass; runtime cgroup evidence requires the CI
+delegation. It still does not implement a production journal or crash guardian.
