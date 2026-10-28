@@ -13,6 +13,7 @@ isolation or external work. Automatic switching remains disabled.
 | `a835b29` | [CI 40641607779](https://github.com/shahzadlone/agent-swapper/actions/runs/40641607779) | All four jobs passed; review fix and incomplete-supervision diagnostics |
 | `cb44045` | [CI 40642895082](https://github.com/shahzadlone/agent-swapper/actions/runs/40642895082) | All four jobs passed; provider-free Linux stdin/PTY transport experiment |
 | `ba9495d` | [CI 40643621025](https://github.com/shahzadlone/agent-swapper/actions/runs/40643621025) | All four jobs passed; descriptor transport combined with delegated cgroup admission, cleanup and missing-membership refusal |
+| `fa20cda` | [CI 40645886037](https://github.com/shahzadlone/agent-swapper/actions/runs/40645886037) | All four jobs passed; bare dashboard entry, masked search and actual POSIX terminal restoration |
 
 At `6d0e394`, platform annotations recorded Rust 1.98.0 and:
 
@@ -71,3 +72,7 @@ overflow was source-audited as an error path, not stress-tested with thousands o
 processes. Same-user malicious interference, external services, filesystem and
 credential isolation, actual provider versions and account refresh remain outside
 this evidence. See [custody](custody.md) and the [support matrix](support-matrix.md).
+
+The next Linux guardian design and its separately bounded fixture checks are
+documented in [Linux supervision](linux-supervision.md). They do not promote the
+production Linux custody state.

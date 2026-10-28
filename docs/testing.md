@@ -78,6 +78,14 @@ entry, confirmation, cancellation, and restoration of terminal settings.
 
 ## Gates still required
 
+The Linux-only `linux_guardian_probe` example exercises transfer of a locked
+file description, guardian process-group separation, parent-channel EOF and
+lease retention after parent-group SIGKILL. Run it with
+`cargo run --locked -p agentswapper-core --example linux_guardian_probe`.
+It is provider-free and unprivileged; simulated cleanup is explicitly gated
+by the controller. CI runs it separately from the actual delegated cgroup probe.
+See [Linux supervision](linux-supervision.md) for the remaining integration gates.
+
 The suite does not establish real-provider auth isolation, quota correctness,
 macOS Keychain behavior, Windows ACL privacy, containment of external service
 work, or refresh-token safety. Provider-free Windows fixtures establish only
