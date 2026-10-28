@@ -46,6 +46,7 @@ exists. A local regression renames/replaces the parent's path and verifies that
 cleanup affects the original directory, while a same-name replacement survives.
 The delegated probe also injects validation failure three times and checks for
 leftover children; those kernel-specific results require CI at the change's commit.
+That delegated rollback checkpoint passed all four CI jobs at `4b500ed`.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;
@@ -97,6 +98,29 @@ These checks do not use a cgroup or journal, contain descendants, forward target
 exit codes through a production protocol, or transfer separate stdout/stderr
 descriptors. Signal handling and terminal topology still need combined testing
 with admission, leases, detached writers and the real supervisor state machine.
+
+The next combined case is in the delegated cgroup probe's private
+`linux_probe/guardian_cgroup.rs` module. A surrogate foreground supervisor
+transfers parent-directory, child-directory and locked-lease descriptors to a
+guardian in another process group. Before using `cgroup.kill`, the guardian
+verifies that the supplied parent contains itself and that a direct child with
+the generated scope name has the same device/inode as the supplied leaf. The
+delegated parent itself and traversal names are refused as kill capabilities.
+
+The guardian admits a trusted shim, restores its input, and observes its root
+exit while a detached writer continues. The controller then kills the owned
+supervisor's process group. Parent-channel EOF must make the guardian kill the
+writer and observe zero kernel population. The controller checks that empty
+state before invoking any cleanup backstop, verifies that the lease is still
+busy and an outside writer is still advancing, then retires the scope. Only
+after that independent retirement may the guardian release the lease. The
+controller verifies writer SIGKILL, guardian success and renewed lock acquisition.
+
+The combined case is compiled locally; actual cgroup execution requires the
+explicitly delegated CI service. It does not combine interactive PTY behavior
+with cgroup admission, exercise guardian loss, integrate the journal, or qualify
+real providers. Its controller is an observation and failure-cleanup backstop;
+production will require its own measured reconciliation paths.
 
 ## Remaining gates
 

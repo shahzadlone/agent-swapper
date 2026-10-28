@@ -24,6 +24,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux_probe {
+    mod guardian_cgroup;
     use super::admission_transport;
     use rustix::{
         fd::{AsFd, OwnedFd},
@@ -590,6 +591,9 @@ mod linux_probe {
     fn fixture(role: &str, directory: &Path, group: &Path) -> io::Result<()> {
         let deadline = Instant::now() + BUDGET;
         match role {
+            "guardian-parent" | "guardian-scope" => {
+                guardian_cgroup::fixture(role, directory, group)
+            }
             "admit" => {
                 // EOF after supervisor loss refuses execution. Files in the
                 // fixture directory cannot authorize target admission.
@@ -732,6 +736,7 @@ mod linux_probe {
         let domain = Domain::open(Path::new(&first))?;
         set_child_subreaper(Some(rustix::process::getpid()))?;
         failed_creation_rolls_back(&domain)?;
+        guardian_cgroup::run(&domain)?;
         admission_requires_private_go(&domain)?;
         admitted_tree(&domain, false)?;
         admitted_tree(&domain, true)?;

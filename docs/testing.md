@@ -100,6 +100,12 @@ groups, suspend/resume, resize, interrupts, inherited ignored signals and termin
 closure and parent-only SIGKILL without privileged setup or a real provider. The scope of each assertion
 is recorded in [Linux supervision](linux-supervision.md).
 
+The delegated Linux cgroup probe also includes a combined guardian/lease case.
+It verifies leaf capability boundaries, detached-writer cleanup after parent loss,
+kernel emptiness before controller retirement, continued outside work, and lease
+exclusion until retirement. This case runs only in the CI service with explicit
+delegation; compiling it locally does not establish those kernel results.
+
 The suite does not establish real-provider auth isolation, quota correctness,
 macOS Keychain behavior, Windows ACL privacy, containment of external service
 work, or refresh-token safety. Provider-free Windows fixtures establish only
