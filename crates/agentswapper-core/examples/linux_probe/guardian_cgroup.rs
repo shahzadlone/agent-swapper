@@ -1,10 +1,14 @@
 //! Combined cooperating-fixture experiment. No production journal or stop receipt.
 use super::*;
+use crate::cgroup::validate_directory;
+use rustix::fs::{Mode, ResolveFlags, openat2};
 use rustix::{
     net::{RecvFlags, recv},
     process::{Signal, getpid, kill_process_group},
 };
+use std::os::unix::fs::MetadataExt;
 use std::{fs::TryLockError, os::unix::process::ExitStatusExt};
+use uuid::Uuid;
 
 fn scope(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
     validate_directory(parent)?;
@@ -199,25 +203,29 @@ fn run_once(domain: &Domain, guardian_loss: bool) -> io::Result<()> {
     let mut group = domain.create()?;
     // Test the capability boundary before starting any fixture work.
     require(
-        scope(&group.parent, &group.parent, &group.path).is_err(),
+        scope(group.parent(), group.parent(), group.path()).is_err(),
         "guardian accepted its delegated parent as a kill scope",
     )?;
     require(
-        scope(&group.parent, &group.directory, Path::new("..")).is_err(),
+        scope(group.parent(), group.directory(), Path::new("..")).is_err(),
         "guardian accepted a traversal scope name",
     )?;
     let _release = Release(directory.path().to_owned());
     let lease = File::create_new(directory.path().join("lease"))?;
     lease.try_lock().map_err(io::Error::other)?;
-    let mut outside = OwnedChild(command("control", directory.path(), &group.path)?.spawn()?);
+    let mut outside = OwnedChild(command("control", directory.path(), group.path())?.spawn()?);
     let (channel, gate) = admission_transport::pair()?;
     let mut parent = OwnedChild(
-        command("guardian-parent", directory.path(), &group.path)?
+        command("guardian-parent", directory.path(), group.path())?
             .stdin(Stdio::from(gate))
             .process_group(0)
             .spawn()?,
     );
-    for fd in [group.parent.as_fd(), group.directory.as_fd(), lease.as_fd()] {
+    for fd in [
+        group.parent().as_fd(),
+        group.directory().as_fd(),
+        lease.as_fd(),
+    ] {
         admission_transport::send(&channel, admission_transport::GO, &[fd])?;
     }
     // The controller must not retain either a peer of the guardian's channel or
@@ -232,7 +240,7 @@ fn run_once(domain: &Domain, guardian_loss: bool) -> io::Result<()> {
         Ok(heartbeat(directory.path(), "control-heartbeat"))
     })?;
     require(
-        contains(&group.directory, leaf.0)? && !contains(&group.directory, control_writer.0)?,
+        contains(group.directory(), leaf.0)? && !contains(group.directory(), control_writer.0)?,
         "combined fixture membership mismatch",
     )?;
     until(deadline, || {
@@ -261,7 +269,7 @@ fn run_once(domain: &Domain, guardian_loss: bool) -> io::Result<()> {
     }
     // This is checked BEFORE the controller invokes any kill/retirement backstop.
     require(
-        !populated(&group.directory)?,
+        !populated(group.directory())?,
         "surviving supervisor reported empty while target scope remained populated",
     )?;
     assert_locked(directory.path())?;
@@ -284,7 +292,7 @@ fn run_once(domain: &Domain, guardian_loss: bool) -> io::Result<()> {
         Ok(heartbeat(directory.path(), "control-heartbeat").filter(|value| value.2 > after.2 + 3))
     })?;
     group.retire(deadline)?;
-    require(!group.path.exists(), "combined scope was not retired")?;
+    require(!group.path().exists(), "combined scope was not retired")?;
     if guardian_loss {
         publish(
             directory.path(),

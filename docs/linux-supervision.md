@@ -50,6 +50,11 @@ cleanup affects the original directory, while a same-name replacement survives.
 The delegated probe also injects validation failure three times and checks for
 leftover children; those kernel-specific results require CI at the change's commit.
 That delegated rollback checkpoint passed all four CI jobs at `4b500ed`.
+These primitives and their rollback regressions now live in the private
+`examples/support/linux_cgroup.rs` module. Domain/group fields stay private;
+consumers borrow the validated descriptors and retire the owned child through
+the shared implementation. This is preparation for testing terminal admission
+against the same cgroup code, not a production backend.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;
