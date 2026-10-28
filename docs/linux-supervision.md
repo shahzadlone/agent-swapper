@@ -38,6 +38,15 @@ semantics, close-on-exec and malformed admission. `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).
 
+Cgroup creation now opens the unique child relative to the validated parent
+descriptor with beneath/no-symlink/no-cross-mount resolution. It acquires its
+parent copy before creating anything, then rolls back the empty child if opening
+or validation fails. The rollback guard never acquires a name that already
+exists. A local regression renames/replaces the parent's path and verifies that
+cleanup affects the original directory, while a same-name replacement survives.
+The delegated probe also injects validation failure three times and checks for
+leftover children; those kernel-specific results require CI at the change's commit.
+
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;
 the guardian has a different process group and no terminal standard streams.
@@ -92,7 +101,7 @@ with admission, leases, detached writers and the real supervisor state machine.
 ## Remaining gates
 
 Combine guardian failure cases with delegated cgroup cleanup and detached
-writers. Audit group creation and removal failure paths before promoting the
+writers. Extend failure injection for group removal and cleanup before promoting the
 fixture code. Integrate admission and receipts with the journal only once those
 gates pass; every ambiguous result must remain unresolved. macOS needs its own
 measured backend rather than inheriting Linux claims.
@@ -100,3 +109,5 @@ measured backend rather than inheriting Linux claims.
 Claude Opus 5.5 at xhigh reviewed the proposed architecture. Its process-group,
 signal-disposition and lease-retention observations informed these experiments.
 The review did not qualify the implementation or real-provider behavior.
+A later terminal-fixture source review timed out without returning feedback;
+it provides no implementation approval.

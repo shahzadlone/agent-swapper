@@ -41,6 +41,7 @@ mod linux_probe {
         time::{Duration, Instant},
     };
     use uuid::Uuid;
+    use wait_timeout::ChildExt;
     const BUDGET: Duration = Duration::from_secs(15);
     const LIFETIME: Duration = Duration::from_secs(45);
     const SOCKET_INPUT: &[u8] = b"native input survives cgroup admission\0\xff";
@@ -107,9 +108,13 @@ mod linux_probe {
             ResolveFlags::NO_SYMLINKS,
         )?;
         let file = File::from(fd);
+        validate_directory(&file)?;
+        Ok(file)
+    }
+    fn validate_directory(file: &File) -> io::Result<()> {
         // CGROUP2_SUPER_MAGIC from the kernel's cgroup v2 interface contract.
         require(
-            fstatfs(&file)?.f_type == 0x6367_7270,
+            fstatfs(file)?.f_type == 0x6367_7270,
             "path is not a cgroup v2 filesystem",
         )?;
         require(
@@ -121,7 +126,7 @@ mod linux_probe {
             metadata.uid() == geteuid().as_raw() && metadata.mode() & 0o022 == 0,
             "cgroup is not privately delegated to this user",
         )?;
-        Ok(file)
+        Ok(())
     }
     fn control(directory: &File, name: &str, flags: OFlags) -> io::Result<File> {
         Ok(File::from(openat(
@@ -179,22 +184,81 @@ mod linux_probe {
             })
         }
         fn create(&self) -> io::Result<Group> {
+            self.create_with_check(|_| Ok(()))
+        }
+        fn create_with_check(
+            &self,
+            check: impl FnOnce(&File) -> io::Result<()>,
+        ) -> io::Result<Group> {
+            let parent = self.directory.try_clone()?;
             let name = format!("aswp-probe-{}", Uuid::new_v4());
-            mkdirat(
-                &self.directory,
-                name.as_str(),
-                Mode::RUSR | Mode::WUSR | Mode::XUSR,
-            )?;
+            let mut created = NewDirectory::create(&parent, &name)?;
             let path = self.path.join(&name);
-            let directory = checked_directory(&path)?;
-            let _ = control(&directory, "cgroup.kill", OFlags::WRONLY)?;
+            let result = (|| {
+                // Resolve beneath the already-validated parent handle, rather
+                // than reopening the absolute delegated-parent path.
+                let directory = File::from(openat2(
+                    &parent,
+                    name.as_str(),
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                    Mode::empty(),
+                    ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+                )?);
+                validate_directory(&directory)?;
+                let _ = control(&directory, "cgroup.kill", OFlags::WRONLY)?;
+                check(&directory)?;
+                Ok::<_, io::Error>(directory)
+            })();
+            let directory = match result {
+                Ok(directory) => directory,
+                Err(error) => {
+                    return match created.rollback() {
+                        Ok(()) => Err(error),
+                        Err(cleanup) => Err(io::Error::other(format!(
+                            "cgroup initialization failed ({error}); empty-child rollback also failed ({cleanup})"
+                        ))),
+                    };
+                }
+            };
+            created.commit();
             Ok(Group {
                 directory,
-                parent: self.directory.try_clone()?,
+                parent,
                 name,
                 path,
                 retired: false,
             })
+        }
+    }
+    // Acquired only after mkdirat succeeds. A collision never transfers ownership.
+    struct NewDirectory<'a> {
+        parent: &'a File,
+        name: &'a str,
+        active: bool,
+    }
+    impl<'a> NewDirectory<'a> {
+        fn create(parent: &'a File, name: &'a str) -> io::Result<Self> {
+            mkdirat(parent, name, Mode::RUSR | Mode::WUSR | Mode::XUSR)?;
+            Ok(Self {
+                parent,
+                name,
+                active: true,
+            })
+        }
+        fn rollback(&mut self) -> io::Result<()> {
+            if self.active {
+                unlinkat(self.parent, self.name, AtFlags::REMOVEDIR)?;
+                self.active = false;
+            }
+            Ok(())
+        }
+        fn commit(mut self) {
+            self.active = false;
+        }
+    }
+    impl Drop for NewDirectory<'_> {
+        fn drop(&mut self) {
+            let _ = self.rollback();
         }
     }
     struct Group {
@@ -283,8 +347,39 @@ mod linux_probe {
     impl Drop for OwnedChild {
         fn drop(&mut self) {
             let _ = self.0.kill();
-            let _ = self.0.wait();
+            let _ = self.0.wait_timeout(Duration::from_secs(3));
         }
+    }
+
+    fn failed_creation_rolls_back(domain: &Domain) -> io::Result<()> {
+        let children = || -> io::Result<Vec<_>> {
+            let mut names = fs::read_dir(&domain.path)?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<io::Result<Vec<_>>>()?;
+            names.sort();
+            Ok(names)
+        };
+        let before = children()?;
+        for _ in 0..3 {
+            let error = match domain
+                .create_with_check(|_| Err(io::Error::other("injected validation failure")))
+            {
+                Err(error) => error,
+                Ok(_) => return Err(io::Error::other("failed creation unexpectedly succeeded")),
+            };
+            require(
+                error.to_string() == "injected validation failure",
+                "creation lost its original failure",
+            )?;
+            require(
+                children()? == before,
+                "failed creation left a cgroup directory",
+            )?;
+        }
+        println!(
+            "failed cgroup initialization rolls back its empty child; delegated parent preserved"
+        );
+        Ok(())
     }
 
     fn admitted_tree(domain: &Domain, use_socket: bool) -> io::Result<()> {
@@ -636,6 +731,7 @@ mod linux_probe {
         }
         let domain = Domain::open(Path::new(&first))?;
         set_child_subreaper(Some(rustix::process::getpid()))?;
+        failed_creation_rolls_back(&domain)?;
         admission_requires_private_go(&domain)?;
         admitted_tree(&domain, false)?;
         admitted_tree(&domain, true)?;
@@ -656,6 +752,25 @@ mod linux_probe {
             let link = directory.path().join("link");
             std::os::unix::fs::symlink(directory.path(), &link).unwrap();
             assert!(checked_directory(&link).is_err());
+        }
+
+        #[test]
+        fn directory_creation_rollback_uses_owned_parent_and_preserves_collisions() {
+            let directory = tempfile::tempdir().unwrap();
+            let original = directory.path().join("original");
+            fs::create_dir(&original).unwrap();
+            let parent = File::open(&original).unwrap();
+            let moved = directory.path().join("moved");
+            let owned = NewDirectory::create(&parent, "child").unwrap();
+            fs::rename(&original, &moved).unwrap();
+            fs::create_dir(&original).unwrap();
+            fs::create_dir(original.join("child")).unwrap();
+            drop(owned);
+            assert!(!moved.join("child").exists());
+            assert!(original.join("child").is_dir());
+            let replacement = File::open(&original).unwrap();
+            assert!(NewDirectory::create(&replacement, "child").is_err());
+            assert!(original.join("child").is_dir());
         }
     }
 }
