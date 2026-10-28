@@ -168,3 +168,10 @@ wait. The backend does not constrain work requested through WMI, COM, Task
 Scheduler, services or other outside processes, and does not defend against a
 malicious process with the same OS identity. Provider credential isolation,
 workspace fencing and cross-brand context continuity remain separate gates.
+
+Additional Windows unit tests inject failure after admission returns success,
+admission rejection/unwind, a membership-query error and an expired cleanup
+deadline. A separate kernel Job observer verifies that admitted processes drain
+on those error paths; no receipt is returned. Compile-fail doctests reject receipt
+construction/duplication and scope reuse after stop. The ignored Windows test
+entrypoint is re-executed by these tests with a private marker and no provider.

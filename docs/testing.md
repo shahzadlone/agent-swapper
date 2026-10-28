@@ -29,7 +29,8 @@ them to make failures explicit.
 Each integration test creates its own temporary state and fake home. Tests
 compile a small, dependency-free native fixture once per test process. No
 provider binary runs, no network login occurs, and no real credentials are
-needed. Fixture processes have a timeout and a stop-file cleanup path.
+needed. The ignored Unix custody and Windows admission-test entrypoints are
+invoked by their parent tests; they are fixture roles, not omitted test gates. Fixture processes have a timeout and a stop-file cleanup path.
 Property tests use 256 cases by default; the filesystem-heavy replay property
 uses 48 generated sequences; full-lifecycle replay uses 32. Regression seeds
 belong in version control.

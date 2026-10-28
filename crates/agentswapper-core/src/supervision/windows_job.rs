@@ -55,21 +55,31 @@ impl WindowsJob {
         command: Command,
         admit: impl FnOnce(u32) -> io::Result<()>,
     ) -> io::Result<JobChild> {
-        let child = CommandWrap::from(command)
-            .wrap(JobObject)
-            .spawn_with(|command| {
-                let child = SuspendedChild(Some(command.spawn()?));
-                let native = child.as_child()?;
-                // Borrow the owned process handle; never reopen a PID from storage.
-                self.job
-                    .assign_process(native.as_raw_handle() as isize)
-                    .map_err(job_error)?;
-                if self.job.query_process_id_list().map_err(job_error)? != [native.id() as usize] {
-                    return Err(io::Error::other("unexpected Job membership at admission"));
-                }
-                admit(native.id())?;
-                child.release()
-            })?;
+        let mut command = CommandWrap::from(command);
+        command.wrap(JobObject);
+        self.spawn_wrapped(command, |native| admit(native.id()))
+    }
+
+    // Private seam for failure injection. Production installs exactly JobObject;
+    // tests may prepend a wrapper that always refuses before resume.
+    fn spawn_wrapped(
+        self,
+        mut command: CommandWrap,
+        admit: impl FnOnce(&Child) -> io::Result<()>,
+    ) -> io::Result<JobChild> {
+        let child = command.spawn_with(|command| {
+            let child = SuspendedChild(Some(command.spawn()?));
+            let native = child.as_child()?;
+            // Borrow the owned process handle; never reopen a PID from storage.
+            self.job
+                .assign_process(native.as_raw_handle() as isize)
+                .map_err(job_error)?;
+            if self.job.query_process_id_list().map_err(job_error)? != [native.id() as usize] {
+                return Err(io::Error::other("unexpected Job membership at admission"));
+            }
+            admit(native)?;
+            child.release()
+        })?;
         Ok(JobChild { scope: self, child })
     }
 }
@@ -113,17 +123,20 @@ impl JobChild {
     /// Terminate remaining local descendants and observe an empty Job within
     /// five seconds. Consumes admission authority even on failure. Query errors,
     /// including membership-buffer overflow, never produce an empty receipt.
-    pub fn stop_and_observe(mut self) -> io::Result<StoppedScope> {
-        let deadline = Instant::now() + CLEANUP_BUDGET;
+    pub fn stop_and_observe(self) -> io::Result<StoppedScope> {
+        self.stop_with(Instant::now() + CLEANUP_BUDGET, |job| {
+            job.query_process_id_list().map_err(job_error)
+        })
+    }
+
+    fn stop_with(
+        mut self,
+        deadline: Instant,
+        mut members: impl FnMut(&Job) -> io::Result<Vec<usize>>,
+    ) -> io::Result<StoppedScope> {
         self.child.start_kill()?;
         loop {
-            if self
-                .scope
-                .job
-                .query_process_id_list()
-                .map_err(job_error)?
-                .is_empty()
-            {
+            if members(&self.scope.job)?.is_empty() {
                 return Ok(StoppedScope { id: self.scope.id });
             }
             self.child.start_kill()?;
@@ -137,6 +150,9 @@ impl JobChild {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 impl Drop for JobChild {
     fn drop(&mut self) {
