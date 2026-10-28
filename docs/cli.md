@@ -92,6 +92,11 @@ ancestors such as `/tmp` are allowed above trusted directories. Validation runs
 when planning and again before launch. This checks permissions, not signatures,
 script interpreters or immutability against another process with the same user.
 
+For Kimi this includes known OAuth endpoint/header overrides, temporary
+`KIMI_MODEL_*` settings, legacy migration-source overrides and Google SDK
+credential-file selection. The current CLI's source contract and its remaining
+migration/isolation limits are recorded in the [support matrix](support-matrix.md#kimi-source-contract).
+
 Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout
 belongs to the child, so actual launches cannot use `--json`.

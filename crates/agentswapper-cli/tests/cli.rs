@@ -368,6 +368,71 @@ fn conflicting_authentication_never_exposes_secret() {
 }
 
 #[test]
+fn kimi_routing_overrides_are_reported_without_values_and_refused_before_spawn() {
+    let s = Sandbox::new();
+    s.add("kimi", "work");
+    // Independent examples from the reviewed upstream contract: managed auth,
+    // header credentials, temporary models, legacy migration and SDK auth.
+    for key in [
+        "KIMI_CODE_BASE_URL",
+        "KIMI_CODE_OAUTH_HOST",
+        "KIMI_OAUTH_HOST",
+        "KIMI_CODE_CUSTOM_HEADERS",
+        "KIMI_CODE_PASSWORD",
+        "KIMI_MODEL_NAME",
+        "KIMI_MODEL_API_KEY",
+        "KIMI_MODEL_BASE_URL",
+        "KIMI_SHARE_DIR",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ] {
+        let output = s
+            .command()
+            .args(["run", "work", "--dry-run", "--json", "--executable"])
+            .arg(fixture())
+            .env(key, "routing-secret-canary")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let preview: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            preview["data"]["environmentConflict"]
+                .as_str()
+                .unwrap()
+                .contains(key)
+        );
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("routing-secret-canary"));
+        let run = s
+            .run("work")
+            .env(key, "routing-secret-canary")
+            .output()
+            .unwrap();
+        assert_eq!(run.status.code(), Some(125));
+        let error = String::from_utf8_lossy(&run.stderr);
+        assert!(error.contains(key));
+        assert!(!error.contains("routing-secret-canary"));
+        assert!(!String::from_utf8_lossy(&run.stdout).contains("routing-secret-canary"));
+        let home = Path::new(preview["data"]["plan"]["profile_home"].as_str().unwrap());
+        assert!(!home.join("fixture-owned.txt").exists());
+    }
+    // Even an empty override is refused, while unrelated runtime preferences
+    // remain usable. No policy depends on inspecting an override's contents.
+    s.run("work").env("KIMI_MODEL_NAME", "").assert().code(125);
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert_eq!(history["data"].as_array().unwrap().len(), 0);
+    s.run("work")
+        .env("KIMI_DISABLE_TELEMETRY", "1")
+        .assert()
+        .success();
+    let database = std::fs::read(s.state().join("registry.sqlite3")).unwrap();
+    assert!(
+        !database
+            .windows(b"routing-secret-canary".len())
+            .any(|w| w == b"routing-secret-canary")
+    );
+}
+
+#[test]
 fn native_exit_status_is_preserved_and_completed_runs_can_relaunch() {
     let s = Sandbox::new();
     s.add("kimi", "work");
