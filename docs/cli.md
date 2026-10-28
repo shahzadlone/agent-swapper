@@ -209,6 +209,10 @@ Errors are escaped, with identifiers hidden in privacy mode. Terminals smaller
 than 40 x 14 receive a compact fallback. Plain commands remain available without
 a terminal.
 
+On POSIX, external SIGINT, SIGTERM and SIGHUP requests leave raw mode and the
+alternate screen before terminating with the original signal. This applies to
+dashboard exits; native agent sessions use their own launch/supervision paths.
+
 ## Output and state
 
 Use `--state-dir /absolute/private/local/path` or `AGENTSWAPPER_STATE_DIR` for

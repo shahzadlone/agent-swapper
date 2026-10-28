@@ -70,6 +70,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "signal-hook",
  "tempfile",
  "uuid",
  "zeroize",

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -129,12 +130,48 @@ def check(binary, quit_key):
         assert not json_state.exists()
 
 
+def check_signal(binary, quit_signal, close_peer=False):
+    with tempfile.TemporaryDirectory(prefix="aswp-dashboard-signal-") as directory:
+        root = Path(directory)
+        env = {"HOME": str(root), "TERM": "xterm-256color", "LANG": "C.UTF-8"}
+        master, slave = pty.openpty()
+        before = termios.tcgetattr(slave)
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            process = subprocess.Popen([str(binary), "--state-dir", str(root / "state")],
+                                       stdin=slave, stdout=slave, stderr=slave, env=env)
+            output = bytearray()
+            drain(master, process, output, b"Profiles")
+            assert not termios.tcgetattr(slave)[3] & termios.ICANON
+            process.send_signal(quit_signal)
+            if close_peer:
+                os.close(master)
+                master = None
+            else:
+                drain(master, process, output)
+            assert process.wait(timeout=2) == -quit_signal, "signal termination was replaced with an ordinary exit"
+            if not close_peer:
+                assert termios.tcgetattr(slave) == before, "signal exit left terminal settings modified"
+                assert b"\x1b[?1049l" in output, "signal exit did not leave alternate screen"
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+            if master is not None:
+                os.close(master)
+            os.close(slave)
+
+
 def main():
     if os.name != "posix" or len(sys.argv) != 3:
         raise SystemExit("Usage on POSIX: check_dashboard_pty.py PATH_TO_ASWP PATH_TO_AGENTSWAPPER")
     check(Path(sys.argv[1]).resolve(strict=True), b"q")
     check(Path(sys.argv[2]).resolve(strict=True), b"\x03")
-    print("Bare dashboard, privacy, persisted availability, resize, q/Ctrl-C and terminal restoration: pass")
+    for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
+        check_signal(Path(sys.argv[1]).resolve(strict=True), quit_signal)
+    check_signal(Path(sys.argv[1]).resolve(strict=True), signal.SIGHUP, close_peer=True)
+    print("Bare dashboard, privacy, availability, resize, keyboard/signal exits and terminal restoration: pass")
 
 
 if __name__ == "__main__":

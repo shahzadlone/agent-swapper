@@ -13,6 +13,8 @@ use ratatui::{
 
 #[cfg(test)]
 mod preview;
+#[cfg(unix)]
+mod quit_signals;
 
 const TEAL: Color = Color::Rgb(44, 204, 195);
 const YELLOW: Color = Color::Rgb(250, 205, 61);
@@ -149,12 +151,39 @@ impl Drop for Restore {
 pub(crate) fn run(store: &mut Store, masked: bool) -> Result<()> {
     let mut app = Dashboard::new(masked);
     app.refresh(store)?;
+    #[cfg(unix)]
+    let signals = quit_signals::QuitSignals::install()?;
+    let interrupted = || {
+        #[cfg(unix)]
+        {
+            signals.requested()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    };
+    let result = run_terminal(store, &mut app, interrupted);
+    // run_terminal restores on errors as well as normal exits before re-raising.
+    #[cfg(unix)]
+    signals.finish()?;
+    result
+}
+
+fn run_terminal(
+    store: &mut Store,
+    app: &mut Dashboard,
+    interrupted: impl Fn() -> bool,
+) -> Result<()> {
     let _restore = Restore;
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     loop {
-        terminal.draw(|frame| draw(frame, &app))?;
+        if interrupted() {
+            break;
+        }
+        terminal.draw(|frame| draw(frame, app))?;
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }

@@ -73,6 +73,10 @@ at `http://localhost:4317/terminal/`. Use `--no-serve` to export only. These loc
 artifacts do not change snapshots, load real accounts or represent future usage
 and switching flows. `check_dashboard_pty.py` additionally tests an availability
 change through the keyboard and reads back its persisted state.
+It also sends external SIGINT, SIGTERM and SIGHUP to isolated dashboard processes,
+checks exact terminal restoration and signal termination, and exercises SIGHUP
+with a concurrently closing terminal peer. Keyboard Ctrl-C and external SIGINT
+are tested separately. The POSIX checks do not establish Windows ConPTY behavior.
 
 The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
 Windows, including Clippy and doctests. Handover changes run through the same

@@ -33,6 +33,9 @@ assert_cmd = "2"
 predicates = "3"
 insta = "1"
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "=0.3.18", default-features = false }
+
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1", features = ["process"] }
 
