@@ -47,17 +47,24 @@ filesystem and terminal operations happen in the fixture's ordinary loop.
 The fixture observes SIGWINCH and leaves inherited ignored signals intact.
 No new package, runtime core dependency or advisory exception was introduced.
 
-## Dashboard signal restoration
+## Terminal signal restoration
 
 The CLI directly pins the already-transitive `signal-hook = 0.3.18` on Unix.
-Dashboard handlers register atomic signal flags for INT, TERM and HUP. The UI
-loop restores terminal settings before the safe `emulate_default_handler` API
+Dashboard and hidden handover entry register atomic flags for INT, TERM and HUP.
+The terminal workflow restores settings before the safe `emulate_default_handler` API
 re-raises the original signal. Source review covered that API's default-handler
 reset, unblocking and re-raise path, including its abort fallback if delivery
-fails. No other TUI thread installs handlers for these signals. Registration
+fails. No other workflow thread installs handlers for these signals. Registration
 guards remove their actions on startup failure and exit. I/O does not run in
 the signal callback, and native-launch interrupt handling remains a separate
 command path. This adds no package or advisory exception.
+
+Interactive handover retains the handlers through cryptography and publication;
+unregistering immediately after a prompt would remove the actions while that
+command is still running. Pipe-based secret input retains its existing signal
+behavior. The CLI also enables the existing `rustix` dependency's termios feature
+for safe `tcflush(IFlush)`: unread input is discarded before restoring echo.
+No new runtime package is introduced.
 
 ## Windows custody verification
 

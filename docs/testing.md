@@ -78,6 +78,14 @@ checks exact terminal restoration and signal termination, and exercises SIGHUP
 with a concurrently closing terminal peer. Keyboard Ctrl-C and external SIGINT
 are tested separately. The POSIX checks do not establish Windows ConPTY behavior.
 
+`python tools/check_handover_pty.py target/debug/aswp` uses fictional notes and
+passphrases to check hidden entry at both prompt positions, external INT/TERM/HUP,
+keyboard cancellation, queued-input removal, mismatch handling, cancellation
+after prompt teardown during cryptography, and an encrypted pack/inspect round
+trip. It verifies exact terminal settings, original signal termination, no echoed
+canaries and no ciphertext publication on cancelled entry. CI runs the 12 cases
+on Linux and macOS. These tests do not read native credentials.
+
 The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
 Windows, including Clippy and doctests. Handover changes run through the same
 matrix; check the [workflow](https://github.com/shahzadlone/agent-swapper/actions/workflows/ci.yml)

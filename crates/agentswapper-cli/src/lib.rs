@@ -2,6 +2,8 @@
 mod config_cli;
 mod engines;
 mod handover_cli;
+#[cfg(unix)]
+mod terminal_signals;
 mod tui;
 
 use std::{

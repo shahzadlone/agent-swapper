@@ -26,6 +26,12 @@ pasted control characters produce an error instead of silently changing the
 password. Losing the passphrase
 makes the pack unrecoverable. Keep encrypted packs outside the repository.
 
+On POSIX, external INT, TERM and HUP requests restore terminal settings and
+discard unread secret input before re-raising the original signal. Signal
+handling remains active through cryptography; cancellation is checked before
+publishing a new pack or printing decrypted content. Cancelled entry creates no
+pack. Pipe-based input keeps its existing noninteractive behavior.
+
 `pack` uses a registered profile as an operator-supplied source label. No login
 is required or inferred. `inspect` prints metadata, including document size,
 source label, and workspace reference; it hides note content. `pickup` explicitly

@@ -1,6 +1,7 @@
 use std::{
     io::{self, IsTerminal, Read, Write},
     path::PathBuf,
+    time::Duration,
 };
 
 use agentswapper_core::{
@@ -57,7 +58,7 @@ pub(crate) struct PassphraseInput {
 }
 
 impl PassphraseInput {
-    fn read(&self, confirm: bool) -> Result<SecretString> {
+    fn read(&self, confirm: bool, interrupted: &impl Fn() -> bool) -> Result<SecretString> {
         if self.passphrase_stdin {
             if io::stdin().is_terminal() {
                 return Err(Error::PassphraseInput);
@@ -85,12 +86,12 @@ impl PassphraseInput {
         if !io::stdin().is_terminal() {
             return Err(Error::PassphraseInput);
         }
-        crossterm::terminal::enable_raw_mode()?;
         let _restore = RestoreEcho;
-        let first = hidden_passphrase("Handover passphrase: ")?;
+        crossterm::terminal::enable_raw_mode()?;
+        let first = hidden_passphrase("Handover passphrase: ", interrupted)?;
         if confirm {
             handover::validate_new_passphrase(&first)?;
-            let second = hidden_passphrase("Confirm passphrase: ")?;
+            let second = hidden_passphrase("Confirm passphrase: ", interrupted)?;
             if first.expose_secret() != second.expose_secret() {
                 return Err(Error::PassphraseMismatch);
             }
@@ -102,16 +103,24 @@ impl PassphraseInput {
 struct RestoreEcho;
 impl Drop for RestoreEcho {
     fn drop(&mut self) {
+        // Discard unread secret input before re-enabling terminal echo.
+        #[cfg(unix)]
+        let _ = rustix::termios::tcflush(io::stdin(), rustix::termios::QueueSelector::IFlush);
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = io::stderr().write_all(b"\r\n");
     }
 }
 
-fn hidden_passphrase(prompt: &str) -> Result<SecretString> {
+fn hidden_passphrase(prompt: &str, interrupted: &impl Fn() -> bool) -> Result<SecretString> {
+    check_interrupted(interrupted)?;
     io::stderr().write_all(prompt.as_bytes())?;
     io::stderr().flush()?;
     let mut value = Zeroizing::new(String::new());
     loop {
+        check_interrupted(interrupted)?;
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
         let key = match event::read()? {
             Event::Key(key) => key,
             Event::Paste(paste) => {
@@ -186,6 +195,53 @@ pub(crate) fn dispatch(
     json_mode: bool,
     state_dir: Option<PathBuf>,
 ) -> Result<i32> {
+    #[cfg(unix)]
+    let signals = {
+        let secret = match &command {
+            HandoverCommands::Pack { secret, .. }
+            | HandoverCommands::Inspect { secret, .. }
+            | HandoverCommands::Pickup { secret, .. } => secret,
+        };
+        if !secret.passphrase_stdin && io::stdin().is_terminal() {
+            Some(crate::terminal_signals::TerminalSignals::install()?)
+        } else {
+            None
+        }
+    };
+    let interrupted = || {
+        #[cfg(unix)]
+        {
+            signals.as_ref().is_some_and(|signals| signals.requested())
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    };
+    // Keep handlers alive through cryptography and publication. Removing them
+    // immediately after a prompt would leave later signals without an action.
+    let result = dispatch_inner(command, json_mode, state_dir, interrupted);
+    #[cfg(unix)]
+    if let Some(signals) = signals {
+        signals.finish()?;
+    }
+    result
+}
+
+fn check_interrupted(interrupted: &impl Fn() -> bool) -> Result<()> {
+    if interrupted() {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn dispatch_inner(
+    command: HandoverCommands,
+    json_mode: bool,
+    state_dir: Option<PathBuf>,
+    interrupted: impl Fn() -> bool,
+) -> Result<i32> {
     match command {
         HandoverCommands::Pack {
             from,
@@ -208,7 +264,10 @@ pub(crate) fn dispatch(
             let note = handover::read_note(&source_path)?;
             let workspace = WorkspaceAnchor::measure(&selected_workspace(workspace)?)?;
             let pack = HandoverPack::new(&profile, workspace, note)?;
-            let ciphertext = pack.seal(secret.read(true)?)?;
+            let passphrase = secret.read(true, &interrupted)?;
+            check_interrupted(&interrupted)?;
+            let ciphertext = pack.seal(passphrase)?;
+            check_interrupted(&interrupted)?;
             let handover::PublishedPack {
                 path: output,
                 directory_synced,
@@ -230,7 +289,10 @@ pub(crate) fn dispatch(
         }
         HandoverCommands::Inspect { file, secret } => {
             let ciphertext = handover::read_ciphertext(&file)?;
-            let pack = HandoverPack::open(&ciphertext, secret.read(false)?)?;
+            let passphrase = secret.read(false, &interrupted)?;
+            check_interrupted(&interrupted)?;
+            let pack = HandoverPack::open(&ciphertext, passphrase)?;
+            check_interrupted(&interrupted)?;
             let metadata = pack.summary();
             super::emit(
                 json_mode,
@@ -252,9 +314,12 @@ pub(crate) fn dispatch(
             secret,
         } => {
             let ciphertext = handover::read_ciphertext(&file)?;
-            let pack = HandoverPack::open(&ciphertext, secret.read(false)?)?;
+            let passphrase = secret.read(false, &interrupted)?;
+            check_interrupted(&interrupted)?;
+            let pack = HandoverPack::open(&ciphertext, passphrase)?;
             let report = pack.reconcile(target, &selected_workspace(workspace)?)?;
             let note = Zeroizing::new(pack.render_pickup(&report));
+            check_interrupted(&interrupted)?;
             if json_mode {
                 super::emit(true, &json!({"report":report,"handover":note.as_str()}), "")?;
             } else {

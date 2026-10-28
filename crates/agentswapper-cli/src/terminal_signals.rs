@@ -1,4 +1,4 @@
-//! Signal handlers only set an atomic. Terminal restoration runs in the UI loop.
+//! Signal handlers only set an atomic. Restoration runs in the terminal event loop.
 use signal_hook::{
     SigId,
     consts::signal::{SIGHUP, SIGINT, SIGTERM},
@@ -12,13 +12,13 @@ use std::{
     },
 };
 
-pub(super) struct QuitSignals {
+pub(crate) struct TerminalSignals {
     signal: Arc<AtomicUsize>,
     registrations: Vec<SigId>,
 }
 
-impl QuitSignals {
-    pub(super) fn install() -> io::Result<Self> {
+impl TerminalSignals {
+    pub(crate) fn install() -> io::Result<Self> {
         let mut guard = Self {
             signal: Arc::new(AtomicUsize::new(0)),
             registrations: Vec::new(),
@@ -33,13 +33,13 @@ impl QuitSignals {
         Ok(guard)
     }
 
-    pub(super) fn requested(&self) -> bool {
+    pub(crate) fn requested(&self) -> bool {
         self.signal.load(Ordering::Relaxed) != 0
     }
 
     // Called after the terminal and Restore guard have been dropped. Preserve
     // signal termination for shells that distinguish it from an exit code.
-    pub(super) fn finish(self) -> io::Result<()> {
+    pub(crate) fn finish(self) -> io::Result<()> {
         let signal = self.signal.load(Ordering::Relaxed);
         drop(self);
         if signal != 0 {
@@ -49,7 +49,7 @@ impl QuitSignals {
     }
 }
 
-impl Drop for QuitSignals {
+impl Drop for TerminalSignals {
     fn drop(&mut self) {
         for registration in self.registrations.drain(..) {
             low_level::unregister(registration);

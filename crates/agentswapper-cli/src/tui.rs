@@ -13,8 +13,6 @@ use ratatui::{
 
 #[cfg(test)]
 mod preview;
-#[cfg(unix)]
-mod quit_signals;
 
 const TEAL: Color = Color::Rgb(44, 204, 195);
 const YELLOW: Color = Color::Rgb(250, 205, 61);
@@ -152,7 +150,7 @@ pub(crate) fn run(store: &mut Store, masked: bool) -> Result<()> {
     let mut app = Dashboard::new(masked);
     app.refresh(store)?;
     #[cfg(unix)]
-    let signals = quit_signals::QuitSignals::install()?;
+    let signals = crate::terminal_signals::TerminalSignals::install()?;
     let interrupted = || {
         #[cfg(unix)]
         {

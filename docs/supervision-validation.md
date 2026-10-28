@@ -25,6 +25,7 @@ isolation or external work. Automatic switching remains disabled.
 | `d15cdd8` | [CI 40676819389](https://github.com/shahzadlone/agent-swapper/actions/runs/40676819389) | All four jobs passed; private shared cgroup module with sealed fields, unchanged rollback/capability boundaries and both supervisor-loss cases |
 | `458329c` | [CI 40678122151](https://github.com/shahzadlone/agent-swapper/actions/runs/40678122151) | All four jobs passed; independent original standard-stream descriptors forwarded through the guardian across the six shell cases |
 | `14602ae` | [CI 40679882102](https://github.com/shahzadlone/agent-swapper/actions/runs/40679882102) | All four jobs passed; seven shell cases including actual stderr redirection and preserved stream terminal identities |
+| `06bee8e` | [CI 40682984695](https://github.com/shahzadlone/agent-swapper/actions/runs/40682984695) | All four jobs passed; seven shell cases under delegated cgroup admission, including independent target/supervisor membership checks and scope retirement |
 
 At `6d0e394`, platform annotations recorded Rust 1.98.0 and:
 
