@@ -101,7 +101,7 @@ closure and parent-only SIGKILL without privileged setup or a real provider. The
 is recorded in [Linux supervision](linux-supervision.md).
 
 The delegated Linux cgroup probe also includes a combined guardian/lease case.
-It verifies leaf capability boundaries, detached-writer cleanup after parent loss,
+It verifies leaf capability boundaries, detached-writer cleanup after parent or helper loss,
 kernel emptiness before controller retirement, continued outside work, and lease
 exclusion until retirement. This case runs only in the CI service with explicit
 delegation; compiling it locally does not establish those kernel results.

@@ -61,12 +61,37 @@ pub(super) fn fixture(role: &str, directory: &Path, path: &Path) -> io::Result<(
             admission_transport::send(&channel, admission_transport::GO, &[fd])?;
         }
         let deadline = Instant::now() + BUDGET;
-        until(deadline, || {
-            helper.try_wait().map(|status| status.map(|_| ()))
-        })?;
-        return Err(io::Error::other(
-            "guardian ended before its parent was killed",
-        ));
+        let mut killed = false;
+        loop {
+            if directory.join("kill-guardian").exists() && !killed {
+                // Failure injection uses the parent's owned Child handle.
+                helper.kill()?;
+                killed = true;
+            }
+            if let Some(status) = helper.try_wait()? {
+                require(
+                    killed && status.signal() == Some(9),
+                    "guardian ended unexpectedly",
+                )?;
+                empty_scope(&leaf, deadline)?;
+                publish(
+                    directory,
+                    "parent-empty",
+                    "guardian SIGKILL; kernel population zero; lease held",
+                )?;
+                until(deadline, || {
+                    Ok(directory.join("release-parent").exists().then_some(()))
+                })?;
+                drop(lease);
+                return publish(
+                    directory,
+                    "parent-finished",
+                    "guardian loss handled; lease released after independent retirement",
+                );
+            }
+            require(Instant::now() < deadline, "parent fixture deadline expired")?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     require(
         getpgrp() == getpid(),
@@ -103,8 +128,7 @@ pub(super) fn fixture(role: &str, directory: &Path, path: &Path) -> io::Result<(
             Err(error) => Err(error.into()),
         }
     })?;
-    control(&leaf, "cgroup.kill", OFlags::WRONLY)?.write_all(b"1\n")?;
-    until(deadline, || Ok((!populated(&leaf)?).then_some(())))?;
+    empty_scope(&leaf, deadline)?;
     publish(
         directory,
         "guardian-empty",
@@ -121,14 +145,21 @@ pub(super) fn fixture(role: &str, directory: &Path, path: &Path) -> io::Result<(
     )
 }
 
+fn empty_scope(leaf: &File, deadline: Instant) -> io::Result<()> {
+    control(leaf, "cgroup.kill", OFlags::WRONLY)?.write_all(b"1\n")?;
+    until(deadline, || Ok((!populated(leaf)?).then_some(())))
+}
+
 struct Release(PathBuf);
 impl Drop for Release {
     fn drop(&mut self) {
         let _ = publish(&self.0, "release-guardian", "fixture teardown");
+        let _ = publish(&self.0, "release-parent", "fixture teardown");
         // Best-effort bounded error cleanup. Group's own drop is a separate backstop.
         let deadline = Instant::now() + Duration::from_secs(2);
         while self.0.join("guardian-pid").exists()
             && !self.0.join("guardian-finished").exists()
+            && !self.0.join("parent-finished").exists()
             && Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(10));
@@ -153,11 +184,16 @@ fn assert_locked(directory: &Path) -> io::Result<()> {
             File::open(directory.join("lease"))?.try_lock(),
             Err(TryLockError::WouldBlock)
         ),
-        "profile lease released before guardian cleanup completed",
+        "profile lease released before supervisor cleanup completed",
     )
 }
 
 pub(super) fn run(domain: &Domain) -> io::Result<()> {
+    run_once(domain, false)?;
+    run_once(domain, true)
+}
+
+fn run_once(domain: &Domain, guardian_loss: bool) -> io::Result<()> {
     let deadline = Instant::now() + BUDGET;
     let directory = tempfile::tempdir()?;
     let mut group = domain.create()?;
@@ -203,17 +239,30 @@ pub(super) fn run(domain: &Domain) -> io::Result<()> {
         Ok(heartbeat(directory.path(), "heartbeat").filter(|value| value.2 > leaf.2 + 3))
     })?;
     assert_locked(directory.path())?;
-    // The owned, unreaped parent is a process-group leader. No metadata PID is signalled.
-    kill_process_group(Pid::from_child(&parent.0), Signal::KILL)?;
-    require(
-        until(deadline, || parent.0.try_wait())?.signal() == Some(9),
-        "fixture parent did not die from SIGKILL",
-    )?;
-    await_marker(directory.path(), "guardian-empty", deadline)?;
+    if guardian_loss {
+        publish(
+            directory.path(),
+            "kill-guardian",
+            "parent must kill its owned helper",
+        )?;
+        await_marker(directory.path(), "parent-empty", deadline)?;
+        require(
+            parent.0.try_wait()?.is_none(),
+            "parent exited before cleanup was retired",
+        )?;
+    } else {
+        // Owned and unreaped group leader: no metadata PID is signalled.
+        kill_process_group(Pid::from_child(&parent.0), Signal::KILL)?;
+        require(
+            until(deadline, || parent.0.try_wait())?.signal() == Some(9),
+            "fixture parent did not die from SIGKILL",
+        )?;
+        await_marker(directory.path(), "guardian-empty", deadline)?;
+    }
     // This is checked BEFORE the controller invokes any kill/retirement backstop.
     require(
         !populated(&group.directory)?,
-        "guardian reported empty while target scope remained populated",
+        "surviving supervisor reported empty while target scope remained populated",
     )?;
     assert_locked(directory.path())?;
     require(
@@ -222,7 +271,7 @@ pub(super) fn run(domain: &Domain) -> io::Result<()> {
     )?;
     require(
         reap(leaf.0, deadline)?.terminating_signal() == Some(9),
-        "guardian did not kill detached writer",
+        "surviving supervisor did not kill detached writer",
     )?;
     require(
         !directory.path().join("writer-exited").exists(),
@@ -236,16 +285,29 @@ pub(super) fn run(domain: &Domain) -> io::Result<()> {
     })?;
     group.retire(deadline)?;
     require(!group.path.exists(), "combined scope was not retired")?;
-    publish(
-        directory.path(),
-        "release-guardian",
-        "independent kernel checks and retirement complete",
-    )?;
-    await_marker(directory.path(), "guardian-finished", deadline)?;
-    require(
-        reap(guardian, deadline)?.exit_status() == Some(0),
-        "combined guardian failed",
-    )?;
+    if guardian_loss {
+        publish(
+            directory.path(),
+            "release-parent",
+            "independent retirement complete",
+        )?;
+        await_marker(directory.path(), "parent-finished", deadline)?;
+        require(
+            until(deadline, || parent.0.try_wait())?.success(),
+            "surviving parent failed",
+        )?;
+    } else {
+        publish(
+            directory.path(),
+            "release-guardian",
+            "independent retirement complete",
+        )?;
+        await_marker(directory.path(), "guardian-finished", deadline)?;
+        require(
+            reap(guardian, deadline)?.exit_status() == Some(0),
+            "combined guardian failed",
+        )?;
+    }
     File::open(directory.path().join("lease"))?
         .try_lock()
         .map_err(io::Error::other)?;
@@ -255,7 +317,12 @@ pub(super) fn run(domain: &Domain) -> io::Result<()> {
         "outside control cleanup failed",
     )?;
     println!(
-        "::notice title=Linux guardian cgroup::parent-group SIGKILL; detached writer killed by guardian; independent population zero before controller retirement; lease held through cleanup; outside writer survives"
+        "::notice title=Linux guardian cgroup::lost {}; detached writer killed by surviving supervisor; independent population zero before controller retirement; lease held through cleanup; outside writer survives",
+        if guardian_loss {
+            "guardian"
+        } else {
+            "parent process group"
+        }
     );
     Ok(())
 }

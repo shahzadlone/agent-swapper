@@ -118,9 +118,20 @@ controller verifies writer SIGKILL, guardian success and renewed lock acquisitio
 
 The combined case is compiled locally; actual cgroup execution requires the
 explicitly delegated CI service. It does not combine interactive PTY behavior
-with cgroup admission, exercise guardian loss, integrate the journal, or qualify
+with cgroup admission, integrate the journal, or qualify
 real providers. Its controller is an observation and failure-cleanup backstop;
 production will require its own measured reconciliation paths.
+
+The parent-loss case passed the delegated Linux CI job at `3f541db`, including
+the explicit kernel-empty, lock-exclusion and outside-writer observations.
+The reverse case now requests failure injection through the surviving parent's
+owned Child handle. After observing helper SIGKILL, that parent uses the same
+validated leaf capability to stop the writer, retains its own lease through
+independent scope retirement, and only then exits. The observer again checks
+emptiness before any controller cleanup. This helper-loss case awaits runtime
+CI evidence; the successful fixture result does not classify a production
+guardian failure as a normal run completion. Simultaneous supervisor loss and
+journal reconciliation remain open gates.
 
 ## Remaining gates
 
