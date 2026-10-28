@@ -272,10 +272,6 @@ impl LaunchPlan {
         if current.harness != self.profile.harness || current.gents != self.profile.gents {
             return Err(Error::EngineMismatch);
         }
-        #[cfg(windows)]
-        if self.containment == Some(Containment::WindowsJob) {
-            return self.execute_windows_job(store, &lease);
-        }
         let gents_session = match (self.session, &self.profile.gents) {
             (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
                 id,
@@ -285,6 +281,10 @@ impl LaunchPlan {
             (None, None) => None,
             _ => return Err(Error::InvalidEngineBinding),
         };
+        #[cfg(windows)]
+        if self.containment == Some(Containment::WindowsJob) {
+            return self.execute_windows_job(store, &lease);
+        }
         let id = store.begin_run_with_session(
             &lease,
             if self.login { "login" } else { "run" },
@@ -336,20 +336,26 @@ impl LaunchPlan {
             None,
             Some(LocalScope::WindowsJob { id: scope.id() }),
         )?;
-        let mut admission_error = None;
-        let spawned = scope.spawn(self.command(), |pid| {
-            store.observe_spawn(&id, pid).map_err(|error| {
-                admission_error = Some(error);
-                std::io::Error::other("durable process admission failed")
-            })
-        });
-        // Any spawn/wrapping error may follow partial admission or resume.
-        // Preserve intent even if kill-on-close was requested: no empty receipt.
-        let mut child = spawned.map_err(|error| admission_error.unwrap_or(Error::Io(error)))?;
-        let code = exit_code(child.wait()?);
-        let receipt = child.stop_and_observe()?;
-        store.finish_run(id, RunCompletion::LocalScopeStopped(code, receipt))?;
-        Ok(code)
+        let execute = || -> Result<i32> {
+            let mut admission_error = None;
+            let spawned = scope.spawn(self.command(), |pid| {
+                store.observe_spawn(&id, pid).map_err(|error| {
+                    admission_error = Some(error);
+                    std::io::Error::other("durable process admission failed")
+                })
+            });
+            // Any spawn/wrapping error may follow partial admission or resume.
+            // Preserve intent even if kill-on-close was requested: no empty receipt.
+            let mut child = spawned.map_err(|error| admission_error.unwrap_or(Error::Io(error)))?;
+            let code = exit_code(child.wait()?);
+            let receipt = child.stop_and_observe()?;
+            store.finish_run(id.clone(), RunCompletion::LocalScopeStopped(code, receipt))?;
+            Ok(code)
+        };
+        execute().map_err(|source| Error::SupervisionIncomplete {
+            run_id: id,
+            source: Box::new(source),
+        })
     }
 
     pub fn check_environment(&self, lookup: impl Fn(&OsStr) -> Option<OsString>) -> Result<()> {
@@ -611,11 +617,17 @@ mod tests {
         .with_containment(Some(Containment::WindowsJob))
         .unwrap();
         std::fs::remove_dir(&cwd).unwrap();
-        assert!(matches!(
-            plan.execute_prepared(&mut store),
-            Err(Error::Io(_))
-        ));
+        let error = plan.execute_prepared(&mut store).unwrap_err();
         let run = store.runs(1).unwrap().pop().unwrap();
+        assert_eq!(error.code(), "supervision_incomplete");
+        assert!(error.to_string().contains(&format!("aswp runs {}", run.id)));
+        match error {
+            Error::SupervisionIncomplete { run_id, source } => {
+                assert_eq!(run_id, run.id);
+                assert!(matches!(*source, Error::Io(_)));
+            }
+            other => panic!("unexpected failure: {other:?}"),
+        }
         assert_eq!(run.custody, crate::store::ProcessCustody::Unknown);
         assert!(run.local_scope.is_some());
         assert_eq!(run.observed_pid, None);

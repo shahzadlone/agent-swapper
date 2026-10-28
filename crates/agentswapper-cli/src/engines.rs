@@ -21,10 +21,12 @@ const ENGINES: [Engine; 2] = [
         strengths: &[
             "Familiar provider terminal, tools, hooks and permission workflow.",
             "No separate execution runtime to operate.",
+            "Optional Windows Job supervision for owned local processes.",
         ],
         limitations: &[
             "Sessions and context formats differ across brands; manual handover is available.",
             "A direct child exit does not prove descendant cleanup.",
+            "Windows supervision stops background Job descendants on CLI exit; external work is not covered.",
             "No verified quota monitoring or automatic subscription switching yet.",
         ],
     },

@@ -76,8 +76,8 @@ Gates:
   custody blocks automatic transfer, including transfers out of the engine.
 
 Windows native supervision now has an explicit experimental per-run Job option.
-The backend fixture passed at `ef6e973`; integrated launch/journal validation is
-in progress. Scope receipts remain local and do not enable automatic switching.
+The backend fixture passed at `ef6e973`; integrated launch/journal and failure
+injection passed at `6d0e394` across the CI matrix. Scope receipts remain local and do not enable automatic switching.
 See [custody evidence](custody.md). Linux and macOS native launches remain
 uncontained; real-provider isolation is unverified on every platform.
 
@@ -126,7 +126,7 @@ Implemented, unreleased:
 - validated profile aliases and opaque IDs; register, list, show, rename,
   enable, disable, and unregister without deleting vendor files;
 - SQLite append-only events and projections in one transaction, full replay
-  verification, and backed-up schema-1 through schema-4 to schema-5 migrations;
+  verification, and backed-up schema-1 through schema-5 to schema-6 migrations;
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;
@@ -143,8 +143,8 @@ Implemented, unreleased:
   pinned toolchain, Clippy, dependency policy, and cross-platform CI definition.
 
 This does not complete M0, M1, M2, or M5. Real-provider auth,
-process containment, independently verified recovery, secret
-stores, auto switching, and handover remain open. Secret-store/encryption and
+cross-platform process containment, independently verified crash recovery,
+secret stores, auto switching and managed handover remain open. Secret-store/encryption and
 IPC scaffolding are deferred until a concrete consumer exists. Local tests
 establish fixture behavior only; CI and provider matrix evidence are separate.
 

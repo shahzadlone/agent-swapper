@@ -158,8 +158,9 @@ crash cleanup. Writer lifetime locks distinguish termination from voluntary exit
 fixture observations after a crash are not durable recovery receipts. The backend passed at `ef6e973` in
 [Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40638824387/job/122651927673),
 alongside successful Linux, macOS and dependency jobs. That checkpoint verified
-the backend fixture, before launch/journal integration; integration evidence is
-tracked separately.
+the backend fixture, before launch/journal integration; integrated launch/journal and failure injection subsequently passed at `6d0e394`.
+See the [validation record](supervision-validation.md) for measured platforms,
+review findings and remaining limits.
 
 The interval between process creation and first Job assignment is not atomic.
 A hard supervisor crash there may leak a suspended process (no target code has

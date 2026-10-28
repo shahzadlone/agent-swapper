@@ -113,6 +113,14 @@ pub enum Error {
     )]
     UnsupportedContainment,
     #[error(
+        "could not confirm completion of supervised run {run_id}; inspect `aswp runs {run_id}` and verify its processes have stopped before manual recovery"
+    )]
+    SupervisionIncomplete {
+        run_id: String,
+        #[source]
+        source: Box<Error>,
+    },
+    #[error(
         "no tracked gents session for the latest run; start a new chat or explicitly select --session UUID"
     )]
     NoRecordedSession,
@@ -219,6 +227,7 @@ impl Error {
             Self::UnsupportedGentsOperation => "unsupported_gents_operation",
             Self::UnsupportedSession => "unsupported_session",
             Self::UnsupportedContainment => "unsupported_containment",
+            Self::SupervisionIncomplete { .. } => "supervision_incomplete",
             Self::NoRecordedSession => "no_recorded_session",
             Self::SessionNotResumable => "session_not_resumable",
             Self::SessionBindingChanged => "session_binding_changed",
