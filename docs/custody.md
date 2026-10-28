@@ -176,3 +176,30 @@ deadline. A separate kernel Job observer verifies that admitted processes drain
 on those error paths; no receipt is returned. Compile-fail doctests reject receipt
 construction/duplication and scope reuse after stop. The ignored Windows test
 entrypoint is re-executed by these tests with a private marker and no provider.
+
+## Linux admission transport experiment
+
+The existing cgroup spike consumes stdin for its GO handshake. A separate
+provider-free experiment checks a replacement: an unnamed Unix sequenced-packet
+socket initially occupies the shim's stdin, then delivers GO and the original
+input descriptor with SCM_RIGHTS. The shim validates the bounded packet, exact
+descriptor count and close-on-exec flag before replacing fd 0 and executing the
+fixture target. No socket pathname or secret token is needed. Descriptor passing
+preserves the open file description; see the [Linux Unix socket reference](https://man7.org/linux/man-pages/man7/unix.7.html).
+
+```sh
+cargo run --locked -p agentswapper-core --example linux_admission_transport_probe
+```
+
+Local WSL2 tests passed file-offset/EOF preservation, pipe EOF, binary raw-PTY
+input and terminal identity, and absence of admission sockets after exec.
+Missing, extra or truncated rights, malformed or oversized packets, EOF and
+timeout refused target execution. CI runs the experiment without privileged
+setup. The already-locked rustix library supplies safe descriptor and socket
+APIs; the additional net/PTY/termios features are Linux development dependencies.
+
+This is transport evidence only. It does not perform durable journal admission,
+validate cgroup membership, establish supervisor-crash cleanup, preserve a full
+interactive job-control session, or authorize a native Linux containment option.
+Those need combined tests before integration. Same-user malicious interference
+remains outside this experiment's boundary.

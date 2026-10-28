@@ -28,6 +28,10 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 2
         run: cargo +1.98.0 run --locked -p agentswapper-core --example windows_supervision_probe
+      - name: Linux admission transport probe
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        run: cargo +1.98.0 run --locked -p agentswapper-core --example linux_admission_transport_probe
       - name: Restore pinned test runner
         id: nextest-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5

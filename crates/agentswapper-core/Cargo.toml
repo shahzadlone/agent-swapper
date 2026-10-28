@@ -40,6 +40,9 @@ proptest.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation"] }
 windows = { version = "=0.62.2", features = ["Win32_System_Threading"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1", features = ["net", "pty", "termios"] }
+
 [lints]
 workspace = true
 
