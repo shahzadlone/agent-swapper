@@ -102,7 +102,13 @@ mod fixture {
             .stdin(Stdio::from(gate))
             .process_group(0)
             .spawn()?;
-        send(&channel, GO, &[io::stdin().as_fd()])?;
+        for fd in [
+            io::stdin().as_fd(),
+            io::stdout().as_fd(),
+            io::stderr().as_fd(),
+        ] {
+            send(&channel, GO, &[fd])?;
+        }
         let deadline = Instant::now() + BUDGET;
         let status = loop {
             if dir.join("kill-parent").exists() {
@@ -136,14 +142,14 @@ mod fixture {
                 && !io::stderr().is_terminal(),
             "guardian has terminal standard streams",
         )?;
-        let terminal = File::from(receive(io::stdin())?);
-        // This fixture uses one read/write PTY for all three target streams.
-        // Separate output/error descriptor transfer remains a production gate.
+        let input = File::from(receive(io::stdin())?);
+        let output = File::from(receive(io::stdin())?);
+        let diagnostic = File::from(receive(io::stdin())?);
         let mut target = Target(
             command("target", dir)?
-                .stdin(terminal.try_clone()?)
-                .stdout(terminal.try_clone()?)
-                .stderr(terminal)
+                .stdin(input)
+                .stdout(output)
+                .stderr(diagnostic)
                 .process_group(foreground.as_raw_pid())
                 .spawn()?,
         );

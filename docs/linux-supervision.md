@@ -81,7 +81,8 @@ and lease behavior, not the remaining terminal and cgroup integrations.
 the topology under an isolated interactive bash with its own controlling PTY.
 The Rust parent starts the guardian in a different process group; the guardian
 starts the target in the parent's foreground group. A transferred read/write
-PTY supplies the target's standard streams, while the guardian's own standard
+PTY supplies the target's three independently transferred standard streams,
+while the guardian's own standard
 streams remain detached from the terminal. The tests check:
 
 - Ctrl-Z returns control to bash; `fg` restores the target group and terminal
@@ -99,12 +100,14 @@ streams remain detached from the terminal. The tests check:
   explicitly recorded input EOF/EIO. Ordinary completion separately requires
   proof that the target received the exact typed `exit` line.
 
-All six scenarios passed 50 local iterations (300 scenarios). Fixture waits,
+The original six scenarios passed 50 local iterations (300 scenarios).
+Independent three-stream forwarding then passed 25 more iterations of the six
+cases (150 scenarios). Fixture waits,
 socket reads and target lifetime are bounded. The controller signals only its
 unreaped shell child during failure cleanup; it never signals metadata PIDs.
 These checks do not use a cgroup or journal, contain descendants, forward target
-exit codes through a production protocol, or transfer separate stdout/stderr
-descriptors. Signal handling and terminal topology still need combined testing
+exit codes through a production protocol, or test shell pipelines/redirected
+output in the guardian topology. Signal handling and terminal topology still need combined testing
 with admission, leases, detached writers and the real supervisor state machine.
 
 The next combined case is in the delegated cgroup probe's private
