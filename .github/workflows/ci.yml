@@ -84,7 +84,7 @@ jobs:
         timeout-minutes: 3
         shell: bash
         run: |
-          cargo +1.98.0 build --locked -p agentswapper-core --example linux_custody_probe
+          cargo +1.98.0 build --locked -p agentswapper-core --example linux_custody_probe --example linux_terminal_guardian_probe
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
           sudo -n systemd-run --wait --pipe --collect --service-type=exec \
@@ -93,7 +93,8 @@ jobs:
             --working-directory="$GITHUB_WORKSPACE" \
             --unit="aswp-custody-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             /usr/bin/python3 "$GITHUB_WORKSPACE/tools/run_delegated_custody_probe.py" \
-            "$GITHUB_WORKSPACE/target/debug/examples/linux_custody_probe"
+            "$GITHUB_WORKSPACE/target/debug/examples/linux_custody_probe" \
+            "$GITHUB_WORKSPACE/target/debug/examples/linux_terminal_guardian_probe"
       - name: Documentation examples
         run: cargo +1.98.0 test --locked --workspace --doc
 

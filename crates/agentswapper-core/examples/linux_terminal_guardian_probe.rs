@@ -1,9 +1,12 @@
 //! Private fixture topology for tools/check_linux_terminal_guardian.py.
-//! No cgroup, journal receipt or real provider; this does not establish containment.
+//! Optional explicit delegation exercises cgroup admission; no production receipt/provider.
 #![forbid(unsafe_code)]
 #[cfg(target_os = "linux")]
 #[path = "support/linux_admission_transport.rs"]
 mod admission_transport;
+#[cfg(target_os = "linux")]
+#[path = "support/linux_cgroup.rs"]
+mod cgroup;
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
@@ -20,7 +23,10 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod fixture {
-    use super::admission_transport::{GO, pair, receive, send};
+    use super::{
+        admission_transport::{GO, pair, receive, send},
+        cgroup,
+    };
     use rustix::{
         fd::AsFd,
         net::{RecvFlags, recv},
@@ -32,7 +38,10 @@ mod fixture {
         ffi::OsString,
         fs::{self, File},
         io::{self, BufRead, IsTerminal, Write},
-        os::unix::process::{CommandExt, ExitStatusExt},
+        os::unix::{
+            ffi::OsStrExt,
+            process::{CommandExt, ExitStatusExt},
+        },
         path::{Path, PathBuf},
         process::{Child, Command, ExitStatus, Stdio},
         sync::{
@@ -100,7 +109,7 @@ mod fixture {
         }
     }
 
-    fn parent(dir: &Path) -> io::Result<()> {
+    fn parent(dir: &Path, delegated: Option<&Path>) -> io::Result<()> {
         require(
             getpgrp() == getpid(),
             "shell did not create the foreground group",
@@ -117,7 +126,8 @@ mod fixture {
         let (channel, gate) = pair()?;
         // The guardian must survive an abrupt parent exit. Dropping Child must
         // not kill it; channel EOF, rather than a parent destructor, triggers cleanup.
-        let mut helper = command("guardian", dir)?
+        let mut helper = command("guardian", dir)?;
+        helper
             .arg(getpgrp().to_string())
             .arg(encode_flags([
                 io::stdin().is_terminal(),
@@ -125,8 +135,11 @@ mod fixture {
                 io::stderr().is_terminal(),
             ]))
             .stdin(Stdio::from(gate))
-            .process_group(0)
-            .spawn()?;
+            .process_group(0);
+        if let Some(delegated) = delegated {
+            helper.arg(delegated);
+        }
+        let mut helper = helper.spawn()?;
         for fd in [
             io::stdin().as_fd(),
             io::stdout().as_fd(),
@@ -152,7 +165,12 @@ mod fixture {
         require(status.success(), "guardian failed")
     }
 
-    fn guardian(dir: &Path, foreground: Pid, flags: [bool; 3]) -> io::Result<()> {
+    fn guardian(
+        dir: &Path,
+        foreground: Pid,
+        flags: [bool; 3],
+        delegated: Option<&Path>,
+    ) -> io::Result<()> {
         require(
             getpgrp() == getpid() && getpgrp() != foreground,
             "guardian group mismatch",
@@ -170,15 +188,47 @@ mod fixture {
         let input = File::from(receive(io::stdin())?);
         let output = File::from(receive(io::stdin())?);
         let diagnostic = File::from(receive(io::stdin())?);
-        let mut target = Target(
-            command("target", dir)?
-                .arg(encode_flags(flags))
-                .stdin(input)
-                .stdout(output)
-                .stderr(diagnostic)
-                .process_group(foreground.as_raw_pid())
-                .spawn()?,
-        );
+        let domain = delegated.map(cgroup::Domain::open).transpose()?;
+        let mut scope = domain.as_ref().map(cgroup::Domain::create).transpose()?;
+        if let (Some(scope), Some(domain)) = (&scope, &domain) {
+            require(
+                cgroup::contains(scope.parent(), std::process::id())?
+                    && !cgroup::contains(scope.directory(), std::process::id())?,
+                "guardian entered target scope",
+            )?;
+            publish(
+                dir,
+                "scope",
+                json!({"parentBytes":domain.path().as_os_str().as_bytes(),"pathBytes":scope.path().as_os_str().as_bytes()}),
+            )?;
+        }
+        let (grant, gate) = pair()?;
+        let mut shim = command("shim", dir)?;
+        shim.arg(encode_flags(flags))
+            .stdin(Stdio::from(gate))
+            .process_group(foreground.as_raw_pid());
+        if let Some(scope) = &scope {
+            shim.arg(scope.path());
+        }
+        let mut target = Target(shim.spawn()?);
+        if let Some(scope) = &scope {
+            cgroup::control(
+                scope.directory(),
+                "cgroup.procs",
+                rustix::fs::OFlags::WRONLY,
+            )?
+            .write_all(format!("{}\n", target.0.id()).as_bytes())?;
+            require(
+                cgroup::contains(scope.directory(), target.0.id())?,
+                "terminal shim admission did not match owned child",
+            )?;
+            publish(dir, "admitted", json!({"pid":target.0.id()}))?;
+        }
+        for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
+            send(&grant, GO, &[fd])?;
+        }
+        drop(grant);
+        drop([input, output, diagnostic]);
         publish(
             dir,
             "guardian",
@@ -186,12 +236,18 @@ mod fixture {
         )?;
         let deadline = Instant::now() + BUDGET;
         let mut parent_eof = false;
+        let mut retired = false;
         let status = loop {
             let mut unexpected = [0_u8; 1];
             match recv(io::stdin(), &mut unexpected, RecvFlags::DONTWAIT) {
                 Ok((0, _)) => {
                     parent_eof = true;
-                    target.0.kill()?;
+                    if let Some(scope) = &mut scope {
+                        scope.retire(Instant::now() + Duration::from_secs(10))?;
+                        retired = true;
+                    } else {
+                        target.0.kill()?;
+                    }
                     break target
                         .0
                         .wait_timeout(Duration::from_secs(3))?
@@ -209,7 +265,32 @@ mod fixture {
             require(Instant::now() < deadline, "guardian deadline expired")?;
             std::thread::sleep(Duration::from_millis(10));
         };
+        if let Some(scope) = &mut scope {
+            if !retired {
+                scope.retire(Instant::now() + Duration::from_secs(10))?;
+            }
+            publish(dir, "scope-finished", json!({"retired":true}))?;
+        }
         finished(dir, status, parent_eof)
+    }
+
+    fn shim(dir: &Path, flags: [bool; 3], scope: Option<&Path>) -> io::Result<()> {
+        let input = receive(io::stdin())?;
+        let output = receive(io::stdin())?;
+        let diagnostic = receive(io::stdin())?;
+        if let Some(scope) = scope {
+            let directory = cgroup::checked_directory(scope)?;
+            require(
+                cgroup::contains(&directory, std::process::id())?,
+                "terminal shim was not admitted before GO",
+            )?;
+        }
+        Err(command("target", dir)?
+            .arg(encode_flags(flags))
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::from(output))
+            .stderr(Stdio::from(diagnostic))
+            .exec())
     }
 
     fn finished(dir: &Path, status: ExitStatus, parent_eof: bool) -> io::Result<()> {
@@ -301,8 +382,12 @@ mod fixture {
                 .ok_or_else(|| io::Error::other("missing fixture directory"))?,
         );
         let result = match role.to_str() {
-            Some("parent") => parent(&dir),
+            Some("parent") => parent(&dir, args.next().map(PathBuf::from).as_deref()),
             Some("target") => target(&dir, decode_flags(args.next())?),
+            Some("shim") => {
+                let flags = decode_flags(args.next())?;
+                shim(&dir, flags, args.next().map(PathBuf::from).as_deref())
+            }
             Some("guardian") => {
                 let raw: i32 = args
                     .next()
@@ -314,6 +399,7 @@ mod fixture {
                     Pid::from_raw(raw)
                         .ok_or_else(|| io::Error::other("missing foreground group"))?,
                     decode_flags(args.next())?,
+                    args.next().map(PathBuf::from).as_deref(),
                 )
             }
             _ => Err(io::Error::other("unknown fixture role")),

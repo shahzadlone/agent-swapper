@@ -104,6 +104,9 @@ groups, suspend/resume, resize, interrupts, inherited ignored signals and termin
 closure, parent-only SIGKILL and actual stderr redirection without privileged
 setup or a real provider. The scope of each assertion
 is recorded in [Linux supervision](linux-supervision.md).
+The same controller accepts `--cgroup-root /explicit/delegated/parent` to verify
+shim admission and retirement under those terminal operations. CI supplies this
+inside its existing delegated service; the controller never provisions one.
 
 The delegated Linux cgroup probe also includes a combined guardian/lease case.
 It verifies leaf capability boundaries, detached-writer cleanup after parent or helper loss,

@@ -2,6 +2,7 @@
 """Exercise the provider-free guardian topology under a real interactive bash/PTY."""
 
 import errno
+import argparse
 import fcntl
 import json
 import os
@@ -96,12 +97,14 @@ def foreground(shell, group):
     shell.wait_for(lambda: os.tcgetpgrp(shell.master) == group)
 
 
-def run_case(binary, mode):
+def run_case(binary, mode, delegated=None):
     with tempfile.TemporaryDirectory(prefix="aswp-terminal-guardian-") as directory:
         root = Path(directory)
         shell = Shell(root)
         try:
             command = f"{shlex.quote(str(binary))} parent {shlex.quote(str(root))}"
+            if delegated is not None:
+                command += f" {shlex.quote(str(delegated))}"
             if mode == "ignored-signals":
                 command = "trap '' INT HUP; " + command + "; rc=$?; trap - INT HUP; (exit $rc)"
             if mode == "redirected-stderr":
@@ -114,6 +117,16 @@ def run_case(binary, mode):
             assert guardian["group"] == guardian["pid"] != parent["group"]
             assert target["terminals"] == [True, True, mode != "redirected-stderr"]
             assert os.tcgetpgrp(shell.master) == target["group"]
+            scope_path = None
+            if delegated is not None:
+                scope = marker(shell, root, "scope")
+                assert Path(os.fsdecode(bytes(scope["parentBytes"]))) == delegated
+                scope_path = Path(os.fsdecode(bytes(scope["pathBytes"])))
+                assert scope_path.parent == delegated and scope_path.name.startswith("aswp-probe-")
+                assert marker(shell, root, "admitted")["pid"] == target["pid"]
+                members = (scope_path / "cgroup.procs").read_text().splitlines()
+                assert str(target["pid"]) in members
+                assert str(parent["pid"]) not in members and str(guardian["pid"]) not in members
             active_settings = termios.tcgetattr(shell.master)
 
             if mode in ("suspend-resize", "group-kill"):
@@ -156,6 +169,9 @@ def run_case(binary, mode):
                 raise AssertionError(f"unknown mode: {mode}")
 
             finished = marker(shell, root, "finished")
+            if scope_path is not None:
+                assert marker(shell, root, "scope-finished") == {"retired": True}
+                assert not scope_path.exists(), "terminal scope was not retired"
             if mode == "interrupt":
                 # The guardian may observe channel EOF before target SIGINT;
                 # a targeted kill on that path is still a fixture cleanup.
@@ -194,11 +210,16 @@ def run_case(binary, mode):
 
 
 def main():
-    if sys.platform != "linux" or len(sys.argv) != 2:
-        raise SystemExit("Usage on Linux: check_linux_terminal_guardian.py PATH_TO_FIXTURE")
-    binary = Path(sys.argv[1]).resolve(strict=True)
+    if sys.platform != "linux":
+        raise SystemExit("This fixture requires Linux")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", type=Path)
+    parser.add_argument("--cgroup-root", type=Path)
+    args = parser.parse_args()
+    binary = args.binary.resolve(strict=True)
+    delegated = args.cgroup_root.absolute() if args.cgroup_root is not None else None
     for mode in ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr"]:
-        run_case(binary, mode)
+        run_case(binary, mode, delegated)
 
 
 if __name__ == "__main__":

@@ -109,7 +109,7 @@ socket reads and target lifetime are bounded. The controller signals only its
 unreaped shell child during failure cleanup; it never signals metadata PIDs.
 The expanded seven-case suite, including stderr redirection from an 80 x 24
 terminal, passed 25 iterations (175 scenarios).
-These checks do not use a cgroup or journal, contain descendants, forward target
+The default mode does not use a cgroup or journal, contain descendants, forward target
 exit codes through a production protocol, or test shell pipelines.
 Signal handling and terminal topology still need combined testing
 with admission, leases, detached writers and the real supervisor state machine.
@@ -137,6 +137,23 @@ with cgroup admission, integrate the journal, or qualify
 real providers. Its controller is an observation and failure-cleanup backstop;
 production will require its own measured reconciliation paths.
 
+The terminal fixture now has an explicit `--cgroup-root` mode. Its guardian
+creates a scope through the same shared primitive, starts a trusted shim in the
+foreground process group, verifies kernel admission, and only then transfers
+the target's original standard streams and permits exec. The shim independently
+checks membership before starting the target. The controller checks the
+admission PID against the actual target and confirms that both supervisors stay
+outside that scope. Completion requires scope retirement before the helper
+reports its result; the observer checks that the directory is gone.
+
+CI runs the seven shell cases in this mode inside the existing explicitly
+delegated service, after the detached-writer/lease cases. No local privileged
+setup is introduced. Ordinary-directory refusal and the uncontained shell suite
+pass locally; combined terminal/cgroup runtime evidence awaits this checkpoint's
+CI. The temporary admission marker models ordering only, with no production
+journal callback or scope receipt. Profile leases are measured in the separate
+combined loss-direction cases, rather than in this terminal fixture.
+
 The parent-loss case passed the delegated Linux CI job at `3f541db`, including
 the explicit kernel-empty, lock-exclusion and outside-writer observations.
 The reverse case requests failure injection through the surviving parent's
@@ -150,8 +167,13 @@ journal reconciliation remain open gates.
 
 ## Remaining gates
 
-Combine guardian failure cases with delegated cgroup cleanup and detached
-writers under the actual terminal topology, including separate standard streams.
+Qualify the combined terminal/cgroup mode, then exercise detached descendants,
+lease retention and guardian loss through that same terminal topology.
+Replace fixture lifetime limits with phase-specific startup/cleanup deadlines
+before production use; normal live sessions and suspension must not expire.
+Spawn trusted helpers before changing inherited interrupt dispositions in the
+frontend. The fixture's inherited-signal results do not qualify the current
+native-launch interrupt wrapper.
 Extend failure injection for group removal and cleanup before promoting the
 fixture code. Integrate admission and receipts with the journal only once those
 gates pass; every ambiguous result must remain unresolved. macOS needs its own

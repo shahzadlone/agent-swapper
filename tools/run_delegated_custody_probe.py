@@ -11,8 +11,8 @@ import sys
 def main():
     if sys.platform != "linux" or os.geteuid() == 0:
         raise SystemExit("The fixture requires an unprivileged Linux process")
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: run_delegated_custody_probe.py PATH_TO_PROBE")
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit("Usage: run_delegated_custody_probe.py PATH_TO_PROBE [PATH_TO_TERMINAL_FIXTURE]")
     binary = Path(sys.argv[1]).resolve(strict=True)
     entries = [
         line.removeprefix("0::")
@@ -29,7 +29,13 @@ def main():
     parent = Path("/sys/fs/cgroup").joinpath(*relative.parts[1:])
     # The Rust probe validates filesystem type, links, owner, permissions,
     # membership and writable control files before creating unique child groups.
-    return subprocess.run([str(binary), str(parent)], check=False, timeout=90).returncode
+    result = subprocess.run([str(binary), str(parent)], check=False, timeout=90).returncode
+    if result or len(sys.argv) == 2:
+        return result
+    terminal = Path(sys.argv[2]).resolve(strict=True)
+    check = Path(__file__).with_name("check_linux_terminal_guardian.py")
+    return subprocess.run([sys.executable, str(check), str(terminal), "--cgroup-root", str(parent)],
+                          check=False, timeout=90).returncode
 
 
 if __name__ == "__main__":
