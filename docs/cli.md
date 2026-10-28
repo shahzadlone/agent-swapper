@@ -83,7 +83,14 @@ from the child environment. This list is conservative and cannot
 cover every vendor version. Arguments after `--` go directly to the native
 program without shell interpolation. They can still instruct the native
 program to read or write other paths. `--executable /absolute/path` explicitly
-selects a trusted binary; Windows batch and PowerShell shims are refused.
+selects a trusted entrypoint. Unix executable scripts (including installed
+shebang entrypoints) are supported; Windows requires an `.exe`. Batch and
+PowerShell shims are refused. On Unix, the executable, symlink owners and every
+directory traversed must be owned by root or the current user. Files and direct
+entrypoint/link directories cannot be writable by other users; sticky shared
+ancestors such as `/tmp` are allowed above trusted directories. Validation runs
+when planning and again before launch. This checks permissions, not signatures,
+script interpreters or immutability against another process with the same user.
 
 Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout

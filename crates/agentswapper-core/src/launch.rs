@@ -10,6 +10,8 @@ use serde::Serialize;
 use crate::{Error, ExecutionEngine, Harness, Profile, Result, Store, store::RunCompletion};
 use uuid::Uuid;
 
+mod executable;
+
 /// The executable and environment used by execute(). Arguments are deliberately
 /// excluded from Debug and serialization: user-supplied arguments may be secrets.
 pub struct LaunchPlan {
@@ -109,20 +111,7 @@ impl LaunchPlan {
             Some(_) => return Err(Error::UnsafeExecutable),
             None => discover(profile.harness).ok_or(Error::ExecutableNotFound)?,
         };
-        let resolved = dunce::canonicalize(&program).map_err(|_| Error::ExecutableNotFound)?;
-        validate_executable(&resolved)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            for path in [&resolved, program.parent().ok_or(Error::UnsafeExecutable)?] {
-                let meta = path.metadata()?;
-                if meta.permissions().mode() & 0o022 != 0
-                    || (meta.uid() != 0 && meta.uid() != rustix::process::geteuid().as_raw())
-                {
-                    return Err(Error::UnsafeExecutable);
-                }
-            }
-        }
+        executable::validate(&program)?;
         let session = (profile.harness == Harness::Gents).then(Uuid::new_v4);
         let args = if let Some(binding) = &profile.gents {
             vec![
@@ -272,6 +261,10 @@ impl LaunchPlan {
         if current.harness != self.profile.harness || current.gents != self.profile.gents {
             return Err(Error::EngineMismatch);
         }
+        // A plan may outlive an installer update or a permissions change. Check
+        // again before recording intent or spawning, preserving the invocation
+        // path for programs whose behavior depends on their installed name.
+        executable::validate(&self.program)?;
         let gents_session = match (self.session, &self.profile.gents) {
             (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
                 id,
@@ -482,31 +475,6 @@ pub(crate) fn discover_named(name: &str) -> Option<PathBuf> {
     which::which_in(name, Some(search), std::env::current_dir().ok()?).ok()
 }
 
-fn validate_executable(path: &Path) -> Result<()> {
-    if !path.is_file() {
-        return Err(Error::UnsafeExecutable);
-    }
-    let extension = path.extension().and_then(OsStr::to_str).unwrap_or_default();
-    if ["cmd", "bat", "ps1"]
-        .iter()
-        .any(|e| extension.eq_ignore_ascii_case(e))
-    {
-        return Err(Error::UnsafeExecutable);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if path.metadata()?.permissions().mode() & 0o111 == 0 {
-            return Err(Error::UnsafeExecutable);
-        }
-    }
-    #[cfg(windows)]
-    if !extension.eq_ignore_ascii_case("exe") {
-        return Err(Error::UnsafeExecutable);
-    }
-    Ok(())
-}
-
 fn exit_code(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
@@ -525,6 +493,38 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::Harness;
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_rechecks_changed_executable_permissions_before_journaling() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let binary = temp.path().join("agent");
+        std::fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let entry = temp.path().join("entry");
+        symlink(&binary, &entry).unwrap();
+        let plan = LaunchPlan::build(
+            &store,
+            profile.clone(),
+            Some(&entry),
+            temp.path(),
+            vec![],
+            false,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::UnsafeExecutable)
+        ));
+        assert!(store.runs(1).unwrap().is_empty());
+        assert!(store.lease(profile.id).is_ok());
+    }
 
     #[test]
     fn spawn_error_keeps_original_io_kind_and_records_never_started() {

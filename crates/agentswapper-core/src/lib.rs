@@ -72,7 +72,9 @@ pub enum Error {
     InvalidHistoryLimit,
     #[error("native CLI was not found; install it or supply --executable with an absolute path")]
     ExecutableNotFound,
-    #[error("executable must be a regular native program; shell and batch shims are unsupported")]
+    #[error(
+        "executable path or permissions are unsafe; use a trusted executable (Unix scripts supported, Windows requires .exe); batch and PowerShell shims are refused"
+    )]
     UnsafeExecutable,
     #[error(
         "inherited routing or authentication variable {0} conflicts with the selected profile; unset it before launching"

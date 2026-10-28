@@ -449,6 +449,67 @@ fn symlinked_native_shim_keeps_its_invocation_name() {
         )));
 }
 
+#[cfg(unix)]
+#[test]
+fn executable_unix_script_preserves_literal_arguments_and_exit_status() {
+    use std::{
+        ffi::OsString,
+        os::unix::{
+            ffi::OsStringExt,
+            fs::{PermissionsExt, symlink},
+        },
+    };
+    let s = Sandbox::new();
+    s.add("codex", "work");
+    let script = s.temp.path().join("agent script");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf '%s\\000' \"$0\" \"$@\"\nexit 37\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let entry = s.temp.path().join("entry script");
+    symlink("agent script", &entry).unwrap();
+    let mut values: Vec<OsString> = [
+        "",
+        "a b",
+        "$(touch SHOULD_NOT_EXIST)",
+        "`whoami`",
+        "a'\"b",
+        "*",
+        "a\nb",
+        "--help",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    values.push(OsString::from_vec(vec![0xff, 0xfe, b'a']));
+    let output = s
+        .command()
+        .args(["run", "work", "--experimental-native", "--executable"])
+        .arg(&entry)
+        .arg("--")
+        .args(&values)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(37),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut expected = Vec::new();
+    for value in std::iter::once(entry.as_os_str()).chain(values.iter().map(OsString::as_os_str)) {
+        expected.extend_from_slice(value.as_encoded_bytes());
+        expected.push(0);
+    }
+    assert_eq!(output.stdout, expected);
+    assert!(!s.temp.path().join("SHOULD_NOT_EXIST").exists());
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert!(!history.to_string().contains("SHOULD_NOT_EXIST"));
+}
+
 #[test]
 fn supervisor_crash_leaves_a_durable_block_even_after_lock_release() {
     let s = Sandbox::new();
