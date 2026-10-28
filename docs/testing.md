@@ -106,6 +106,12 @@ kernel emptiness before controller retirement, continued outside work, and lease
 exclusion until retirement. This case runs only in the CI service with explicit
 delegation; compiling it locally does not establish those kernel results.
 
+`linux_admission_transport_probe` additionally checks independent standard
+streams using three transferred descriptors. Distinct file prefixes and offsets
+catch stream mixing and reopening; withholding stderr must prevent target
+execution. This is transport evidence, separate from the guardian/terminal
+topology and journal integration.
+
 The suite does not establish real-provider auth isolation, quota correctness,
 macOS Keychain behavior, Windows ACL privacy, containment of external service
 work, or refresh-token safety. Provider-free Windows fixtures establish only

@@ -34,7 +34,10 @@ ignored signal dispositions; do not blindly reset them. See Linux
 ## Executable evidence
 
 `linux_admission_transport_probe` checks descriptor transfer, original stdin
-semantics, close-on-exec and malformed admission. `linux_custody_probe` combines
+semantics, close-on-exec and malformed admission. Its independent-stream case
+transfers stdin, stdout and stderr separately, verifies shared offsets and
+distinct output contents, and rejects a partial handoff before target execution.
+`linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).
 
@@ -124,19 +127,20 @@ production will require its own measured reconciliation paths.
 
 The parent-loss case passed the delegated Linux CI job at `3f541db`, including
 the explicit kernel-empty, lock-exclusion and outside-writer observations.
-The reverse case now requests failure injection through the surviving parent's
+The reverse case requests failure injection through the surviving parent's
 owned Child handle. After observing helper SIGKILL, that parent uses the same
 validated leaf capability to stop the writer, retains its own lease through
 independent scope retirement, and only then exits. The observer again checks
-emptiness before any controller cleanup. This helper-loss case awaits runtime
-CI evidence; the successful fixture result does not classify a production
+emptiness before any controller cleanup. Both loss directions passed the
+delegated Linux CI job at `97ca8af`; that successful fixture result does not classify a production
 guardian failure as a normal run completion. Simultaneous supervisor loss and
 journal reconciliation remain open gates.
 
 ## Remaining gates
 
 Combine guardian failure cases with delegated cgroup cleanup and detached
-writers. Extend failure injection for group removal and cleanup before promoting the
+writers under the actual terminal topology, including separate standard streams.
+Extend failure injection for group removal and cleanup before promoting the
 fixture code. Integrate admission and receipts with the journal only once those
 gates pass; every ambiguous result must remain unresolved. macOS needs its own
 measured backend rather than inheriting Linux claims.

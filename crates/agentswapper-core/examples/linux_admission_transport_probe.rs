@@ -40,6 +40,8 @@ mod probe {
     use wait_timeout::ChildExt;
 
     const INPUT: &[u8] = b"stdin survives admission\0\xff\n";
+    const OUTPUT: &[u8] = b"stdout remains separate\n";
+    const DIAGNOSTIC: &[u8] = b"stderr remains separate\n";
     const BUDGET: Duration = Duration::from_secs(10);
 
     fn require(value: bool, message: &'static str) -> io::Result<()> {
@@ -99,6 +101,67 @@ mod probe {
         if mode != "pty" {
             let mut extra = [0];
             require(io::stdin().read(&mut extra)? == 0, "stdin EOF changed")?;
+        }
+        if mode == "stdio" {
+            io::stdout().write_all(OUTPUT)?;
+            io::stderr().write_all(DIAGNOSTIC)?;
+        }
+        Ok(())
+    }
+
+    fn separate_streams(complete: bool) -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut input = tempfile::tempfile()?;
+        input.write_all(b"skip:")?;
+        input.write_all(INPUT)?;
+        input.seek(io::SeekFrom::Start(5))?;
+        let mut output = tempfile::tempfile()?;
+        output.write_all(b"out-prefix:")?;
+        let mut diagnostic = tempfile::tempfile()?;
+        diagnostic.write_all(b"err-prefix:")?;
+        let (parent, child) = pair()?;
+        let mut process = Guard(
+            command("shim", "stdio", dir.path())?
+                .stdin(Stdio::from(child))
+                .spawn()?,
+        );
+        send(&parent, GO, &[input.as_fd()])?;
+        send(&parent, GO, &[output.as_fd()])?;
+        if complete {
+            send(&parent, GO, &[diagnostic.as_fd()])?;
+        }
+        drop(parent);
+        let status = process.status()?;
+        if !complete {
+            require(
+                status.code() == Some(77),
+                "missing stderr descriptor did not refuse",
+            )?;
+            return require(
+                !dir.path().join("executed").exists(),
+                "partial stdio handoff executed target",
+            );
+        }
+        require(status.success(), "separate stdio handoff failed")?;
+        require(
+            input.stream_position()? == 5 + INPUT.len() as u64,
+            "stdin offset was not shared",
+        )?;
+        for (file, prefix, expected) in [
+            (&mut output, b"out-prefix:".as_slice(), OUTPUT),
+            (&mut diagnostic, b"err-prefix:".as_slice(), DIAGNOSTIC),
+        ] {
+            require(
+                file.stream_position()? == (prefix.len() + expected.len()) as u64,
+                "output offset was not shared",
+            )?;
+            file.rewind()?;
+            let mut actual = Vec::new();
+            file.read_to_end(&mut actual)?;
+            require(
+                actual == [prefix, expected].concat(),
+                "stdout/stderr were mixed or reopened",
+            )?;
         }
         Ok(())
     }
@@ -176,6 +239,11 @@ mod probe {
         valid("pty", slave)?;
         println!(
             "file offset/EOF, pipe EOF, raw PTY bytes and terminal identity preserved; no gate socket leak"
+        );
+        separate_streams(true)?;
+        separate_streams(false)?;
+        println!(
+            "independent stdin/stdout/stderr offsets preserved; output routes remain separate; incomplete handoff refuses execution"
         );
 
         for fault in [
@@ -257,9 +325,15 @@ mod probe {
                 };
                 // The received descriptor is CLOEXEC; Command::exec duplicates
                 // it to fd 0, preserving the original open file description.
-                Err(command("target", mode, dir)?
-                    .stdin(Stdio::from(input))
-                    .exec())
+                let mut target = command("target", mode, dir)?;
+                target.stdin(Stdio::from(input));
+                if mode == "stdio" {
+                    let receive_next =
+                        || receive(io::stdin()).unwrap_or_else(|_| std::process::exit(77));
+                    target.stdout(Stdio::from(receive_next()));
+                    target.stderr(Stdio::from(receive_next()));
+                }
+                Err(target.exec())
             }
             Some("target") => target(mode, dir),
             _ => Err(io::Error::other("unknown fixture role")),

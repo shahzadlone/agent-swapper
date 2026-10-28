@@ -18,6 +18,8 @@ isolation or external work. Automatic switching remains disabled.
 | `10bee79` | [CI 40668801991](https://github.com/shahzadlone/agent-swapper/actions/runs/40668801991) | All four jobs passed; responsive profile details, stable selection/availability actions, alias-reuse refusal, and POSIX keyboard persistence with output draining |
 | `b593bb6` | [CI 40670584230](https://github.com/shahzadlone/agent-swapper/actions/runs/40670584230) | All four jobs passed; six actual bash/PTY guardian cases, including parent-only loss and terminal-close input outcomes |
 | `4b500ed` | [CI 40671213375](https://github.com/shahzadlone/agent-swapper/actions/runs/40671213375) | All four jobs passed; pinned-parent cgroup initialization, three real delegated rollback injections, and path-replacement/collision regression |
+| `3f541db` | [CI 40672213972](https://github.com/shahzadlone/agent-swapper/actions/runs/40672213972) | All four jobs passed; combined guardian/cgroup/lease cleanup after parent loss, independent empty-before-retirement observation and outside-writer survival |
+| `97ca8af` | [CI 40672950273](https://github.com/shahzadlone/agent-swapper/actions/runs/40672950273) | All four jobs passed; surviving parent cleans up after owned-helper SIGKILL and retains the lease through independently observed retirement |
 
 At `6d0e394`, platform annotations recorded Rust 1.98.0 and:
 
