@@ -115,6 +115,10 @@ is recorded in [Linux supervision](linux-supervision.md).
 The same controller accepts `--cgroup-root /explicit/delegated/parent` to verify
 shim admission and retirement under those terminal operations. CI supplies this
 inside its existing delegated service; the controller never provisions one.
+Delegated mode adds two detached-writer cases (nine total): normal root exit and
+parent-only loss must both stop a still-writing `setsid` descendant before scope
+completion. The helper reaps the adopted writer only after reaping its owned
+root, avoiding interference with the Child handle's PID authority.
 
 The delegated Linux cgroup probe also includes a combined guardian/lease case.
 It verifies leaf capability boundaries, detached-writer cleanup after parent or helper loss,

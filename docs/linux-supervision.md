@@ -149,10 +149,19 @@ reports its result; the observer checks that the directory is gone.
 CI runs the seven shell cases in this mode inside the existing explicitly
 delegated service, after the detached-writer/lease cases. No local privileged
 setup is introduced. Ordinary-directory refusal and the uncontained shell suite
-pass locally; combined terminal/cgroup runtime evidence awaits this checkpoint's
-CI. The temporary admission marker models ordering only, with no production
+pass locally; the seven combined cases passed all four CI jobs at `06bee8e`.
+The temporary admission marker models ordering only, with no production
 journal callback or scope receipt. Profile leases are measured in the separate
 combined loss-direction cases, rather than in this terminal fixture.
+
+Two additional delegated-only cases now start a heartbeat writer from the target
+and detach it with `setsid`. The observer verifies that it is still advancing
+inside the target cgroup before allowing either normal root exit or parent-only
+SIGKILL. The guardian is a subreaper; after its owned root Child is reaped and the
+scope is retired, it waits for that adopted writer and requires SIGKILL. The
+observer requires that evidence and refuses a voluntary writer exit. These two
+combined terminal/descendant cases await runtime CI at their own checkpoint;
+they are never selected by the uncontained controller mode.
 
 The parent-loss case passed the delegated Linux CI job at `3f541db`, including
 the explicit kernel-empty, lock-exclusion and outside-writer observations.

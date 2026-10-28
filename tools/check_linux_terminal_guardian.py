@@ -102,6 +102,10 @@ def run_case(binary, mode, delegated=None):
         root = Path(directory)
         shell = Shell(root)
         try:
+            detached = mode in ("detached-writer", "detached-parent-kill")
+            if detached:
+                assert delegated is not None, "detached fixture requires an explicit scope"
+                (root / "with-writer").touch()
             command = f"{shlex.quote(str(binary))} parent {shlex.quote(str(root))}"
             if delegated is not None:
                 command += f" {shlex.quote(str(delegated))}"
@@ -127,6 +131,11 @@ def run_case(binary, mode, delegated=None):
                 members = (scope_path / "cgroup.procs").read_text().splitlines()
                 assert str(target["pid"]) in members
                 assert str(parent["pid"]) not in members and str(guardian["pid"]) not in members
+                if detached:
+                    writer = marker(shell, root, "writer-heartbeat")
+                    assert writer["group"] != parent["group"]
+                    assert str(writer["pid"]) in (scope_path / "cgroup.procs").read_text().splitlines()
+                    shell.wait_for(lambda: json.loads((root / "writer-heartbeat").read_text())["tick"] > writer["tick"] + 3)
             active_settings = termios.tcgetattr(shell.master)
 
             if mode in ("suspend-resize", "group-kill"):
@@ -161,9 +170,9 @@ def run_case(binary, mode, delegated=None):
                 shell.send(b"exit\n")
             elif mode == "terminal-close":
                 shell.hangup()
-            elif mode == "parent-kill":
+            elif mode in ("parent-kill", "detached-parent-kill"):
                 (root / "kill-parent").touch()
-            elif mode == "redirected-stderr":
+            elif mode in ("redirected-stderr", "detached-writer"):
                 shell.send(b"exit\n")
             else:
                 raise AssertionError(f"unknown mode: {mode}")
@@ -172,6 +181,9 @@ def run_case(binary, mode, delegated=None):
             if scope_path is not None:
                 assert marker(shell, root, "scope-finished") == {"retired": True}
                 assert not scope_path.exists(), "terminal scope was not retired"
+                if detached:
+                    assert marker(shell, root, "writer-stopped") == {"signal": 9}
+                    assert not (root / "writer-exited").exists()
             if mode == "interrupt":
                 # The guardian may observe channel EOF before target SIGINT;
                 # a targeted kill on that path is still a fixture cleanup.
@@ -179,7 +191,7 @@ def run_case(binary, mode, delegated=None):
                 assert finished["exit"] is None
             elif mode == "group-kill":
                 assert finished["signal"] == signal.SIGKILL
-            elif mode == "parent-kill":
+            elif mode in ("parent-kill", "detached-parent-kill"):
                 assert finished["parentEof"] is True
                 assert finished["signal"] == signal.SIGKILL
             elif mode == "terminal-close":
@@ -202,7 +214,7 @@ def run_case(binary, mode, delegated=None):
                 shell.send(b"printf '__ASWP_RC=%s__\\n' \"$?\"\n")
                 # After group-kill, $? belongs to the successful kill builtin;
                 # the guardian's target SIGKILL is asserted independently above.
-                expected = 130 if mode == "interrupt" else (137 if mode == "parent-kill" else 0)
+                expected = 130 if mode == "interrupt" else (137 if mode in ("parent-kill", "detached-parent-kill") else 0)
                 shell.wait_for(lambda: f"__ASWP_RC={expected}__".encode() in shell.output)
             print(f"{mode}: pass", flush=True)
         finally:
@@ -218,8 +230,13 @@ def main():
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     delegated = args.cgroup_root.absolute() if args.cgroup_root is not None else None
-    for mode in ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr"]:
+    modes = ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr"]
+    if delegated is not None:
+        modes += ["detached-writer", "detached-parent-kill"]
+    for mode in modes:
         run_case(binary, mode, delegated)
+    if delegated is not None:
+        print("::notice title=Linux terminal cgroup::nine terminal cases: admission and retirement, redirected stderr, detached writer SIGKILL after normal root exit and parent loss", flush=True)
 
 
 if __name__ == "__main__":

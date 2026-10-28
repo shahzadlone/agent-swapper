@@ -30,7 +30,10 @@ mod fixture {
     use rustix::{
         fd::AsFd,
         net::{RecvFlags, recv},
-        process::{Pid, Signal, getpgid, getpgrp, getpid, getppid, kill_process},
+        process::{
+            Pid, Signal, WaitOptions, getpgid, getpgrp, getpid, getppid, kill_process,
+            set_child_subreaper, setsid, waitpid,
+        },
         termios::{tcgetpgrp, tcgetwinsize},
     };
     use serde_json::json;
@@ -185,11 +188,16 @@ mod fixture {
                 && !io::stderr().is_terminal(),
             "guardian has terminal standard streams",
         )?;
+        set_child_subreaper(Some(getpid()))?;
         let input = File::from(receive(io::stdin())?);
         let output = File::from(receive(io::stdin())?);
         let diagnostic = File::from(receive(io::stdin())?);
         let domain = delegated.map(cgroup::Domain::open).transpose()?;
         let mut scope = domain.as_ref().map(cgroup::Domain::create).transpose()?;
+        require(
+            scope.is_some() || !dir.join("with-writer").exists(),
+            "detached fixture requires a delegated scope",
+        )?;
         if let (Some(scope), Some(domain)) = (&scope, &domain) {
             require(
                 cgroup::contains(scope.parent(), std::process::id())?
@@ -271,6 +279,26 @@ mod fixture {
             }
             publish(dir, "scope-finished", json!({"retired":true}))?;
         }
+        if dir.join("with-writer").exists() {
+            let heartbeat: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("writer-heartbeat"))?)?;
+            let raw = heartbeat["pid"]
+                .as_i64()
+                .and_then(|pid| i32::try_from(pid).ok())
+                .filter(|pid| *pid > 1)
+                .ok_or_else(|| io::Error::other("invalid fixture writer PID"))?;
+            let pid = Pid::from_raw(raw).ok_or_else(|| io::Error::other("missing writer PID"))?;
+            // Wait only after the owned root Child has been reaped. Never signal
+            // a metadata PID or reap an owned Child behind its handle's back.
+            let (_, status) = cgroup::until(Instant::now() + Duration::from_secs(3), || {
+                Ok(waitpid(Some(pid), WaitOptions::NOHANG)?)
+            })?;
+            require(
+                status.terminating_signal() == Some(9),
+                "detached writer was not killed",
+            )?;
+            publish(dir, "writer-stopped", json!({"signal":9}))?;
+        }
         finished(dir, status, parent_eof)
     }
 
@@ -310,6 +338,22 @@ mod fixture {
         u64::from_str_radix(mask.trim(), 16).map_err(io::Error::other)
     }
 
+    fn writer(dir: &Path) -> io::Result<()> {
+        setsid()?;
+        let deadline = Instant::now() + BUDGET;
+        let mut tick = 0_u64;
+        while Instant::now() < deadline {
+            tick += 1;
+            publish(
+                dir,
+                "writer-heartbeat",
+                json!({"pid":getpid().as_raw_pid(),"group":getpgrp().as_raw_pid(),"tick":tick}),
+            )?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        publish(dir, "writer-exited", json!({"voluntary":true}))
+    }
+
     fn target(dir: &Path, expected: [bool; 3]) -> io::Result<()> {
         let actual = [
             io::stdin().is_terminal(),
@@ -336,6 +380,11 @@ mod fixture {
         });
         io::stdout().write_all(b"target stdout stays in terminal\n")?;
         io::stderr().write_all(DIAGNOSTIC)?;
+        if dir.join("with-writer").exists() {
+            // The Child handle deliberately drops without killing its process:
+            // the writer must outlive this initial CLI and be stopped by scope.
+            let _writer = command("writer", dir)?.spawn()?;
+        }
         publish(
             dir,
             "target",
@@ -384,6 +433,7 @@ mod fixture {
         let result = match role.to_str() {
             Some("parent") => parent(&dir, args.next().map(PathBuf::from).as_deref()),
             Some("target") => target(&dir, decode_flags(args.next())?),
+            Some("writer") => writer(&dir),
             Some("shim") => {
                 let flags = decode_flags(args.next())?;
                 shim(&dir, flags, args.next().map(PathBuf::from).as_deref())
