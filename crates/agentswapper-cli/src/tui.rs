@@ -38,11 +38,11 @@ impl Dashboard {
     }
 
     fn visible(&self) -> Vec<&Profile> {
+        let query = self.query.to_lowercase();
         self.profiles
             .iter()
             .filter(|p| {
-                p.alias.to_string().contains(&self.query)
-                    || p.harness.to_string().contains(&self.query)
+                p.alias.to_string().contains(&query) || p.harness.to_string().contains(&query)
             })
             .collect()
     }
@@ -91,6 +91,11 @@ pub(crate) fn run(store: &Store, masked: bool) -> Result<()> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             break;
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+            app.masked = !app.masked;
+            app.message = None;
+            continue;
+        }
         if app.searching {
             match key.code {
                 KeyCode::Esc => {
@@ -101,7 +106,9 @@ pub(crate) fn run(store: &Store, masked: bool) -> Result<()> {
                 KeyCode::Backspace => {
                     app.query.pop();
                 }
-                KeyCode::Char(c) if !c.is_control() => app.query.push(c),
+                KeyCode::Char(c) if !c.is_control() && app.query.len() + c.len_utf8() <= 128 => {
+                    app.query.push(c);
+                }
                 _ => {}
             }
             app.selected = 0;
@@ -280,9 +287,14 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         frame.render_stateful_widget(table, parts[1], &mut state);
     }
     let details = if app.help {
-        "Navigation: arrows or j/k. / search. m masks aliases.\nEnter checks launch preflight; it never starts an agent.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured, not available capacity.".to_owned()
+        "Navigation: arrows or j/k. / search. m masks labels.\nCtrl-P toggles privacy, including during search.\nEnter checks preflight; it never starts an agent.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured, not available capacity.".to_owned()
     } else if app.searching {
-        format!("Search: /{}\nEnter applies. Esc clears.", app.query)
+        let query = if app.masked && !app.query.is_empty() {
+            "[hidden]".to_owned()
+        } else {
+            agentswapper_core::terminal_text(&app.query)
+        };
+        format!("Search: /{query}\nEnter applies. Esc clears. Ctrl-P toggles privacy.")
     } else if let Some(message) = &app.message {
         message.clone()
     } else {
@@ -407,5 +419,27 @@ mod tests {
         assert!(screen.contains("Engine: gents / attached client"));
         assert!(screen.contains("Runtime may outlive chat"));
         assert!(!screen.contains("private"));
+    }
+
+    #[test]
+    fn privacy_hides_search_input_and_search_is_case_insensitive() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        store
+            .register(Harness::Claude, "private-canary".parse().unwrap())
+            .unwrap();
+        let mut app = Dashboard::new(true);
+        app.refresh(&store).unwrap();
+        app.searching = true;
+        app.query = "PRIVATE-CANARY".into();
+        assert_eq!(app.visible().len(), 1);
+        let screen = screenshot(&app, 90, 20);
+        assert!(!screen.to_lowercase().contains("private-canary"));
+        assert!(screen.contains("[hidden]"));
+        app.masked = false;
+        app.query = "\u{202e}canary".into();
+        let screen = screenshot(&app, 90, 20);
+        assert!(!screen.contains('\u{202e}'));
+        assert!(screen.contains("\\u{202e}"));
     }
 }

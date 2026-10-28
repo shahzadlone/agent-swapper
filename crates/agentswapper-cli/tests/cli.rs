@@ -116,6 +116,21 @@ fn help_and_alias_work_without_opening_storage() {
 }
 
 #[test]
+fn bare_command_in_pipes_preserves_help_and_json_without_opening_state() {
+    let s = Sandbox::new();
+    s.command()
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: aswp"));
+    s.command()
+        .arg("--json")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("developer_preview"));
+    assert!(!s.state().exists());
+}
+
+#[test]
 fn run_history_records_pid_and_custody_without_argument_contents() {
     let s = Sandbox::new();
     s.command()

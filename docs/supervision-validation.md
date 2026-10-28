@@ -10,6 +10,9 @@ isolation or external work. Automatic switching remains disabled.
 | `ef6e973` | [CI 40638824387](https://github.com/shahzadlone/agent-swapper/actions/runs/40638824387) | All four jobs passed; per-run backend probe before launch integration |
 | `533c355` | [CI 40640405391](https://github.com/shahzadlone/agent-swapper/actions/runs/40640405391) | All four jobs passed; opt-in CLI, schema 6, scoped history and migration backup/rollback |
 | `6d0e394` | [CI 40640736012](https://github.com/shahzadlone/agent-swapper/actions/runs/40640736012) | All four jobs passed; admission/wrapping/query/timeout fault injection and receipt ownership doctests |
+| `a835b29` | [CI 40641607779](https://github.com/shahzadlone/agent-swapper/actions/runs/40641607779) | All four jobs passed; review fix and incomplete-supervision diagnostics |
+| `cb44045` | [CI 40642895082](https://github.com/shahzadlone/agent-swapper/actions/runs/40642895082) | All four jobs passed; provider-free Linux stdin/PTY transport experiment |
+| `ba9495d` | [CI 40643621025](https://github.com/shahzadlone/agent-swapper/actions/runs/40643621025) | All four jobs passed; descriptor transport combined with delegated cgroup admission, cleanup and missing-membership refusal |
 
 At `6d0e394`, platform annotations recorded Rust 1.98.0 and:
 

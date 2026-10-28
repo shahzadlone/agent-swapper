@@ -5,6 +5,12 @@ share the same implementation and state. Build from source using
 [CONTRIBUTING.md](../CONTRIBUTING.md). No release or package installation is
 published yet.
 
+Run `aswp` without arguments in a terminal to open the dashboard. Piped invocations
+show help, and `aswp --json` returns the command summary without opening state.
+The current dashboard is a basic preview; the [terminal UX contract](terminal-ux.md)
+defines the complete experience being built. `Ctrl-P` toggles privacy even while
+searching; masked search input stays hidden.
+
 ## Everyday commands
 
 ```sh

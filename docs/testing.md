@@ -26,6 +26,13 @@ them to make failures explicit.
 | Handover | Authenticated encrypted round trip, wrong password and tamper refusal, chunk-boundary truncation, bounded work, concurrent exclusive output, source-link/credential-location checks, invisible-character and fence handling, AltGr/repeat input, actual HEAD drift, and broken-pipe failure |
 | Terminal | Reviewed empty and narrow/masked snapshots, literal unknown quota, very small viewport rendering |
 
+Bare-command entry is also exercised in a real POSIX PTY with temporary state and
+fictional labels: both command names, saved masking, masked search, resize/help,
+q/Ctrl-C exit and exact terminal-attribute restoration. Explicit JSON remains
+noninteractive on a terminal. Run `python tools/check_dashboard_pty.py
+target/debug/aswp target/debug/agentswapper` after building the binaries. CI runs
+this on Linux and macOS; Windows ConPTY coverage remains an open UI gate.
+
 Each integration test creates its own temporary state and fake home. Tests
 compile a small, dependency-free native fixture once per test process. No
 provider binary runs, no network login occurs, and no real credentials are

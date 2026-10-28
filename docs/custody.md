@@ -209,5 +209,8 @@ membership before releasing GO, restores pipe bytes and EOF in the exec'd worker
 then repeats the detached-writer stop/empty/retirement and surviving outside-control
 checks. A valid descriptor packet without group membership must fail for that
 specific reason before the worker starts. This combined fixture is compiled and
-its local directory-refusal tests pass; runtime cgroup evidence requires the CI
-delegation. It still does not implement a production journal or crash guardian.
+its local directory-refusal tests pass. The combined fixture passed on the
+CI delegation at `ba9495d` in [CI 40643621025](https://github.com/shahzadlone/agent-swapper/actions/runs/40643621025),
+with all four jobs successful. The standalone transport checkpoint `cb44045`
+also passed [all CI jobs](https://github.com/shahzadlone/agent-swapper/actions/runs/40642895082).
+This still does not implement a production journal or crash guardian.

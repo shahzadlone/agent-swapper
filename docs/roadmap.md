@@ -306,6 +306,12 @@ Gates:
 
 ## M5 - Full TUI parity
 
+The user's terminal reference is a minimum benchmark, not the final design.
+The [terminal UX contract](terminal-ux.md) defines the information hierarchy,
+complete flows, keyboard/privacy behavior and rendered-preview acceptance gates.
+Bare-command interactive entry is pulled forward into the developer preview;
+the full dashboard remains a separate implementation milestone.
+
 Deliverables:
 
 - Dashboard, watch page, auto view and account actions.

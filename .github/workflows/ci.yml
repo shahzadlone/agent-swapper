@@ -49,6 +49,12 @@ jobs:
           key: nextest-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.150
       - name: Tests
         run: cargo +1.98.0 nextest run --locked --workspace --profile ci
+      - name: Dashboard terminal entry and restoration
+        if: runner.os != 'Windows'
+        timeout-minutes: 2
+        run: |
+          cargo +1.98.0 build --locked -p agentswapper-cli --bins
+          python tools/check_dashboard_pty.py target/debug/aswp target/debug/agentswapper
       - name: Preferences concurrency stress
         timeout-minutes: 3
         run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(config_concurrent_setters)' --stress-count 25 --fail-fast

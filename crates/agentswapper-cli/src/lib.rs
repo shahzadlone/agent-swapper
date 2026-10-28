@@ -23,7 +23,7 @@ use serde_json::json;
 #[command(
     version,
     about = "Switch agents. Keep your place.",
-    after_help = "Developer preview: engine integrations are unverified. No automatic switching yet."
+    after_help = "Run without a command in a terminal to open the dashboard.\nDeveloper preview: engine integrations are unverified. No automatic switching yet."
 )]
 struct Cli {
     /// Private local state directory (absolute path).
@@ -222,7 +222,7 @@ pub fn main_entry(name: &'static str) -> i32 {
             return code;
         }
     };
-    let cli = match Cli::from_arg_matches(&matches) {
+    let mut cli = match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
         Err(error) => {
             let code = error.exit_code();
@@ -231,6 +231,16 @@ pub fn main_entry(name: &'static str) -> i32 {
         }
     };
     let json_mode = cli.json;
+    if cli.command.is_none()
+        && !json_mode
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+    {
+        cli.command = Some(Commands::Registry(RegistryCommands::Tui {
+            mask: false,
+            show_aliases: false,
+        }));
+    }
     let strict_stdout = matches!(
         &cli.command,
         Some(Commands::Handover {
