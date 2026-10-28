@@ -31,6 +31,6 @@ Enter checks launch readiness. e changes availability for future launches.
 Account identity and capacity require provider verification.
 
 
- j/k move  / search  Enter preflight
- e enable/disable  m mask  r refresh
- ? help  Esc back  q quit
+ a add  e enable/disable  / search
+ j/k move  Enter preflight  m mask
+ r refresh  ? help  Esc back  q quit

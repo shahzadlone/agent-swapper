@@ -13,6 +13,7 @@ use ratatui::{
 
 #[cfg(test)]
 mod preview;
+mod setup;
 
 const TEAL: Color = Color::Rgb(44, 204, 195);
 const YELLOW: Color = Color::Rgb(250, 205, 61);
@@ -31,6 +32,7 @@ struct Dashboard {
     pending: usize,
     blocked_aliases: Vec<String>,
     privacy_ids: Vec<ProfileId>,
+    setup: Option<setup::Setup>,
 }
 
 impl Dashboard {
@@ -199,6 +201,47 @@ fn run_terminal(
             app.message = None;
             continue;
         }
+        if let Some(setup) = &mut app.setup {
+            let size = terminal.size()?;
+            let cancel = key.code == KeyCode::Esc
+                || (key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('g'));
+            if (size.width < 40 || size.height < 14) && !cancel {
+                continue;
+            }
+            let area = ratatui::layout::Rect::new(0, 3, size.width, size.height.saturating_sub(6));
+            match setup.key(key, store, area, app.masked) {
+                setup::Outcome::Continue => {}
+                setup::Outcome::Cancel => {
+                    app.setup = None;
+                    app.message = Some("Setup closed.".to_owned());
+                }
+                setup::Outcome::Created(profile) => {
+                    app.setup = None;
+                    app.query.clear();
+                    app.message = Some(match app.refresh(store) {
+                        Ok(()) => {
+                            app.preserve_selection(Some(profile.id));
+                            if profile.harness == agentswapper_core::Harness::Gents {
+                                "Profile registered. Start its dedicated gents runtime before preflight. Login and permissions belong to that runtime.".to_owned()
+                            } else if app.masked {
+                                "Profile registered. Login comes next. Unmask to see the login command.".to_owned()
+                            } else {
+                                format!(
+                                    "Profile registered. Login comes next: aswp login {} --experimental-native",
+                                    profile.alias
+                                )
+                            }
+                        }
+                        Err(error) => format!(
+                            "Profile registered; refresh failed ({}). Press r to retry.",
+                            error.code()
+                        ),
+                    });
+                }
+            }
+            continue;
+        }
         if app.help {
             match key.code {
                 KeyCode::Char('q') => break,
@@ -248,6 +291,10 @@ fn run_terminal(
                 app.message = None;
             }
             KeyCode::Char('?') => app.help = !app.help,
+            KeyCode::Char('a') => {
+                app.setup = Some(setup::Setup::default());
+                app.message = None;
+            }
             KeyCode::Char('e') => app.toggle_enabled(store),
             KeyCode::Char('r') => {
                 app.message = Some(match app.refresh(store) {
@@ -297,8 +344,14 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
     );
     if area.width < 40 || area.height < 14 {
         frame.render_widget(
-            Paragraph::new("aswp\nEnlarge to 40 x 14, or use:\naswp list\nq quit")
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(if app.setup.is_some() {
+                "aswp\nEnlarge to 40 x 14.\nCtrl-G cancels setup.\nCtrl-C quits."
+            } else if app.searching {
+                "aswp\nEnlarge to 40 x 14.\nEsc clears search.\nCtrl-C quits."
+            } else {
+                "aswp\nEnlarge to 40 x 14, or use:\naswp list\nq quit"
+            })
+            .wrap(Wrap { trim: true }),
             area,
         );
         return;
@@ -335,6 +388,14 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         ]),
         parts[0],
     );
+    if let Some(setup) = &app.setup {
+        setup.draw(frame, parts[1].union(parts[2]), app.masked);
+        frame.render_widget(
+            Paragraph::new(setup.footer()).style(Style::default().fg(TEAL)),
+            parts[3],
+        );
+        return;
+    }
     let body = Layout::horizontal(if wide {
         vec![Constraint::Percentage(55), Constraint::Percentage(45)]
     } else {
@@ -344,7 +405,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
     let profiles = app.visible();
     if profiles.is_empty() {
         let text = if app.profiles.is_empty() {
-            "No profiles yet.\nStart here: aswp profile add claude --alias work\nRegistration does not log in or change your global account."
+            "No profiles yet.\nPress a to add your first profile.\nEach profile gets a private home; login comes next."
         } else {
             "No profiles match this search. Press Esc to clear it."
         };
@@ -418,7 +479,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         );
     }
     let details = if app.help {
-        "Navigation: arrows or j/k. / search.\nEnter checks preflight; it never starts an agent.\ne enables/disables future launches.\nCtrl-P toggles privacy, even during search.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured.".to_owned()
+        "Navigation: arrows or j/k. / search. a adds a profile.\nEnter checks preflight; it never starts an agent.\ne enables/disables future launches.\nCtrl-P toggles privacy, including setup and search.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured.".to_owned()
     } else if app.searching {
         let query = if app.masked && !app.query.is_empty() {
             "[hidden]".to_owned()
@@ -459,7 +520,13 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         parts[2],
     );
     frame.render_widget(
-        Paragraph::new(" j/k move  / search  Enter preflight\n e enable/disable  m mask  r refresh\n ? help  Esc back  q quit")
+        Paragraph::new(if app.help {
+            " Esc close help  Ctrl-P privacy\n q / Ctrl-C quit"
+        } else if app.searching {
+            " Enter apply  Backspace edit  Esc clear\n Ctrl-P privacy  Ctrl-C quit"
+        } else {
+            " a add  e enable/disable  / search\n j/k move  Enter preflight  m mask\n r refresh  ? help  Esc back  q quit"
+        })
             .style(Style::default().fg(TEAL)),
         parts[3],
     );
@@ -488,11 +555,155 @@ mod tests {
             .join("\n")
     }
 
+    fn setup_key(app: &mut Dashboard, store: &mut Store, code: KeyCode) -> setup::Outcome {
+        app.setup.as_mut().unwrap().key(
+            crossterm::event::KeyEvent::new(code, KeyModifiers::NONE),
+            store,
+            ratatui::layout::Rect::new(0, 3, 100, 26),
+            app.masked,
+        )
+    }
+
+    fn setup_text(app: &mut Dashboard, store: &mut Store, text: &str) {
+        for c in text.chars() {
+            setup_key(app, store, KeyCode::Char(c));
+        }
+    }
+
+    #[test]
+    fn setup_registers_each_native_agent_only_after_review_and_keeps_cancellation_clean() {
+        for (index, harness) in Harness::NATIVE.into_iter().enumerate() {
+            let temp = tempfile::tempdir().unwrap();
+            let mut store = Store::open(&temp.path().join("state")).unwrap();
+            let mut app = Dashboard::new(false);
+            app.setup = Some(setup::Setup::default());
+            if index == 0 {
+                preview::export(&app, "setup-agents", 100, 32);
+            }
+            for _ in 0..index {
+                setup_key(&mut app, &mut store, KeyCode::Down);
+            }
+            setup_key(&mut app, &mut store, KeyCode::Enter);
+            setup_text(&mut app, &mut store, "quiet-work");
+            if index == 0 {
+                preview::export(&app, "setup-label", 80, 24);
+            }
+            setup_key(&mut app, &mut store, KeyCode::Enter);
+            assert!(screenshot(&app, 80, 24).contains("Review profile"));
+            assert!(store.profiles().unwrap().is_empty());
+            assert!(store.runs(1).unwrap().is_empty());
+            // Back preserves the label, and returning to review still does not
+            // mutate the registry or touch provider configuration.
+            setup_key(&mut app, &mut store, KeyCode::Esc);
+            assert!(screenshot(&app, 80, 24).contains("quiet-work"));
+            setup_key(&mut app, &mut store, KeyCode::Enter);
+            if index == 0 {
+                preview::export(&app, "setup-native-review", 100, 32);
+                insta::assert_snapshot!("setup_native_review", screenshot(&app, 80, 24));
+            }
+            let setup::Outcome::Created(profile) = setup_key(&mut app, &mut store, KeyCode::Enter)
+            else {
+                panic!("review did not register the profile");
+            };
+            assert_eq!(profile.harness, harness);
+            assert_eq!(store.find(&profile.alias).unwrap().id, profile.id);
+            assert_eq!(
+                std::fs::read_dir(store.profile_home(profile.id).unwrap())
+                    .unwrap()
+                    .count(),
+                0
+            );
+            assert!(store.runs(1).unwrap().is_empty());
+            // A duplicate remains editable; cancellation never removes the
+            // already registered profile or replaces its native home.
+            app.setup = Some(setup::Setup::default());
+            setup_key(&mut app, &mut store, KeyCode::Enter);
+            setup_text(&mut app, &mut store, "quiet-work");
+            setup_key(&mut app, &mut store, KeyCode::Enter);
+            assert!(matches!(
+                setup_key(&mut app, &mut store, KeyCode::Enter),
+                setup::Outcome::Continue
+            ));
+            assert!(screenshot(&app, 100, 32).contains("alias already registered"));
+            let cancelled = app.setup.as_mut().unwrap().key(
+                crossterm::event::KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+                &mut store,
+                ratatui::layout::Rect::new(0, 3, 100, 26),
+                false,
+            );
+            assert!(matches!(cancelled, setup::Outcome::Cancel));
+            assert_eq!(store.profiles().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn gents_setup_refuses_external_routes_and_masks_every_review_field() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let mut app = Dashboard::new(false);
+        app.setup = Some(setup::Setup::default());
+        for _ in 0..3 {
+            setup_key(&mut app, &mut store, KeyCode::Down);
+        }
+        setup_key(&mut app, &mut store, KeyCode::Enter);
+        setup_key(&mut app, &mut store, KeyCode::Enter);
+        assert!(screenshot(&app, 80, 24).contains("alias must start"));
+        assert!(store.profiles().unwrap().is_empty());
+        setup_text(&mut app, &mut store, "private-canary");
+        setup_key(&mut app, &mut store, KeyCode::Enter);
+        setup_text(&mut app, &mut store, "agent-canary");
+        setup_key(&mut app, &mut store, KeyCode::Enter);
+        setup_text(&mut app, &mut store, "0.0.0.0:9191");
+        setup_key(&mut app, &mut store, KeyCode::Enter);
+        let error = screenshot(&app, 100, 32);
+        assert!(error.contains("Local runtime address"));
+        assert!(store.profiles().unwrap().is_empty());
+        preview::export(&app, "setup-invalid-route", 100, 32);
+        for _ in 0.."0.0.0.0:9191".len() {
+            setup_key(&mut app, &mut store, KeyCode::Backspace);
+        }
+        setup_text(&mut app, &mut store, "[::1]:9191");
+        setup_key(&mut app, &mut store, KeyCode::Enter);
+        assert!(screenshot(&app, 100, 32).contains("Review profile"));
+        app.masked = true;
+        for (width, height) in [(100, 32), (80, 24), (44, 17), (40, 14)] {
+            let screen = screenshot(&app, width, height);
+            for canary in ["private-canary", "agent-canary", "[::1]", "9191"] {
+                assert!(!screen.contains(canary));
+            }
+            assert!(screen.contains("Ctrl-P privacy"));
+            preview::export(&app, &format!("setup-private-{width}"), width, height);
+        }
+        insta::assert_snapshot!("setup_private_review", screenshot(&app, 44, 17));
+        let small = ratatui::layout::Rect::new(0, 3, 40, 8);
+        for _ in 0..10 {
+            app.setup.as_mut().unwrap().key(
+                crossterm::event::KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+                &mut store,
+                small,
+                true,
+            );
+        }
+        assert!(screenshot(&app, 40, 14).contains("no agent will start"));
+        // Resizing back up clamps the rendered scroll; a following PageUp must
+        // work from that visible offset rather than an old oversized value.
+        setup_key(&mut app, &mut store, KeyCode::PageUp);
+        assert!(screenshot(&app, 100, 32).contains("Agent ID:"));
+        let setup::Outcome::Created(profile) = setup_key(&mut app, &mut store, KeyCode::Enter)
+        else {
+            panic!("gents profile not registered");
+        };
+        let binding = store.find(&profile.alias).unwrap().gents.unwrap();
+        assert_eq!(binding.address().to_string(), "[::1]:9191");
+        assert_eq!(binding.agent().to_string(), "agent-canary");
+        assert!(store.runs(1).unwrap().is_empty());
+    }
+
     #[test]
     fn empty_dashboard_has_an_action_and_no_capacity_claim() {
         let screen = screenshot(&Dashboard::default(), 90, 20);
         preview::export(&Dashboard::default(), "empty", 90, 20);
-        assert!(screen.contains("aswp profile add claude"));
+        assert!(screen.contains("Press a to add your first profile"));
         assert!(screen.contains("Quota: unknown"));
         insta::assert_snapshot!("empty_dashboard", screen);
     }

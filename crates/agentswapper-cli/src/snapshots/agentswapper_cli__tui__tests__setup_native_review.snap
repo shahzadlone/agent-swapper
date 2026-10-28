@@ -1,0 +1,28 @@
+---
+source: crates/agentswapper-cli/src/tui.rs
+expression: "screenshot(&app, 80, 24)"
+---
+ aswp  / AgentSwapper  developer preview
+ 0 profiles / 0 unresolved / privacy off
+
+ Add profile ───────────────────────────────────────────────────────────────────
+ 3 / 3  Review profile
+ Agent:   claude
+ Profile: quiet-work
+
+ A private home will be created.
+ Login and isolation: unverified.
+
+ Enter registers; no agent will start.
+
+
+
+
+
+
+
+ You can go back or cancel at any step.
+
+ Enter create profile  Esc back
+ Ctrl-P privacy  Ctrl-G cancel
+ PgUp/PgDn scroll  Ctrl-C quit

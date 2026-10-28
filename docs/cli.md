@@ -9,7 +9,10 @@ Run `aswp` without arguments in a terminal to open the dashboard. Piped invocati
 show help, and `aswp --json` returns the command summary without opening state.
 The current dashboard is a basic preview; the [terminal UX contract](terminal-ux.md)
 defines the complete experience being built. `Ctrl-P` toggles privacy even while
-searching; masked search input stays hidden.
+searching or adding a profile; masked input stays hidden. Press `a` to register
+a native or gents profile through the dashboard. Setup reviews the details before
+creation, supports `Esc` to go back and `Ctrl-G` to cancel, and uses Page Up/Down
+to scroll on small terminals. Registration does not log in or start an agent.
 
 ## Everyday commands
 

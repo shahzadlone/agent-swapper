@@ -139,7 +139,8 @@ Implemented, unreleased:
   with locked atomic updates and explicit flag precedence;
 - storage/discovery doctor and a searchable, maskable Ratatui dashboard with
   bare-command entry, responsive details, launch preflight and keyboard
-  availability changes that follow stable profile IDs;
+  availability changes that follow stable profile IDs, and native/gents profile
+  registration with review, privacy masking and cancellation;
 - fixture subprocess/crash tests, proptest, terminal snapshots, nextest config,
   pinned toolchain, Clippy, dependency policy, and cross-platform CI definition.
 

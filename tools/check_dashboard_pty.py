@@ -163,6 +163,70 @@ def check_signal(binary, quit_signal, close_peer=False):
             os.close(slave)
 
 
+def check_setup(binary):
+    with tempfile.TemporaryDirectory(prefix="aswp-dashboard-setup-") as directory:
+        root = Path(directory)
+        env = {"HOME": str(root), "TERM": "xterm-256color", "LANG": "C.UTF-8"}
+        command = [str(binary), "--state-dir", str(root / "state")]
+        subprocess.run(command + ["config", "set", "ui.mask", "true"],
+                       env=env, check=True, capture_output=True, timeout=10)
+        master, slave = pty.openpty()
+        before = termios.tcgetattr(slave)
+        process = None
+        output = bytearray()
+
+        def await_profile(alias):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                read_available(master, output)
+                result = subprocess.run(command + ["profile", "show", alias, "--json"],
+                                        env=env, capture_output=True, timeout=10)
+                if result.returncode == 0:
+                    return json.loads(result.stdout)["data"]["profile"]
+                assert process.poll() is None, "dashboard exited during setup"
+                time.sleep(0.03)
+            raise AssertionError("dashboard setup did not persist the fixture profile")
+
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
+                                       cwd=root, env=env)
+            drain(master, process, output, b"Press a")
+            # Toggle privacy in the engine chooser before typing any labels;
+            # then use q and e as ordinary characters in the setup input.
+            os.write(master, b"a\x10\x10\rquiet-canary\r\r")
+            profile = await_profile("quiet-canary")
+            assert profile["harness"] == "claude"
+            assert profile["enabled"] is True
+            assert not (root / "state" / "profiles" / profile["id"] / "fixture-owned.txt").exists()
+            os.write(master, b"ajjj\rrelay-canary\ragent-canary\r127.0.0.1:9191\r")
+            # Resize while review is open; PageDown must not submit it.
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 17, 44, 0, 0))
+            os.write(master, b"\x1b[6~\r")
+            profile = await_profile("relay-canary")
+            assert profile["harness"] == "gents"
+            assert profile["gents"]["address"] == "127.0.0.1:9191"
+            assert profile["gents"]["agent"] == "agent-canary"
+            # A fresh draft can be abandoned without affecting either profile.
+            os.write(master, b"a\rdo-not-register\x07")
+            os.write(master, b"q")
+            drain(master, process, output)
+            assert process.wait(timeout=2) == 0
+            result = subprocess.run(command + ["profile", "show", "do-not-register", "--json"],
+                                    env=env, capture_output=True, timeout=10)
+            assert result.returncode != 0, "cancelled draft was registered"
+            for canary in [b"quiet-canary", b"relay-canary", b"agent-canary", b"do-not-register", b"127.0.0.1:9191"]:
+                assert canary not in output, "masked setup leaked a fixture field"
+            assert termios.tcgetattr(slave) == before, "setup exit left terminal settings modified"
+            assert b"\x1b[?1049l" in output
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+            os.close(slave)
+
+
 def main():
     if os.name != "posix" or len(sys.argv) != 3:
         raise SystemExit("Usage on POSIX: check_dashboard_pty.py PATH_TO_ASWP PATH_TO_AGENTSWAPPER")
@@ -171,7 +235,8 @@ def main():
     for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
         check_signal(Path(sys.argv[1]).resolve(strict=True), quit_signal)
     check_signal(Path(sys.argv[1]).resolve(strict=True), signal.SIGHUP, close_peer=True)
-    print("Bare dashboard, privacy, availability, resize, keyboard/signal exits and terminal restoration: pass")
+    check_setup(Path(sys.argv[1]).resolve(strict=True))
+    print("Bare dashboard, privacy, availability, native/gents setup, cancellation, resize, keyboard/signal exits and terminal restoration: pass")
 
 
 if __name__ == "__main__":

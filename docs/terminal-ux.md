@@ -5,7 +5,7 @@ and operate than the reference supplied by the user. Visual polish and working
 flows are release requirements. The existing dashboard is a basic developer
 preview and does not meet the final bar yet. It now includes responsive profile
 details, keyboard availability changes, stable identity selection and privacy
-labels, and local previews from the actual renderer. Live usage, in-interface
+labels, in-interface profile registration, and local previews from the actual renderer. Live usage, in-interface
 launch/continuity flows and the full action set remain open.
 POSIX dashboard exits now restore the terminal before re-raising external
 interrupt, termination and hangup signals; actual PTY checks cover those paths.

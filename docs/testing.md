@@ -1,5 +1,12 @@
 # Testing and quality gates
 
+The dashboard setup checks cover native and gents registration, invalid local
+routes, duplicate aliases, cancellation, masked fields and narrow-screen review.
+The POSIX PTY check exercises both setup paths with fictional values and checks
+that cancellation and terminal restoration work through the real entrypoint.
+
+Launcher-path CI passed at `7909957` ([run 40695586176](https://github.com/shahzadlone/agent-swapper/actions/runs/40695586176)); Kimi routing checks passed at `83a6311` ([run 40696109744](https://github.com/shahzadlone/agent-swapper/actions/runs/40696109744)). A focused Opus 5.5 launcher review timed out without a response; it is not review evidence.
+
 The workspace uses Rust's built-in test harness plus nextest, proptest,
 assert_cmd, tempfile, and insta with Ratatui TestBackend. The compiler and
 minimum supported Rust version are both pinned to 1.98.0. Our crates forbid

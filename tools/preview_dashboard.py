@@ -23,7 +23,9 @@ def main():
     subprocess.run(["cargo", "test", "--locked", "-p", "agentswapper-cli",
                     "--lib", "tui::tests"], cwd=repo, env=env, check=True)
     names = ["overview", "overview-80", "overview-160", "overview-44",
-             "unresolved", "gents", "privacy-search", "privacy-narrow", "empty"]
+             "unresolved", "gents", "privacy-search", "privacy-narrow", "empty",
+             "setup-agents", "setup-label", "setup-native-review", "setup-invalid-route",
+             "setup-private-100", "setup-private-80", "setup-private-44", "setup-private-40"]
     links = "".join(f'<li><a href="{name}.html">{name.replace("-", " ")}</a></li>'
                     for name in names)
     destination.joinpath("index.html").write_text(

@@ -7,8 +7,8 @@ expression: screen
 
  Profiles ────────────────────────────────────────────────────────────────────────────────
  No profiles yet.
- Start here: aswp profile add claude --alias work
- Registration does not log in or change your global account.
+ Press a to add your first profile.
+ Each profile gets a private home; login comes next.
 
 
 
@@ -19,6 +19,6 @@ Register a profile to get started.
 Quota: unknown until measured.
 
 
- j/k move  / search  Enter preflight
- e enable/disable  m mask  r refresh
- ? help  Esc back  q quit
+ a add  e enable/disable  / search
+ j/k move  Enter preflight  m mask
+ r refresh  ? help  Esc back  q quit

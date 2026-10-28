@@ -1,0 +1,21 @@
+---
+source: crates/agentswapper-cli/src/tui.rs
+expression: "screenshot(&app, 44, 17)"
+---
+ aswp  / AgentSwapper  developer preview
+ 0 profiles / 0 unresolved / privacy on
+
+ Add profile ───────────────────────────────
+ 5 / 5  Review profile
+ Agent:   gents
+ Profile: [hidden]
+ Agent ID: [hidden]
+ Runtime:  [hidden]
+
+ Runtime and work: unverified.
+
+ You can go back or cancel at any step.
+
+ Enter create profile  Esc back
+ Ctrl-P privacy  Ctrl-G cancel
+ PgUp/PgDn scroll  Ctrl-C quit
