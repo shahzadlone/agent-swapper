@@ -138,7 +138,8 @@ Implemented, unreleased:
 - typed `config list/get/set/unset/path` for history length and initial dashboard masking,
   with locked atomic updates and explicit flag precedence;
 - storage/discovery doctor and a searchable, maskable Ratatui dashboard with
-  launch preflight;
+  bare-command entry, responsive details, launch preflight and keyboard
+  availability changes that follow stable profile IDs;
 - fixture subprocess/crash tests, proptest, terminal snapshots, nextest config,
   pinned toolchain, Clippy, dependency policy, and cross-platform CI definition.
 

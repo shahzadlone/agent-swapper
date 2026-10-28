@@ -3,7 +3,10 @@
 The terminal experience must make account and agent switching easier to understand
 and operate than the reference supplied by the user. Visual polish and working
 flows are release requirements. The existing dashboard is a basic developer
-preview and does not meet the final bar yet.
+preview and does not meet the final bar yet. It now includes responsive profile
+details, keyboard availability changes, stable identity selection and privacy
+labels, and local previews from the actual renderer. Live usage, in-interface
+launch/continuity flows and the full action set remain open.
 
 ## Entry and visual direction
 

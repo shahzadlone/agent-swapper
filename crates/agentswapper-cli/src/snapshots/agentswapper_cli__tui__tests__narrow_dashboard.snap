@@ -2,20 +2,20 @@
 source: crates/agentswapper-cli/src/tui.rs
 expression: screen
 ---
- aswp  / AgentSwapper
- Local profiles / developer preview
+ aswp  / AgentSwapper  developer preview
+ 1 profile / 0 unresolved / privacy on
 
  Profiles ──────────────────────────────────
-  Profile                 Harness  Quota
-> profile-1               codex    unknown
+  Profile                Agent    State
+> profile-1              codex    enabled
 
 
 
-
-────────────────────────────────────────────
+ Next step ─────────────────────────────────
 Selected: codex | enabled
-Account: unverified
+Account and isolation: unverified
 Quota: unknown / no auto switch
-Unfinished runs: 0
+
  j/k move  / search  Enter preflight
- m mask  r refresh  ? help  q quit
+ e enable/disable  m mask  r refresh
+ ? help  Esc back  q quit

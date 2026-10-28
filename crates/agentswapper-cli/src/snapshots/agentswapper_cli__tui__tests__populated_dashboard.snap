@@ -1,0 +1,36 @@
+---
+source: crates/agentswapper-cli/src/tui.rs
+expression: wide
+---
+ aswp  / AgentSwapper  developer preview
+ 3 profiles / 1 unresolved / privacy off
+
+ Profiles ─────────────────────────────────────────────┌ Selected profile ──────────────────────────
+  Profile                           Agent    State     │ build
+> build                             codex    enabled   │ codex / enabled
+                                                       │ Availability: enabled
+  research                          kimi     disabled  │
+                                                       │ Engine: native CLI
+  studio                            claude   unresolved│ Workspace + permissions: native agent
+                                                       │ Profile isolation: unverified
+                                                       │
+                                                       │ Account: unverified
+                                                       │ Quota: unknown / not measured
+                                                       │ Automatic switching: not enabled
+                                                       │
+                                                       │ Enter checks launch readiness.
+                                                       │
+                                                       │
+                                                       │
+                                                       │
+                                                       │
+                                                       │
+                                                       │
+ Next step ─────────────────────────────────────────────────────────────────────────────────────────
+Enter checks launch readiness. e changes availability for future launches.
+Account identity and capacity require provider verification.
+
+
+ j/k move  / search  Enter preflight
+ e enable/disable  m mask  r refresh
+ ? help  Esc back  q quit

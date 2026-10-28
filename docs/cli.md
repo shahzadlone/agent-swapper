@@ -197,9 +197,17 @@ storage, precedence, JSON output and recovery.
 The dashboard follows the selected Night Shift palette. Arrows or `j`/`k`
 navigate, `/` searches, `m` masks aliases, `r` refreshes, `?` shows help, and
 `q` or Ctrl-C exits. Enter shows launch preflight; it does not start an agent.
-Narrow terminals keep profile, harness, and unknown quota visible, with the
-selected profile's enabled state below. Terminals smaller than 34 x 10 receive
-a compact fallback. Plain commands remain available without a terminal.
+`e` enables or disables the selected profile for future launches; it does not
+stop existing work. Actions follow stable profile IDs, so renaming or reusing an
+alias from another terminal cannot redirect an availability change.
+
+Wide terminals show selected-profile details beside the list. Narrow terminals
+keep profile, agent and availability state visible, with unmeasured quota in the
+details below. Refresh preserves selection by ID. Masked labels remain stable
+across filtering and renaming; Ctrl-P toggles privacy even during search or help.
+Errors are escaped, with identifiers hidden in privacy mode. Terminals smaller
+than 40 x 14 receive a compact fallback. Plain commands remain available without
+a terminal.
 
 ## Output and state
 

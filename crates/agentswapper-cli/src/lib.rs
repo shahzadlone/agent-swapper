@@ -654,7 +654,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
                     .load()?
                     .ui_mask()
             };
-            tui::run(&store, masked)?;
+            tui::run(&mut store, masked)?;
         }
     }
     Ok(0)

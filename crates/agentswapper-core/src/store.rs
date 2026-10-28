@@ -290,11 +290,14 @@ impl Store {
 
     pub fn enable(&mut self, alias: &Alias, enabled: bool) -> Result<Profile> {
         let profile = self.find(alias)?;
-        self.record(Event::Enabled {
-            id: profile.id,
-            enabled,
-        })?;
+        self.set_enabled(profile.id, enabled)?;
         self.find(alias)
+    }
+
+    /// Change availability by stable identity, even if an alias was renamed or reused.
+    /// A retired identity is refused rather than resolving its former alias.
+    pub fn set_enabled(&mut self, id: ProfileId, enabled: bool) -> Result<()> {
+        self.record(Event::Enabled { id, enabled })
     }
 
     /// Unregister metadata and mappings. Native credential files are retained.

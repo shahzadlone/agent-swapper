@@ -67,6 +67,13 @@ fallback. nextest does not run doctests, which is why CI has a separate step.
 Never enable snapshot auto-update in CI. Review `.snap.new` files locally and
 accept only intentional UX changes.
 
+`python tools/preview_dashboard.py` renders the real dashboard with fictional
+profiles and serves its wide, narrow, empty, unresolved, gents and privacy states
+at `http://localhost:4317/terminal/`. Use `--no-serve` to export only. These local
+artifacts do not change snapshots, load real accounts or represent future usage
+and switching flows. `check_dashboard_pty.py` additionally tests an availability
+change through the keyboard and reads back its persisted state.
+
 The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
 Windows, including Clippy and doctests. Handover changes run through the same
 matrix; check the [workflow](https://github.com/shahzadlone/agent-swapper/actions/workflows/ci.yml)

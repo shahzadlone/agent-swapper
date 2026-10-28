@@ -2,23 +2,23 @@
 source: crates/agentswapper-cli/src/tui.rs
 expression: screen
 ---
- aswp  / AgentSwapper
- Switch agents. Keep your place.  [developer preview]
+ aswp  / AgentSwapper  developer preview
+ 0 profiles / 0 unresolved / privacy off
 
  Profiles ────────────────────────────────────────────────────────────────────────────────
-No profiles yet.
-Start here: aswp profile add claude --alias work
-Registration does not log in or change your global account.
+ No profiles yet.
+ Start here: aswp profile add claude --alias work
+ Registration does not log in or change your global account.
 
 
 
 
 
+ Next step ───────────────────────────────────────────────────────────────────────────────
+Register a profile to get started.
+Quota: unknown until measured.
 
-──────────────────────────────────────────────────────────────────────────────────────────
-
-Account and isolation: unverified. Quota: unknown.
-0 unfinished runs. Automatic switching is not enabled.
 
  j/k move  / search  Enter preflight
- m mask  r refresh  ? help  q quit
+ e enable/disable  m mask  r refresh
+ ? help  Esc back  q quit

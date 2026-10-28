@@ -62,6 +62,17 @@ def check(binary, quit_key):
             assert b"\x1b[?1049h" in output, "bare command did not enter dashboard"
             assert not termios.tcgetattr(slave)[3] & termios.ICANON, "raw mode was not enabled"
             assert b"private-canary" not in output, "saved masking leaked account label"
+            os.write(master, b"e")
+            # Ratatui emits cell differences, not complete sentences. Verify the
+            # actual mutation rather than searching its incremental ANSI stream.
+            deadline = time.monotonic() + 10
+            while True:
+                recorded = subprocess.run(command + ["profile", "show", "private-canary", "--json"],
+                                          env=env, check=True, capture_output=True, timeout=10)
+                if json.loads(recorded.stdout)["data"]["profile"]["enabled"] is False:
+                    break
+                assert time.monotonic() < deadline, "keyboard action was not persisted"
+                time.sleep(0.05)
             os.write(master, b"/private-canary")
             drain(master, process, output, b"[hidden]")
             assert b"private-canary" not in output, "search bypassed privacy"
@@ -107,7 +118,7 @@ def main():
         raise SystemExit("Usage on POSIX: check_dashboard_pty.py PATH_TO_ASWP PATH_TO_AGENTSWAPPER")
     check(Path(sys.argv[1]).resolve(strict=True), b"q")
     check(Path(sys.argv[2]).resolve(strict=True), b"\x03")
-    print("Bare dashboard, saved/search privacy, resize, q/Ctrl-C and terminal restoration: pass")
+    print("Bare dashboard, privacy, persisted availability, resize, q/Ctrl-C and terminal restoration: pass")
 
 
 if __name__ == "__main__":

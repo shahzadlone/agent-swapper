@@ -55,6 +55,10 @@ cleanup never signals a PID read from a fixture file. This experiment does not
 kill target processes, use a cgroup, test shell job control or issue a production
 scope receipt. No providers, user credentials or host services are involved.
 
+The guardian probe passed 25 local iterations (50 scenarios), then the Linux CI
+probe at `d88d7cb`; all four CI jobs passed. This validates the separate-group
+and lease behavior, not the remaining terminal and cgroup integrations.
+
 ## Remaining gates
 
 An interactive bash/PTY fixture must cover foreground-group ownership,
