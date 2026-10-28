@@ -1,0 +1,186 @@
+//! One private, non-inherited Windows Job per run. No supervisor-wide Job.
+//!
+//! `process-wrap` supplies suspended spawn and resumes only after our admission
+//! callback and its own nested Job assignment. Our separate kill-on-close Job
+//! owns crash cleanup and supplies independent kernel membership observations.
+//! Handles are never exposed; a scope admits exactly one initial process.
+//!
+//! A hard supervisor crash between CreateProcess and assignment can leak a
+//! suspended process. Kill-on-close applies only after assignment. This is not
+//! an isolation boundary against other processes acting as the same OS user.
+
+use process_wrap::std::{ChildWrapper, CommandWrap, JobObject};
+use std::{
+    io,
+    os::windows::io::AsRawHandle,
+    process::{Child, Command, ExitStatus},
+    thread,
+    time::{Duration, Instant},
+};
+use uuid::Uuid;
+use win32job::{ExtendedLimitInfo, Job};
+
+const CLEANUP_BUDGET: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(10);
+
+/// An unused local scope. Dropping it closes its sole Job handle.
+pub struct WindowsJob {
+    id: Uuid,
+    job: Job,
+}
+
+impl WindowsJob {
+    pub fn create() -> io::Result<Self> {
+        let mut limits = ExtendedLimitInfo::new();
+        limits.limit_kill_on_job_close();
+        Ok(Self {
+            id: Uuid::new_v4(),
+            job: Job::create_with_limit_info(&limits).map_err(job_error)?,
+        })
+    }
+
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Admit a suspended target, call `admit`, then let the wrapper resume it.
+    ///
+    /// The callback must durably record the owned PID before returning success.
+    /// This backend owns Windows creation flags; flags set on `Command` are
+    /// replaced. No caller-supplied wrapper or explicit suspension is allowed.
+    /// An error is not a stop receipt: callers must preserve unresolved intent
+    /// if they cannot independently establish which admission phase failed.
+    pub fn spawn(
+        self,
+        command: Command,
+        admit: impl FnOnce(u32) -> io::Result<()>,
+    ) -> io::Result<JobChild> {
+        let child = CommandWrap::from(command)
+            .wrap(JobObject)
+            .spawn_with(|command| {
+                let child = SuspendedChild(Some(command.spawn()?));
+                let native = child.as_child()?;
+                // Borrow the owned process handle; never reopen a PID from storage.
+                self.job
+                    .assign_process(native.as_raw_handle() as isize)
+                    .map_err(job_error)?;
+                if self.job.query_process_id_list().map_err(job_error)? != [native.id() as usize] {
+                    return Err(io::Error::other("unexpected Job membership at admission"));
+                }
+                admit(native.id())?;
+                child.release()
+            })?;
+        Ok(JobChild { scope: self, child })
+    }
+}
+
+/// Owns the running scope. Drop requests termination through owned handles;
+/// only `stop_and_observe` can report observed emptiness.
+pub struct JobChild {
+    scope: WindowsJob,
+    child: Box<dyn ChildWrapper>,
+}
+
+impl JobChild {
+    pub fn scope_id(&self) -> Uuid {
+        self.scope.id
+    }
+
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Observe the initial process only. Its exit does not mean scope emptiness.
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.child.inner_mut().try_wait()
+    }
+
+    pub fn wait(&mut self) -> io::Result<ExitStatus> {
+        // Exactly one wrapper is constructed here (JobObject). The immediate
+        // inner is std Child; no caller can add wrappers or mutate this chain.
+        // The dependency's recursive mutable accessor is unsafe, so avoid it.
+        self.child.inner_mut().wait()
+    }
+
+    /// Terminate remaining local descendants and observe an empty Job within
+    /// five seconds. Consumes admission authority even on failure. Query errors,
+    /// including membership-buffer overflow, never produce an empty receipt.
+    pub fn stop_and_observe(mut self) -> io::Result<StoppedScope> {
+        let deadline = Instant::now() + CLEANUP_BUDGET;
+        self.child.start_kill()?;
+        loop {
+            if self
+                .scope
+                .job
+                .query_process_id_list()
+                .map_err(job_error)?
+                .is_empty()
+            {
+                return Ok(StoppedScope { id: self.scope.id });
+            }
+            self.child.start_kill()?;
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "local Job did not become empty before cleanup deadline",
+                ));
+            }
+            thread::sleep(POLL);
+        }
+    }
+}
+
+impl Drop for JobChild {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        // scope.job then closes its sole, non-inherited handle. No blocking wait
+        // or synthesized stop receipt in Drop, including unwind paths.
+    }
+}
+
+/// Evidence of a kernel-empty, retired local Job. Not serializable/constructible
+/// by callers, not cloneable, and not evidence about external runtime work.
+#[derive(Debug)]
+pub struct StoppedScope {
+    id: Uuid,
+}
+
+impl StoppedScope {
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+}
+
+fn job_error(error: impl std::fmt::Display) -> io::Error {
+    io::Error::other(error.to_string())
+}
+
+// std::process::Child doesn't kill on drop. Cover assignment/admission errors
+// and unwind before ownership transfers into process-wrap.
+struct SuspendedChild(Option<Child>);
+
+impl SuspendedChild {
+    fn as_child(&self) -> io::Result<&Child> {
+        self.0
+            .as_ref()
+            .ok_or_else(|| io::Error::other("child already released"))
+    }
+
+    fn release(mut self) -> io::Result<Child> {
+        self.0
+            .take()
+            .ok_or_else(|| io::Error::other("child already released"))
+    }
+}
+
+impl Drop for SuspendedChild {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.0 {
+            let _ = child.kill();
+            let deadline = Instant::now() + CLEANUP_BUDGET;
+            while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+                thread::sleep(POLL);
+            }
+        }
+    }
+}

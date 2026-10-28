@@ -55,6 +55,10 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 2
         run: cargo +1.98.0 run --locked -p agentswapper-core --example windows_custody_probe
+      - name: Windows per-run supervision probe
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: cargo +1.98.0 run --locked -p agentswapper-core --example windows_supervision_probe
       - name: Linux delegated cgroup custody probe
         if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         timeout-minutes: 3

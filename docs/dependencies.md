@@ -39,18 +39,36 @@ package's age, version number, or continued compilation.
 
 ## Windows custody verification
 
-The Windows-only custody example uses exact development dependencies
-`process-wrap 10.0.1` and `win32job 2.0.3`, both MIT OR Apache-2.0, plus the
-Microsoft Windows bindings. They are excluded from normal native-launch
-dependencies. Only std, Job Object, and creation-flag support is enabled in
+The experimental Windows supervision backend and its custody examples use
+exact Windows-target dependencies `process-wrap 10.0.1` and `win32job 2.0.3`,
+both MIT OR Apache-2.0, plus the Microsoft Windows bindings. The backend is
+not yet wired into native launch. Only std, Job Object, and creation-flag support is enabled in
 process-wrap; Tokio and tracing are disabled. The two libraries currently use
 different Windows binding versions, both recorded and audited in Cargo.lock.
 
 Source review found that process-wrap's std Job wrapper alone lacks
 kill-on-close and an adequate empty-Job wait. The verification example supplies
-separate root ownership and membership checks; the result must pass the
-[custody gates](custody.md) before production supervision can use it. No new
-advisory or licensing exception was added for this experiment.
+separate root ownership and membership checks. The reusable backend instead
+creates a private kill-on-close Job for each run, without assigning the
+supervisor itself. Its `spawn_with` callback runs after `pre_spawn` adds
+CREATE_SUSPENDED and before `wrap_child` resumes the target. It assigns the
+owned process handle and invokes durable admission before returning the child.
+Only the known JobObject wrapper is installed; arbitrary creation flags are
+not accepted. Inner-Job termination and outer-Job membership queries avoid the
+completion-port wait. `into_inner` is never called (it leaks the Job handle).
+
+Source inspection confirmed that win32job creates an unnamed Job with null
+security attributes (non-inherited handle). Its fixed membership buffer returns
+query errors on overflow; those errors fail closed. A successful query's returned
+PID list is the observation used here. Targeted termination uses process-wrap's
+nested Job; before resume both Jobs contain exactly the suspended initial child,
+so descendants inherit both. The outer Job provides kill-on-close independently.
+Neither library's presence nor a clean advisory scan proves these invariants;
+[backend fixtures](custody.md) must exercise them on Windows. Some internal
+process-wrap failure cleanup uses an unbounded native wait; the wrapper's own
+normal stop polling and admission-guard waits are bounded. A crash before the
+first assignment can leak a suspended process. No new advisory or licensing
+exception was added.
 
 ## Licensing and distribution
 

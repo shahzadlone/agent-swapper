@@ -7,6 +7,7 @@ pub mod handover;
 pub mod launch;
 mod private_fs;
 pub mod store;
+pub mod supervision;
 
 pub use domain::{Alias, ExecutionEngine, GentsAgentId, GentsBinding, Harness, Profile, ProfileId};
 pub use store::Store;

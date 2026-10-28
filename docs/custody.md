@@ -127,3 +127,35 @@ Containment addresses owned local processes. It is not a filesystem sandbox or
 proof about work delegated to an external service. Credential custody, native
 login isolation, workspace fencing, and external side effects require separate
 verification before managed switching can be enabled.
+
+## Per-run Windows backend (experimental)
+
+`supervision::windows_job` owns a fresh kill-on-close Job per run, never placing
+the supervisor in it. The target is created suspended, assigned by its owned
+process handle, checked as the sole member, and passed to the admission callback
+before the nested wrapper resumes it. Root-process exit and local-scope emptiness
+are separate observations. Stop consumes the scope, terminates its nested Job,
+and queries the outer Job until empty within five seconds. Errors produce no
+receipt. The receipt is non-cloneable with private fields; no handle or late
+admission operation is exposed. This backend is not yet used by `aswp run`.
+
+Run the backend fixtures on Windows:
+
+```sh
+cargo run --locked -p agentswapper-core --example windows_supervision_probe
+```
+
+They exercise delayed admission, rejection/unwind, immediate descendant creation,
+root exit with a live descendant, normal and breakaway child controls, already-empty
+stop, two independent run scopes, failed spawn isolation, drop and supervisor
+crash cleanup. Writer lifetime locks distinguish termination from voluntary exit;
+fixture observations after a crash are not durable recovery receipts. Windows
+runtime validation is pending for this new backend.
+
+The interval between process creation and first Job assignment is not atomic.
+A hard supervisor crash there may leak a suspended process (no target code has
+executed). Dependency cleanup after a nested-wrapper failure can use an unbounded
+wait. The backend does not constrain work requested through WMI, COM, Task
+Scheduler, services or other outside processes, and does not defend against a
+malicious process with the same OS identity. Provider credential isolation,
+workspace fencing and cross-brand context continuity remain separate gates.
