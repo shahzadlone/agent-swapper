@@ -59,11 +59,39 @@ The guardian probe passed 25 local iterations (50 scenarios), then the Linux CI
 probe at `d88d7cb`; all four CI jobs passed. This validates the separate-group
 and lease behavior, not the remaining terminal and cgroup integrations.
 
+`linux_terminal_guardian_probe` and `check_linux_terminal_guardian.py` exercise
+the topology under an isolated interactive bash with its own controlling PTY.
+The Rust parent starts the guardian in a different process group; the guardian
+starts the target in the parent's foreground group. A transferred read/write
+PTY supplies the target's standard streams, while the guardian's own standard
+streams remain detached from the terminal. The tests check:
+
+- Ctrl-Z returns control to bash; `fg` restores the target group and terminal
+  settings. A subsequent SIGWINCH records the new 99-column, 31-row geometry,
+  and canonical input still reaches the target unchanged.
+- Ctrl-C leaves bash with status 130. The guardian records target termination;
+  parent EOF may trigger a targeted SIGKILL before target SIGINT is observed.
+- Explicit inherited SIG_IGN for HUP and INT survives both exec boundaries.
+  Ctrl-C leaves that target running and ordinary input still completes it.
+- Bash's group-directed `kill -KILL %1` kills the stopped foreground job while
+  the guardian survives long enough to observe and report target SIGKILL.
+- Killing only the parent fixture produces EOF at the guardian, which stops
+  its still-running target and records SIGKILL. Bash sees parent status 137.
+- Closing the PTY terminates the target through HUP, guardian cleanup, or an
+  explicitly recorded input EOF/EIO. Ordinary completion separately requires
+  proof that the target received the exact typed `exit` line.
+
+All six scenarios passed 50 local iterations (300 scenarios). Fixture waits,
+socket reads and target lifetime are bounded. The controller signals only its
+unreaped shell child during failure cleanup; it never signals metadata PIDs.
+These checks do not use a cgroup or journal, contain descendants, forward target
+exit codes through a production protocol, or transfer separate stdout/stderr
+descriptors. Signal handling and terminal topology still need combined testing
+with admission, leases, detached writers and the real supervisor state machine.
+
 ## Remaining gates
 
-An interactive bash/PTY fixture must cover foreground-group ownership,
-interrupt, suspend/`fg`, resize, terminal close and inherited ignored signals.
-Next, combine guardian failure cases with delegated cgroup cleanup and detached
+Combine guardian failure cases with delegated cgroup cleanup and detached
 writers. Audit group creation and removal failure paths before promoting the
 fixture code. Integrate admission and receipts with the journal only once those
 gates pass; every ambiguous result must remain unresolved. macOS needs its own

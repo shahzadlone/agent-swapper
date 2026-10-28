@@ -36,6 +36,12 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 2
         run: cargo +1.98.0 run --locked -p agentswapper-core --example linux_guardian_probe
+      - name: Linux guardian terminal job control
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: |
+          cargo +1.98.0 build --locked -p agentswapper-core --example linux_terminal_guardian_probe
+          python tools/check_linux_terminal_guardian.py target/debug/examples/linux_terminal_guardian_probe
       - name: Restore pinned test runner
         id: nextest-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5

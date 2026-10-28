@@ -37,6 +37,16 @@ an affected runtime dependency. Re-check the actual graph with `cargo tree`
 before changing the rationale. Do not infer audit cleanliness merely from a
 package's age, version number, or continued compilation.
 
+## Linux terminal verification
+
+The Linux-only development dependency `signal-hook = 0.3.18` (MIT OR Apache-2.0)
+was already present through the terminal library. The guardian terminal fixture
+uses its safe `flag::register` API with default features disabled. Source review
+of that path confirmed the registered action only stores an atomic boolean;
+filesystem and terminal operations happen in the fixture's ordinary loop.
+The fixture observes SIGWINCH and leaves inherited ignored signals intact.
+No new package, runtime core dependency or advisory exception was introduced.
+
 ## Windows custody verification
 
 The experimental Windows supervision backend and its custody examples use

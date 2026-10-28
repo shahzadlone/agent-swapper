@@ -93,6 +93,13 @@ It is provider-free and unprivileged; simulated cleanup is explicitly gated
 by the controller. CI runs it separately from the actual delegated cgroup probe.
 See [Linux supervision](linux-supervision.md) for the remaining integration gates.
 
+Build `linux_terminal_guardian_probe`, then run
+`python tools/check_linux_terminal_guardian.py target/debug/examples/linux_terminal_guardian_probe`
+on Linux for the six isolated bash/PTY cases. This tests foreground process
+groups, suspend/resume, resize, interrupts, inherited ignored signals and terminal
+closure and parent-only SIGKILL without privileged setup or a real provider. The scope of each assertion
+is recorded in [Linux supervision](linux-supervision.md).
+
 The suite does not establish real-provider auth isolation, quota correctness,
 macOS Keychain behavior, Windows ACL privacy, containment of external service
 work, or refresh-token safety. Provider-free Windows fixtures establish only
