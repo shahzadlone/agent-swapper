@@ -16,6 +16,16 @@ import termios
 import time
 
 
+def read_available(master, output):
+    if select.select([master], [], [], 0)[0]:
+        try:
+            output.extend(os.read(master, 65536))
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+    assert len(output) <= 1024 * 1024, "fixture exceeded terminal output budget"
+
+
 def drain(master, process, output, until=None):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -65,13 +75,19 @@ def check(binary, quit_key):
             os.write(master, b"e")
             # Ratatui emits cell differences, not complete sentences. Verify the
             # actual mutation rather than searching its incremental ANSI stream.
+            # Keep consuming output while waiting: smaller PTY buffers can block
+            # the initial draw before the application reaches its input loop.
             deadline = time.monotonic() + 10
             while True:
+                read_available(master, output)
                 recorded = subprocess.run(command + ["profile", "show", "private-canary", "--json"],
                                           env=env, check=True, capture_output=True, timeout=10)
                 if json.loads(recorded.stdout)["data"]["profile"]["enabled"] is False:
                     break
-                assert time.monotonic() < deadline, "keyboard action was not persisted"
+                assert time.monotonic() < deadline, (
+                    f"keyboard action was not persisted; exit={process.poll()}; "
+                    f"output tail={bytes(output[-1000:])!r}"
+                )
                 time.sleep(0.05)
             os.write(master, b"/private-canary")
             drain(master, process, output, b"[hidden]")
