@@ -6,7 +6,7 @@ flows are release requirements. The existing dashboard is a basic developer
 preview and does not meet the final bar yet. It now includes responsive profile
 details, keyboard availability changes, stable identity selection and privacy
 labels, in-interface profile registration, reviewed foreground launches/login,
-recorded gents session selection, and local previews from the actual renderer.
+recorded gents session selection, rename/unregister dialogs, and local previews from the actual renderer.
 Live usage, cross-agent context transfer and the full action set remain open.
 POSIX dashboard exits now restore the terminal before re-raising external
 interrupt, termination and hangup signals; actual PTY checks cover those paths.
@@ -64,9 +64,20 @@ login, Ctrl-C, gents resume, resizing, masked/tiny-terminal launch refusal and
 exact original console modes after exit. Each phase explicitly re-enables VT
 output before drawing and restores the original snapshot before yielding the
 terminal; cached ANSI support must not leave VT disabled on the next phase.
-Its first native hosted result is pending. The test coordinator has its own
+The initial six-launch ConPTY flow passed at `2362a0d` in
+[Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40961568743/job/123755381322).
+The test coordinator has its own
 process-lifetime Job and fake agents expire; this does not add default Job
 containment to production launches.
+
+Rename (`n`) and unregister (`d`) now address the selected stable profile ID.
+Unregister requires Space and Enter, refuses busy/unresolved work and retains
+agent-owned files. Noticed peer label/binding changes reset review; an alias
+reused by another profile cannot redirect the action. Privacy covers drafts,
+labels and errors, including narrow/resized dialogs; cancellation preserves
+the existing profile. POSIX PTY tests cover a peer rename/reused alias while
+unregister review is open, file retention and mapping removal. New Windows
+ConPTY coverage for those added actions is awaiting its hosted result.
 
 ## Entry and visual direction
 

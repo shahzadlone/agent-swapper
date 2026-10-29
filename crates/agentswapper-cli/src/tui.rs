@@ -15,6 +15,7 @@ use ratatui::{
 mod launch;
 #[cfg(test)]
 mod preview;
+mod profile_action;
 mod setup;
 mod terminal;
 
@@ -37,6 +38,7 @@ struct Dashboard {
     privacy_ids: Vec<ProfileId>,
     setup: Option<setup::Setup>,
     launch: Option<launch::Review>,
+    profile_action: Option<profile_action::ProfileAction>,
 }
 
 impl Dashboard {
@@ -149,6 +151,14 @@ impl Dashboard {
         match review {
             Ok(review) => self.launch = Some(review),
             Err(error) => self.message = Some(self.error_message(&error)),
+        }
+    }
+
+    fn open_profile_action(&mut self, kind: profile_action::Kind) {
+        if let Some(profile) = self.visible().get(self.selected) {
+            self.profile_action =
+                Some(profile_action::ProfileAction::new((*profile).clone(), kind));
+            self.message = None;
         }
     }
 }
@@ -281,6 +291,56 @@ fn run_terminal(
             if let Some(review) = &mut app.launch {
                 review.reset_acceptance();
             }
+            if let Some(action) = &mut app.profile_action {
+                action.reset_acceptance();
+            }
+            continue;
+        }
+        let action_label = app
+            .profile_action
+            .as_ref()
+            .map(|action| app.label(action.profile()));
+        if let Some(action) = &mut app.profile_action {
+            let size = terminal.size()?;
+            let cancel = key.code == KeyCode::Esc
+                || (key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('g'));
+            if (size.width < 40 || size.height < 14) && !cancel {
+                continue;
+            }
+            let area = ratatui::layout::Rect::new(0, 3, size.width, size.height.saturating_sub(6));
+            match action.key(
+                key,
+                store,
+                area,
+                app.masked,
+                action_label.as_deref().unwrap_or("profile"),
+            ) {
+                profile_action::Outcome::Continue => {}
+                profile_action::Outcome::Cancel => {
+                    app.profile_action = None;
+                    app.message = Some("Profile action cancelled.".to_owned());
+                }
+                profile_action::Outcome::Changed { id, kind } => {
+                    app.profile_action = None;
+                    app.query.clear();
+                    let completed = if kind == profile_action::Kind::Rename {
+                        "Profile renamed."
+                    } else {
+                        "Profile unregistered. Agent files retained; login not revoked."
+                    };
+                    app.message = Some(match app.refresh(store) {
+                        Ok(()) => {
+                            app.preserve_selection(Some(id));
+                            completed.to_owned()
+                        }
+                        Err(error) => format!(
+                            "{completed} Refresh failed ({}). Press r to retry.",
+                            error.code()
+                        ),
+                    });
+                }
+            }
             continue;
         }
         if let Some(review) = &mut app.launch {
@@ -399,6 +459,8 @@ fn run_terminal(
                 app.message = None;
             }
             KeyCode::Char('e') => app.toggle_enabled(store),
+            KeyCode::Char('n') => app.open_profile_action(profile_action::Kind::Rename),
+            KeyCode::Char('d') => app.open_profile_action(profile_action::Kind::Remove),
             KeyCode::Char('r') => {
                 app.message = Some(match app.refresh(store) {
                     Ok(()) => "Profiles refreshed.".to_owned(),
@@ -470,7 +532,9 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
     );
     if area.width < 40 || area.height < 14 {
         frame.render_widget(
-            Paragraph::new(if app.launch.is_some() {
+            Paragraph::new(if app.profile_action.is_some() {
+                "aswp\nEnlarge to 40 x 14.\nEsc cancels action.\nCtrl-C quits."
+            } else if app.launch.is_some() {
                 "aswp\nEnlarge to 40 x 14.\nEsc cancels launch.\nCtrl-C quits."
             } else if app.setup.is_some() {
                 "aswp\nEnlarge to 40 x 14.\nCtrl-G cancels setup.\nCtrl-C quits."
@@ -528,6 +592,19 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         review.draw(frame, parts[1].union(parts[2]), app.masked);
         frame.render_widget(
             Paragraph::new(review.footer()).style(Style::default().fg(TEAL)),
+            parts[3],
+        );
+        return;
+    }
+    if let Some(action) = &app.profile_action {
+        action.draw(
+            frame,
+            parts[1].union(parts[2]),
+            app.masked,
+            &app.label(action.profile()),
+        );
+        frame.render_widget(
+            Paragraph::new(action.footer()).style(Style::default().fg(TEAL)),
             parts[3],
         );
         return;
@@ -615,7 +692,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         );
     }
     let details = if app.help {
-        "Navigation: arrows or j/k. / search. a adds a profile.\nEnter reviews a new launch; l reviews native login.\nc reviews the latest gents session. Native resume is unavailable.\ne enables/disables future launches. Ctrl-P toggles privacy.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured.".to_owned()
+        "Navigation: j/k. / search. a add profile.\nEnter review. l login. c gents resume.\nn rename. d unregister. e availability.\nCtrl-P privacy (also setup/search).\nr refresh. Esc back. q / Ctrl-C quit.\nQuota unknown means unmeasured.".to_owned()
     } else if app.searching {
         let query = if app.masked && !app.query.is_empty() {
             "[hidden]".to_owned()
@@ -660,8 +737,10 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
             " Esc close help  Ctrl-P privacy\n q / Ctrl-C quit"
         } else if app.searching {
             " Enter apply  Backspace edit  Esc clear\n Ctrl-P privacy  Ctrl-C quit"
+        } else if area.width >= 80 {
+            " Enter review  l login  c gents resume  a add\n n rename  d unregister  e enable/disable  / search\n j/k move  m mask  r refresh  ? help  Esc back  q quit"
         } else {
-            " Enter review  l login  c gents resume\n a add  e enable/disable  / search\n j/k move  m mask  r refresh  ? help  q quit"
+            " Enter review  l login  c gents resume\n a add  n rename  d unregister  e toggle\n j/k move / search m mask ? help q quit"
         })
             .style(Style::default().fg(TEAL)),
         parts[3],

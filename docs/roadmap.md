@@ -142,6 +142,9 @@ Implemented, unreleased:
   availability changes that follow stable profile IDs, and native/gents profile
   registration with review, privacy masking and cancellation; foreground agent
   return, recorded exit status and reviewed latest-gents-session resume;
+- in-interface rename/unregister with stable identity, private editable drafts,
+  explicit unregister review, busy checks, retained files and noticed peer-change
+  re-review; provider-free POSIX/ConPTY transition fixtures;
 - fixture subprocess/crash tests, proptest, terminal snapshots, nextest config,
   pinned toolchain, Clippy, dependency policy, and cross-platform CI definition.
 

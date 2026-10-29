@@ -362,6 +362,25 @@ def check(binary, fixture):
             assert latest["gentsSession"]["id"] == source["gentsSession"]["id"]
             assert latest["gentsSession"]["resumedFrom"] == source["id"]
             assert latest["custody"] == "external_runtime_unknown"
+            # Rename and unregister stay inside the dashboard and keep using
+            # the same profile identity. Editing remains private throughout.
+            session.send(b"\x10n\x15quiet-relay\r")
+
+            def renamed():
+                rows = json.loads(cli("list", "--json").stdout)["data"]
+                return next((row["profile"] for row in rows if row["profile"]["alias"] == "quiet-relay"), None)
+            renamed_profile = until(renamed, "dashboard rename did not persist")
+            assert renamed_profile["id"] == homes["gents"].name
+            raw_dashboard()
+            session.send(b"d\r ")
+            session.send(b"\x10\r")
+            time.sleep(0.2)
+            assert renamed() is not None, "privacy toggle did not reset unregister acceptance"
+            session.send(b"\x10 \r")
+            until(lambda: True if renamed() is None else None, "dashboard unregister did not persist")
+            assert (homes["gents"] / "runtime.json").exists(), "unregister removed engine-owned files"
+            raw_dashboard()
+            session.send(b"\x10")
             session.resize(34, 10)
             session.send(b"\r \r")
             time.sleep(0.2)

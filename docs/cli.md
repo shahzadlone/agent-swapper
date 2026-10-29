@@ -24,6 +24,12 @@ assuming the terminal is safe to reuse. Native launches here start a new
 conversation; cross-agent context pickup remains the manual
 [handover workflow](handover.md). Check outgoing work and background jobs before
 starting another agent. Native resume and gents login are unavailable in this flow.
+Press `n` to rename the selected profile or `d` to review unregistration.
+Unregistration needs Space followed by Enter, keeps agent files and does not
+revoke a subscription login. Busy/unresolved profiles are refused. If a peer's
+label/binding change is noticed during review, the dialog refreshes that identity
+and requires review again. Ctrl-U clears the rename field; Ctrl-P keeps input
+and errors private in either dialog.
 
 ## Everyday commands
 
@@ -262,7 +268,8 @@ and `c` reviews the latest eligible gents session. Space accepts the experimenta
 launch and Enter starts it; Ctrl-P must unmask first. Esc or Ctrl-G cancels review.
 `e` enables or disables the selected profile for future launches; it does not
 stop existing work. Actions follow stable profile IDs, so renaming or reusing an
-alias from another terminal cannot redirect an availability change.
+alias from another terminal cannot redirect an availability, rename or unregister
+action. `n` opens rename and `d` opens unregister review; Esc cancels either.
 
 Wide terminals show selected-profile details beside the list. Narrow terminals
 keep profile, agent and availability state visible, with unmeasured quota in the

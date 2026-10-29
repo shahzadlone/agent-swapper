@@ -246,6 +246,15 @@ impl Store {
             .ok_or(Error::NotFound)
     }
 
+    /// Resolve a live identity without following an alias that another writer
+    /// may have renamed or reassigned.
+    pub fn find_id(&self, id: ProfileId) -> Result<Profile> {
+        self.profiles()?
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or(Error::NotFound)
+    }
+
     pub fn register(&mut self, harness: Harness, alias: Alias) -> Result<Profile> {
         self.register_profile(harness, alias, None)
     }
@@ -295,22 +304,25 @@ impl Store {
             id: profile.id,
             binding,
         })?;
-        self.find(alias)
+        self.find_id(profile.id)
     }
 
     pub fn rename(&mut self, alias: &Alias, new: Alias) -> Result<Profile> {
         let profile = self.find(alias)?;
-        self.record(Event::Renamed {
-            id: profile.id,
-            alias: new.clone(),
-        })?;
-        self.find(&new)
+        self.rename_profile(profile.id, new)?;
+        self.find_id(profile.id)
+    }
+
+    /// Rename exactly this live identity, even after a peer changes its alias.
+    pub fn rename_profile(&mut self, id: ProfileId, alias: Alias) -> Result<()> {
+        self.find_id(id)?;
+        self.record(Event::Renamed { id, alias })
     }
 
     pub fn enable(&mut self, alias: &Alias, enabled: bool) -> Result<Profile> {
         let profile = self.find(alias)?;
         self.set_enabled(profile.id, enabled)?;
-        self.find(alias)
+        self.find_id(profile.id)
     }
 
     /// Change availability by stable identity, even if an alias was renamed or reused.
@@ -322,9 +334,16 @@ impl Store {
     /// Unregister metadata and mappings. Native credential files are retained.
     pub fn remove(&mut self, alias: &Alias) -> Result<()> {
         let profile = self.find(alias)?;
-        let _lease = self.acquire_lease(profile.id)?;
-        self.ensure_no_unfinished_run(profile.id)?;
-        self.record(Event::Removed { id: profile.id })
+        self.remove_profile(profile.id)
+    }
+
+    /// Unregister exactly this live identity; retain its files and refuse busy
+    /// or unresolved work. Never follow its former alias to a replacement.
+    pub fn remove_profile(&mut self, id: ProfileId) -> Result<()> {
+        self.find_id(id)?;
+        let _lease = self.acquire_lease(id)?;
+        self.ensure_no_unfinished_run(id)?;
+        self.record(Event::Removed { id })
     }
 
     pub fn unfinished(&self) -> Result<Vec<UnfinishedRun>> {
@@ -992,6 +1011,69 @@ mod tests {
         s.enable(&p.alias, false).unwrap();
         assert!(matches!(s.begin_run(&lease, "run"), Err(Error::Disabled)));
         assert!(s.unfinished().unwrap().is_empty());
+    }
+
+    #[test]
+    fn identity_actions_survive_alias_reuse_and_never_modify_the_replacement() {
+        let (temp, mut store) = setup();
+        let original = store
+            .register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        let home = store.profile_home(original.id).unwrap();
+        std::fs::write(home.join("fixture-owned.txt"), "retained fixture").unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        store.map(&original.alias, &workspace).unwrap();
+        let mut peer = Store::open(store.root()).unwrap();
+        peer.rename(&original.alias, "elsewhere".parse().unwrap())
+            .unwrap();
+        let replacement = peer
+            .register(Harness::Codex, original.alias.clone())
+            .unwrap();
+        store
+            .rename_profile(original.id, "studio".parse().unwrap())
+            .unwrap();
+        assert_eq!(
+            store.find_id(original.id).unwrap().alias.to_string(),
+            "studio"
+        );
+        assert_eq!(store.find(&original.alias).unwrap().id, replacement.id);
+        store.remove_profile(original.id).unwrap();
+        assert_eq!(store.find(&original.alias).unwrap().id, replacement.id);
+        assert!(store.mappings().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(home.join("fixture-owned.txt")).unwrap(),
+            "retained fixture"
+        );
+        assert!(matches!(store.find_id(original.id), Err(Error::NotFound)));
+        assert!(matches!(
+            store.rename_profile(original.id, "work".parse().unwrap()),
+            Err(Error::NotFound)
+        ));
+        assert!(matches!(
+            store.remove_profile(original.id),
+            Err(Error::NotFound)
+        ));
+        assert!(store.find_id(replacement.id).unwrap().enabled);
+        assert!(store.verify().unwrap().consistent);
+    }
+
+    #[test]
+    fn identity_removal_refuses_live_leases_and_unresolved_intents() {
+        let (_temp, mut store) = setup();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        assert!(matches!(store.remove_profile(profile.id), Err(Error::Busy)));
+        let run = store.begin_run(&lease, "run").unwrap();
+        drop(lease);
+        assert!(matches!(store.remove_profile(profile.id), Err(Error::Busy)));
+        assert_eq!(store.find_id(profile.id).unwrap().id, profile.id);
+        store.attest_stopped(&run).unwrap();
+        store.remove_profile(profile.id).unwrap();
+        assert!(matches!(store.find_id(profile.id), Err(Error::NotFound)));
+        assert!(store.verify().unwrap().consistent);
     }
 
     #[test]

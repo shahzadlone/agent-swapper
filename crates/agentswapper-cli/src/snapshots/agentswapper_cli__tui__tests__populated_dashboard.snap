@@ -31,6 +31,6 @@ Enter reviews a new launch. l reviews native login. c resumes gents.
 Account identity and capacity require provider verification.
 
 
- Enter review  l login  c gents resume
- a add  e enable/disable  / search
- j/k move  m mask  r refresh  ? help  q quit
+ Enter review  l login  c gents resume  a add
+ n rename  d unregister  e enable/disable  / search
+ j/k move  m mask  r refresh  ? help  Esc back  q quit

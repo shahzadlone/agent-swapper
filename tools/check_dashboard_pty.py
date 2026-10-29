@@ -251,6 +251,75 @@ def check_setup(binary):
             os.close(slave)
 
 
+def check_profile_actions(binary):
+    with tempfile.TemporaryDirectory(prefix="aswp-dashboard-actions-") as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        env = {"HOME": str(root), "TERM": "xterm-256color", "LANG": "C.UTF-8"}
+        command = [str(binary), "--state-dir", str(root / "state")]
+
+        def cli(*args):
+            return subprocess.run(command + list(args), cwd=workspace, env=env,
+                                  check=True, capture_output=True, timeout=10)
+
+        cli("profile", "add", "codex", "--alias", "private-canary")
+        cli("map", "private-canary", str(workspace))
+        cli("config", "set", "ui.mask", "true")
+        original = json.loads(cli("profile", "show", "private-canary", "--json").stdout)["data"]["profile"]
+        retained = root / "state" / "profiles" / original["id"] / "fixture-owned.txt"
+        retained.write_text("retained fixture")
+        master, slave = pty.openpty()
+        before = termios.tcgetattr(slave)
+        process = None
+        output = bytearray()
+
+        def await_alias(alias, present=True):
+            deadline = time.monotonic() + 10
+            while True:
+                read_available(master, output)
+                rows = json.loads(cli("list", "--json").stdout)["data"]
+                matches = [row["profile"] for row in rows if row["profile"]["alias"] == alias]
+                if bool(matches) == present:
+                    return matches[0] if present else None
+                assert process.poll() is None and time.monotonic() < deadline, "profile action did not persist"
+                time.sleep(0.02)
+
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            process = subprocess.Popen(command, cwd=workspace, env=env, stdin=slave, stdout=slave, stderr=slave)
+            drain(master, process, output, b"profile-1")
+            os.write(master, b"n\x15quiet-name\r")
+            renamed = await_alias("quiet-name")
+            assert renamed["id"] == original["id"]
+            os.write(master, b"n\x15do-not-save\x07")
+            os.write(master, b"d")
+            # A peer can rename the selected identity and claim its former alias.
+            # The open review must never unregister that replacement account.
+            cli("profile", "alias", "quiet-name", "elsewhere")
+            cli("profile", "add", "kimi", "--alias", "quiet-name")
+            os.write(master, b" \r\r")
+            assert await_alias("elsewhere")["id"] == original["id"]
+            # Acceptance was cleared by the noticed peer change. Confirm again.
+            os.write(master, b" \r")
+            await_alias("elsewhere", present=False)
+            assert await_alias("quiet-name")["id"] != original["id"]
+            assert json.loads(cli("map", "--json").stdout)["data"] == []
+            assert retained.read_text() == "retained fixture"
+            os.write(master, b"q")
+            drain(master, process, output)
+            assert process.wait(timeout=2) == 0
+            assert not any(canary in output for canary in [b"private-canary", b"quiet-name", b"elsewhere", b"do-not-save"])
+            assert same_terminal_configuration(before, termios.tcgetattr(slave))
+            cli("registry", "verify")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=2)
+            os.close(master)
+            os.close(slave)
+
+
 def main():
     if os.name != "posix" or len(sys.argv) != 3:
         raise SystemExit("Usage on POSIX: check_dashboard_pty.py PATH_TO_ASWP PATH_TO_AGENTSWAPPER")
@@ -267,7 +336,8 @@ def main():
         for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
             check_signal(Path(sys.argv[1]).resolve(strict=True), quit_signal, partial=partial)
     check_setup(Path(sys.argv[1]).resolve(strict=True))
-    print("Bare dashboard, privacy, availability, native/gents setup, cancellation, resize, keyboard/signal exits, repeated EOF and partial-input restoration: pass")
+    check_profile_actions(Path(sys.argv[1]).resolve(strict=True))
+    print("Bare dashboard, privacy, availability, native/gents setup, rename/unregister, peer alias reuse, cancellation, resize, signal exits, repeated EOF and partial-input restoration: pass")
 
 
 if __name__ == "__main__":

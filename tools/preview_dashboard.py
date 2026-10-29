@@ -29,6 +29,8 @@ def main():
              "launch-review-80", "launch-review-100", "launch-review-160",
              "launch-private-40", "launch-private-44", "launch-private-80",
              "launch-private-100", "launch-private-160"]
+    names.extend([f"{name}-private-{width}" for name in ["rename", "unregister"] for width in [40, 44, 80, 100, 160]])
+    names.extend(["rename-review", "unregister-review"])
     links = "".join(f'<li><a href="{name}.html">{name.replace("-", " ")}</a></li>'
                     for name in names)
     destination.joinpath("index.html").write_text(

@@ -127,6 +127,15 @@ newer schema. A schema-6 supervisor still running during the schema-7 upgrade
 will refuse to record its exit; its intent remains pending and requires manual
 reconciliation. This does not retrofit schema guards into binaries that predate them.
 
+## Profile identity and actions
+
+Profile actions can address a stable profile ID: rename, availability changes
+and unregister refuse a retired identity rather than following its old alias.
+Alias-based CLI mutations also resolve their post-write replies by the original
+ID, so a concurrent label reuse cannot return another profile's details.
+Unregister retains its existing lease and unresolved-intent checks and removes
+directory mappings without deleting agent-owned files.
+
 ## A mismatch
 
 Preserve the entire state directory, including WAL files, before attempting
