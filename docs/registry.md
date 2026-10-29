@@ -57,7 +57,9 @@ handle-based reparse-point and hardlink check during preflight. SQLite later
 opens sidecars by path, so these checks do not prevent replacement after preflight.
 The opened-file hardlink rejection test passed on macOS in
 [CI run 40825712953](https://github.com/shahzadlone/agent-swapper/actions/runs/40825712953/job/123288160167)
-at `acc5ad6`; that run predates the SQLite no-follow change.
+at `acc5ad6`. The SQLite no-follow regression also passed in the
+[macOS job](https://github.com/shahzadlone/agent-swapper/actions/runs/40826008744/job/123289092521)
+at `e5aa247`.
 
 Schema 2 made the journal envelope timestamp authoritative for each run's
 start. Schema 3 adds optional PID and spawn-time observations. Schema 4 adds validated
