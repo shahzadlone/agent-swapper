@@ -478,14 +478,70 @@ const GUARDIAN_EXIT_TARGET: &str = "store::linux_journal_guardian_tests::guardia
 
 #[test]
 #[ignore = "exit-status role for the internal guardian fixture"]
+#[allow(
+    clippy::zombie_processes,
+    reason = "the bounded escape probe deliberately outlives its parent"
+)]
 fn guardian_exit_target() {
     let mut grant = String::new();
     io::stdin().lock().read_line(&mut grant).unwrap();
     assert_eq!(grant, "GO\n");
+    if std::env::var_os("ASWP_JOURNAL_ESCAPE_PROBE").is_some() {
+        let (dir, scope) = fixture_paths();
+        let parent = cgroup::checked_directory(scope.parent().unwrap()).unwrap();
+        let result = cgroup::control(&parent, "cgroup.procs", OFlags::WRONLY)
+            .and_then(|mut file| file.write_all(format!("{}\n", std::process::id()).as_bytes()));
+        match result {
+            Ok(()) => {
+                assert!(cgroup::contains(&parent, std::process::id()).unwrap());
+                fs::write(dir.join("escape-result"), b"escaped").unwrap();
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "store::linux_journal_guardian_tests::escaped_writer",
+                        "--ignored",
+                    ])
+                    .env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                until(|| dir.join("escaped-heartbeat").exists());
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                fs::write(dir.join("escape-result"), b"denied").unwrap();
+            }
+            Err(error) => panic!("unexpected migration error: {error}"),
+        }
+    }
     std::process::exit(7);
 }
 
-fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool, guardian_loss: bool) {
+#[test]
+#[ignore = "bounded escaped-writer role for the delegated migration probe"]
+fn escaped_writer() {
+    let dir = PathBuf::from(std::env::var_os("ASWP_JOURNAL_FIXTURE_DIR").unwrap());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut tick = 0_u64;
+    while Instant::now() < deadline && !dir.join("escaped-stop").exists() {
+        fs::write(dir.join("escaped-heartbeat.tmp"), tick.to_string()).unwrap();
+        fs::rename(
+            dir.join("escaped-heartbeat.tmp"),
+            dir.join("escaped-heartbeat"),
+        )
+        .unwrap();
+        tick += 1;
+        thread::sleep(Duration::from_millis(20));
+    }
+    fs::write(dir.join("escaped-done"), b"done").unwrap();
+}
+
+fn internal_guardian_case(
+    parent_loss: bool,
+    loss_after_empty: bool,
+    guardian_loss: bool,
+    escape_probe: bool,
+) {
     use crate::supervision::linux_guardian;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
     let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
@@ -536,6 +592,10 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool, guardian_lo
             (
                 "ASWP_JOURNAL_FIXTURE_SCOPE".into(),
                 Some(scope.path().as_os_str().to_owned()),
+            ),
+            (
+                "ASWP_JOURNAL_ESCAPE_PROBE".into(),
+                escape_probe.then(|| "1".into()),
             ),
         ],
     )
@@ -607,6 +667,29 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool, guardian_lo
     assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
     assert!(cgroup::events_missing(scope.directory()).unwrap());
+    if escape_probe {
+        let result = fs::read_to_string(temp.path().join("escape-result")).unwrap();
+        match result.as_str() {
+            "escaped" => {
+                let heartbeat = temp.path().join("escaped-heartbeat");
+                let first = fs::read_to_string(&heartbeat).unwrap();
+                until(|| fs::read_to_string(&heartbeat).is_ok_and(|value| value != first));
+                assert!(!temp.path().join("escaped-done").exists());
+                println!(
+                    "::warning title=Linux containment escape::an admitted same-user process escaped to the delegated parent and its writer survived scope retirement"
+                );
+                fs::write(temp.path().join("escaped-stop"), b"stop").unwrap();
+                until(|| temp.path().join("escaped-done").exists());
+                println!(
+                    "::notice title=Linux cgroup migration::escaped writer survived retirement"
+                );
+            }
+            "denied" => println!(
+                "::notice title=Linux cgroup migration::migration was denied on this runner"
+            ),
+            _ => panic!("unexpected migration observation"),
+        }
+    }
     if !parent_loss && !loss_after_empty {
         fs::create_dir(scope.path()).unwrap();
         let replacement = cgroup::checked_directory(scope.path()).unwrap();
@@ -704,7 +787,7 @@ fn internal_guardian_cleans_up_on_incomplete_startup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_reports_exit_after_cleanup() {
-    internal_guardian_case(false, false, false);
+    internal_guardian_case(false, false, false, false);
     println!(
         "::notice title=Linux internal guardian exit::actual CLI guardian observed exit and retired the scope; journal remains pending"
     );
@@ -713,7 +796,7 @@ fn internal_guardian_reports_exit_after_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
-    internal_guardian_case(true, false, false);
+    internal_guardian_case(true, false, false, false);
     println!(
         "::notice title=Linux internal guardian EOF::actual CLI guardian retired target scope on channel loss; journal remains pending"
     );
@@ -722,7 +805,7 @@ fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
-    internal_guardian_case(false, true, false);
+    internal_guardian_case(false, true, false, false);
     println!(
         "::notice title=Linux internal guardian pre-retirement EOF::actual CLI guardian retained lease through empty-scope cleanup after channel loss"
     );
@@ -731,8 +814,14 @@ fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_loss_preserves_unresolved_run_through_cleanup() {
-    internal_guardian_case(false, false, true);
+    internal_guardian_case(false, false, true, false);
     println!(
         "::notice title=Linux internal guardian loss::owned guardian loss leaves the run unresolved while the supervisor retains custody through cleanup"
     );
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_checks_same_user_cgroup_migration() {
+    internal_guardian_case(false, false, false, true);
 }

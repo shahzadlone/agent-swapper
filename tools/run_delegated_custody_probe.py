@@ -36,6 +36,7 @@ def main():
         shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
         env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
         for name, notice in [
+            ("internal_guardian_checks_same_user_cgroup_migration", "Linux cgroup migration"),
             ("internal_guardian_loss_preserves_unresolved_run_through_cleanup", "Linux internal guardian loss"),
             ("internal_guardian_cleans_up_on_incomplete_startup", "Linux internal guardian incomplete startup"),
             ("internal_guardian_reports_exit_after_cleanup", "Linux internal guardian exit"),

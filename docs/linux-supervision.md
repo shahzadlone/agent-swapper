@@ -386,6 +386,21 @@ in CI for its platform-specific evidence.
 
 ## Remaining gates
 
+Same-user cgroup migration is a release-blocking containment concern. This
+prototype requires the delegated parent `cgroup.procs` to be writable, and the
+target currently runs with the same user identity as the supervisor. The
+[kernel delegation rules](https://docs.kernel.org/admin-guide/cgroup-v2.html#delegation-containment)
+allow migration inside a delegated hierarchy when the relevant destination
+and common-ancestor files are writable. A target may therefore be able to
+move itself from the leaf into its parent and leave descendants there. Leaf
+emptiness and removal would not establish that all descendants stopped.
+A new bounded delegated fixture attempts this migration and checks whether a
+writer survives leaf retirement; its hosted result is pending. A production
+backend needs an independently qualified boundary preventing escape, or must
+retain unknown custody; namespace setup by itself is not sufficient if the
+global hierarchy remains accessible. The existing fixture passes do not
+establish protection against this scenario.
+
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.
 The terminal guardian fixture no longer imposes a total deadline on a live or
