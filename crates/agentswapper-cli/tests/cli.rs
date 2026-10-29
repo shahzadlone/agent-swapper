@@ -1384,6 +1384,27 @@ fn runtime_record_refuses_fifo_without_blocking() {
     assert!(!home.join("fixture-owned.txt").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn registry_lock_refuses_fifo_without_blocking() {
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    let lock = s.state().join("registry.lock");
+    std::fs::remove_file(&lock).unwrap();
+    assert!(
+        Command::new("/usr/bin/mkfifo")
+            .arg(&lock)
+            .status()
+            .unwrap()
+            .success()
+    );
+    s.command()
+        .arg("list")
+        .timeout(Duration::from_secs(3))
+        .assert()
+        .code(125);
+}
+
 #[test]
 fn engine_registration_refuses_ambiguous_or_nonlocal_bindings() {
     let s = Sandbox::new();

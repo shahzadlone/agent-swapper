@@ -110,12 +110,27 @@ pub(crate) fn file(path: &Path) -> Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.mode(0o600).custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+        );
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path)?;
-    validate_file_metadata(&file.metadata()?)?;
+    let metadata = file.metadata()?;
+    validate_file_metadata(&metadata)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0
+            || winapi_util::file::information(&file)?.number_of_links() != 1
+        {
+            return Err(Error::UnsafePath);
+        }
+    }
     Ok(file)
 }
 
@@ -156,4 +171,22 @@ fn validate_metadata(meta: &fs::Metadata, allow_detached: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn opened_private_file_rejects_multiple_hardlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lock");
+        let alias = directory.path().join("alias");
+        drop(file(&path).unwrap());
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(matches!(file(&path), Err(Error::UnsafePath)));
+        fs::remove_file(alias).unwrap();
+        assert!(file(&path).is_ok());
+    }
 }

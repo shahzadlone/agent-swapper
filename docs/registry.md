@@ -42,6 +42,11 @@ an identical snapshot without overwriting it. Files use private permissions
 on POSIX. Windows ACL privacy remains unverified. Backups contain the same
 plaintext local metadata as the registry and need the same protection.
 
+Private lock and registry-file opens reject multiple hardlinks. On Windows the
+opened handle is also checked for a reparse point; on Unix the final component
+is opened without following symlinks and without blocking on a FIFO. Parent-path
+replacement races and Windows ACL privacy are not eliminated by these checks.
+
 Schema 2 made the journal envelope timestamp authoritative for each run's
 start. Schema 3 adds optional PID and spawn-time observations. Schema 4 adds validated
 gents bindings, unique active runtime addresses and engine-specific completion
