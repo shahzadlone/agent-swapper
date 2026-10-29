@@ -19,11 +19,12 @@ TARGETS = {
 
 
 class RebuildMismatch(ValueError):
-    def __init__(self, name, candidate, rebuilt):
+    def __init__(self, name, candidate, rebuilt, detail=None):
         super().__init__("rebuilt executables do not match candidate")
         self.name = name
         self.candidate = candidate
         self.rebuilt = rebuilt
+        self.detail = detail
 
 
 def digest(data):
@@ -46,7 +47,8 @@ def safe_archive_name(name):
         return False
 
 
-def verify_one(directory, target, revision, lock_hash, version, source_files, expected_binaries=None):
+def verify_one(directory, target, revision, lock_hash, version, source_files, expected_binaries=None,
+               rebuilt_contents=None):
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("candidate directory is missing or linked")
     entries = list(directory.iterdir())
@@ -109,8 +111,30 @@ def verify_one(directory, target, revision, lock_hash, version, source_files, ex
                 raise ValueError("rebuilt executables do not match candidate")
             for name in sorted(names):
                 if hashes[name] != expected_binaries[name]:
-                    raise RebuildMismatch(name, hashes[name], expected_binaries[name])
+                    detail = None
+                    if rebuilt_contents is not None and name in rebuilt_contents:
+                        candidate = bundle.read(name)
+                        rebuilt = rebuilt_contents[name]
+                        if digest(rebuilt) == expected_binaries[name]:
+                            detail = binary_difference(candidate, rebuilt)
+                    raise RebuildMismatch(name, hashes[name], expected_binaries[name], detail)
     return archive
+
+
+def pe_timestamp(data):
+    """Read only the PE COFF timestamp, without trusting offsets from the file."""
+    if len(data) < 64 or data[:2] != b"MZ":
+        return None
+    offset = int.from_bytes(data[60:64], "little")
+    if offset > len(data) - 12 or data[offset:offset + 4] != b"PE\0\0":
+        return None
+    return int.from_bytes(data[offset + 8:offset + 12], "little")
+
+
+def binary_difference(candidate, rebuilt):
+    common = min(len(candidate), len(rebuilt))
+    first = next((i for i in range(common) if candidate[i] != rebuilt[i]), common)
+    return (len(candidate), len(rebuilt), first, pe_timestamp(candidate), pe_timestamp(rebuilt))
 
 
 def verify_set(root, revision, lock_hash, version, source_files):

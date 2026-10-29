@@ -26,7 +26,7 @@ def verify_rebuild(directory, target, revision, lock, version, source_files, bin
         raise ValueError("rebuilt candidate marker is missing or invalid")
     verify_build_marker(json.loads(read_bounded(marker, 65536).decode("utf-8")), revision, False, lock, local)
     binary_hashes = {name: hashlib.sha256(data).hexdigest() for name, data in local.items()}
-    verify_one(directory, target, revision, lock, version, source_files, binary_hashes)
+    verify_one(directory, target, revision, lock, version, source_files, binary_hashes, local)
     for name, value in binary_hashes.items():
         print(f"{name}: {value}")
 
@@ -58,7 +58,15 @@ def diagnostic(error):
             and error.name in {"aswp", "agentswapper", "aswp.exe", "agentswapper.exe"}
             and re.fullmatch(r"[0-9a-f]{64}", error.candidate)
             and re.fullmatch(r"[0-9a-f]{64}", error.rebuilt)):
-        return f"{error.name} differs: candidate SHA-256 {error.candidate}; rebuilt SHA-256 {error.rebuilt}"
+        message = f"{error.name} differs: candidate SHA-256 {error.candidate}; rebuilt SHA-256 {error.rebuilt}"
+        detail = error.detail
+        if (isinstance(detail, tuple) and len(detail) == 5
+                and all(type(value) is int and 0 <= value <= 256 * 1024 * 1024 for value in detail[:3])
+                and all(value is None or type(value) is int and 0 <= value <= 0xffffffff for value in detail[3:])):
+            message += f"; sizes {detail[0]}/{detail[1]}; first differing offset {detail[2]}"
+            if detail[3] is not None and detail[4] is not None:
+                message += f"; PE timestamps {detail[3]}/{detail[4]}"
+        return message
     known = {
         "candidate directory is missing or linked": "candidate directory invalid",
         "candidate must contain exactly one archive and checksum": "candidate inventory invalid",

@@ -5,17 +5,52 @@ import tempfile
 import unittest
 
 from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, digest, make_candidate
-from verify_candidate_set import RebuildMismatch, verify_one
+from verify_candidate_set import RebuildMismatch, binary_difference, verify_one
 from verify_rebuilt_candidate import diagnostic, verify_rebuild
 
 
 class RebuiltCandidateTests(unittest.TestCase):
+    def test_bounded_pe_difference_diagnostics(self):
+        def pe(timestamp):
+            data = bytearray(100)
+            data[:2] = b"MZ"
+            data[60:64] = (64).to_bytes(4, "little")
+            data[64:68] = b"PE\0\0"
+            data[72:76] = timestamp.to_bytes(4, "little")
+            return bytes(data)
+
+        detail = binary_difference(pe(1), pe(2))
+        self.assertEqual(detail, (100, 100, 72, 1, 2))
+        self.assertIn("first differing offset 72; PE timestamps 1/2", diagnostic(
+            RebuildMismatch("aswp.exe", "a" * 64, "b" * 64, detail)))
+        self.assertEqual(binary_difference(b"a", b"ab"), (1, 2, 1, None, None))
+        self.assertNotIn("injected", diagnostic(RebuildMismatch(
+            "aswp", "a" * 64, "b" * 64, (1, 2, 3, "injected", None))))
+
     def test_diagnostics_do_not_include_arbitrary_error_contents(self):
         self.assertEqual(diagnostic(ValueError("secret\n::warning::injected")), "verification failed (ValueError)")
         mismatch = RebuildMismatch("aswp", "a" * 64, "b" * 64)
         self.assertIn("candidate SHA-256 " + "a" * 64, diagnostic(mismatch))
         self.assertIn("rebuilt SHA-256 " + "b" * 64, diagnostic(mismatch))
         self.assertNotIn("injected", diagnostic(RebuildMismatch("\n::warning::injected", "a" * 64, "b" * 64)))
+
+    def test_mismatch_details_come_from_verified_archive_and_marked_rebuild(self):
+        name, target = next(iter(TARGETS.items()))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            make_candidate(root, name, target)
+            binaries = root / "binaries"
+            binaries.mkdir()
+            contents = {"aswp": b"binary a", "agentswapper": b"binary changed"}
+            for binary, data in contents.items():
+                (binaries / binary).write_bytes(data)
+            (binaries / "agentswapper-build.json").write_text(json.dumps({
+                "schema": 1, "revision": REVISION, "dirty": False, "lock_sha256": LOCK,
+                "binaries": {binary: digest(data) for binary, data in contents.items()},
+            }), encoding="utf-8")
+            with self.assertRaises(RebuildMismatch) as caught:
+                verify_rebuild(root / name, target, REVISION, LOCK, VERSION, SOURCE_FILES, binaries)
+            self.assertEqual(caught.exception.detail, (8, 14, 7, None, None))
 
     def test_candidate_integrity_and_source_binding_precede_comparison(self):
         cases = ((name, target, mode) for name, target in TARGETS.items()
