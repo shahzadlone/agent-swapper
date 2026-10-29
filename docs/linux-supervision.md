@@ -400,6 +400,13 @@ backend needs an independently qualified boundary preventing escape, or must
 retain unknown custody; namespace setup by itself is not sufficient if the
 global hierarchy remains accessible. The existing fixture passes do not
 establish protection against this scenario.
+An additional fixture attempts the same migration after entering new user and
+cgroup namespaces rooted at the admitted leaf. It runs only when the hosted
+environment permits unprivileged namespace creation; a skipped fixture is not
+evidence of containment. The [kernel's `nsdelegate` mount option](https://docs.kernel.org/admin-guide/cgroup-v2.html#mounting)
+is system-wide, and namespace setup may affect user identity, filesystem access,
+and agent behavior. The test does not yet qualify those effects, alternative
+escape paths, or this approach for production.
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.

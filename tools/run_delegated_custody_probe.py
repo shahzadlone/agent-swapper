@@ -4,6 +4,7 @@
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 
@@ -35,7 +36,7 @@ def main():
         env["ASWP_DELEGATED_CGROUP"] = str(parent)
         shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
         env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
-        for name, notice in [
+        cases = [
             ("internal_guardian_checks_same_user_cgroup_migration", "Linux cgroup migration"),
             ("internal_guardian_loss_preserves_unresolved_run_through_cleanup", "Linux internal guardian loss"),
             ("internal_guardian_cleans_up_on_incomplete_startup", "Linux internal guardian incomplete startup"),
@@ -44,7 +45,24 @@ def main():
             ("internal_guardian_cleans_up_if_parent_disappears_before_retirement", "Linux internal guardian pre-retirement EOF"),
             ("real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup", "Linux journal guardian"),
             ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),
-        ]:
+        ]
+        unshare = shutil.which("unshare")
+        if unshare:
+            unshare = str(Path(unshare).resolve(strict=True))
+            try:
+                usable = subprocess.run([unshare, "--user", "--map-current-user", "--cgroup", "/bin/true"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        check=False, timeout=10).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                usable = False
+        else:
+            usable = False
+        if usable:
+            env["ASWP_TEST_UNSHARE"] = unshare
+            cases.insert(0, ("internal_guardian_checks_namespaced_cgroup_migration", "Linux cgroup namespace migration"))
+        else:
+            print("::notice title=Linux cgroup namespace migration::not run; unprivileged namespace setup unavailable", flush=True)
+        for name, notice in cases:
             result = subprocess.run([str(core_test), "--ignored", "--exact",
                                      f"store::linux_journal_guardian_tests::{name}",
                                      "--nocapture"], env=env, check=False, timeout=90,

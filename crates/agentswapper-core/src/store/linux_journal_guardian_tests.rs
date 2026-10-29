@@ -487,8 +487,28 @@ fn guardian_exit_target() {
     io::stdin().lock().read_line(&mut grant).unwrap();
     assert_eq!(grant, "GO\n");
     if std::env::var_os("ASWP_JOURNAL_ESCAPE_PROBE").is_some() {
+        if std::env::var_os("ASWP_JOURNAL_NAMESPACE_PROBE").is_some() {
+            assert!(
+                fs::read_to_string("/proc/self/cgroup")
+                    .unwrap()
+                    .lines()
+                    .any(|line| line == "0::/")
+            );
+        }
         let (dir, scope) = fixture_paths();
-        let parent = cgroup::checked_directory(scope.parent().unwrap()).unwrap();
+        let parent = match cgroup::checked_directory(scope.parent().unwrap()) {
+            Ok(parent) => parent,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
+                ) =>
+            {
+                fs::write(dir.join("escape-result"), b"denied").unwrap();
+                std::process::exit(7);
+            }
+            Err(error) => panic!("unexpected parent access error: {error}"),
+        };
         let result = cgroup::control(&parent, "cgroup.procs", OFlags::WRONLY)
             .and_then(|mut file| file.write_all(format!("{}\n", std::process::id()).as_bytes()));
         match result {
@@ -508,7 +528,10 @@ fn guardian_exit_target() {
                     .unwrap();
                 until(|| dir.join("escaped-heartbeat").exists());
             }
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || error.kind() == io::ErrorKind::NotFound =>
+            {
                 fs::write(dir.join("escape-result"), b"denied").unwrap();
             }
             Err(error) => panic!("unexpected migration error: {error}"),
@@ -541,6 +564,7 @@ fn internal_guardian_case(
     loss_after_empty: bool,
     guardian_loss: bool,
     escape_probe: bool,
+    namespace_probe: bool,
 ) {
     use crate::supervision::linux_guardian;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
@@ -579,10 +603,23 @@ fn internal_guardian_case(
         GUARDIAN_EXIT_TARGET
     };
     let test_executable = std::env::current_exe().unwrap();
+    let mut arguments = Vec::new();
+    let program = if namespace_probe {
+        arguments.extend([
+            "--user".into(),
+            "--map-current-user".into(),
+            "--cgroup".into(),
+            test_executable.as_os_str().to_owned(),
+        ]);
+        PathBuf::from(std::env::var_os("ASWP_TEST_UNSHARE").unwrap())
+    } else {
+        test_executable
+    };
+    arguments.extend(["--exact".into(), target.into(), "--ignored".into()]);
     let launch = LaunchEnvelope::capture(
-        test_executable.as_os_str(),
+        program.as_os_str(),
         temp.path(),
-        ["--exact".into(), target.into(), "--ignored".into()],
+        arguments,
         [],
         [
             (
@@ -596,6 +633,10 @@ fn internal_guardian_case(
             (
                 "ASWP_JOURNAL_ESCAPE_PROBE".into(),
                 escape_probe.then(|| "1".into()),
+            ),
+            (
+                "ASWP_JOURNAL_NAMESPACE_PROBE".into(),
+                namespace_probe.then(|| "1".into()),
             ),
         ],
     )
@@ -680,13 +721,21 @@ fn internal_guardian_case(
                 );
                 fs::write(temp.path().join("escaped-stop"), b"stop").unwrap();
                 until(|| temp.path().join("escaped-done").exists());
-                println!(
-                    "::notice title=Linux cgroup migration::escaped writer survived retirement"
-                );
+                let title = if namespace_probe {
+                    "Linux cgroup namespace migration"
+                } else {
+                    "Linux cgroup migration"
+                };
+                println!("::notice title={title}::escaped writer survived retirement");
             }
-            "denied" => println!(
-                "::notice title=Linux cgroup migration::migration was denied on this runner"
-            ),
+            "denied" => {
+                let title = if namespace_probe {
+                    "Linux cgroup namespace migration"
+                } else {
+                    "Linux cgroup migration"
+                };
+                println!("::notice title={title}::migration was denied on this runner");
+            }
             _ => panic!("unexpected migration observation"),
         }
     }
@@ -787,7 +836,7 @@ fn internal_guardian_cleans_up_on_incomplete_startup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_reports_exit_after_cleanup() {
-    internal_guardian_case(false, false, false, false);
+    internal_guardian_case(false, false, false, false, false);
     println!(
         "::notice title=Linux internal guardian exit::actual CLI guardian observed exit and retired the scope; journal remains pending"
     );
@@ -796,7 +845,7 @@ fn internal_guardian_reports_exit_after_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
-    internal_guardian_case(true, false, false, false);
+    internal_guardian_case(true, false, false, false, false);
     println!(
         "::notice title=Linux internal guardian EOF::actual CLI guardian retired target scope on channel loss; journal remains pending"
     );
@@ -805,7 +854,7 @@ fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
-    internal_guardian_case(false, true, false, false);
+    internal_guardian_case(false, true, false, false, false);
     println!(
         "::notice title=Linux internal guardian pre-retirement EOF::actual CLI guardian retained lease through empty-scope cleanup after channel loss"
     );
@@ -814,7 +863,7 @@ fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_loss_preserves_unresolved_run_through_cleanup() {
-    internal_guardian_case(false, false, true, false);
+    internal_guardian_case(false, false, true, false, false);
     println!(
         "::notice title=Linux internal guardian loss::owned guardian loss leaves the run unresolved while the supervisor retains custody through cleanup"
     );
@@ -823,5 +872,11 @@ fn internal_guardian_loss_preserves_unresolved_run_through_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_checks_same_user_cgroup_migration() {
-    internal_guardian_case(false, false, false, true);
+    internal_guardian_case(false, false, false, true, false);
+}
+
+#[test]
+#[ignore = "requires delegated cgroup, unprivileged namespaces and the actual CLI guardian"]
+fn internal_guardian_checks_namespaced_cgroup_migration() {
+    internal_guardian_case(false, false, false, true, true);
 }
