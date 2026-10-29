@@ -34,6 +34,44 @@ const RETIRED: &[u8] = b"ASWP-RETIRED-1";
 #[doc(hidden)]
 pub const INTERNAL_ARG: &str = "__agentswapper_internal_linux_guardian_v1";
 
+/// Start a guardian outside the foreground process group on a private channel.
+/// The caller must choose a trusted executable containing the internal role.
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn spawn_guardian(
+    executable: &Path,
+    scope: &Path,
+    stdout: Stdio,
+    stderr: Stdio,
+) -> io::Result<(Child, OwnedFd)> {
+    if !executable.is_absolute() || !scope.is_absolute() {
+        return Err(io::Error::other("guardian paths must be absolute"));
+    }
+    let (channel, gate) = transport::pair()?;
+    let guardian = Command::new(executable)
+        .arg(INTERNAL_ARG)
+        .arg(scope)
+        .arg(getpgrp().as_raw_pid().to_string())
+        .env_clear()
+        .stdin(Stdio::from(gate))
+        .stdout(stdout)
+        .stderr(stderr)
+        .process_group(0)
+        .spawn()?;
+    Ok((guardian, channel))
+}
+
+/// Clean an owned scope after the guardian is lost, while the caller retains
+/// its lease. This does not recover a target status or create a receipt.
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn recover_scope(scope: &mut cgroup::Group, deadline: Instant) -> io::Result<()> {
+    cgroup::validate_scope(scope.parent(), scope.directory(), scope.path())?;
+    scope.retire(deadline)?;
+    cgroup::require(
+        cgroup::events_missing(scope.directory())?,
+        "scope retirement not observed",
+    )
+}
+
 /// Transfer the scope, lease, launch and streams under one startup deadline.
 /// The returned PID must be durably recorded before the caller sends GO.
 /// This preparation is experimental and is not a production launch API.
@@ -289,6 +327,39 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guardian_spawn_rejects_relative_or_missing_executables() -> io::Result<()> {
+        assert!(
+            spawn_guardian(
+                Path::new("relative"),
+                Path::new("/scope"),
+                Stdio::null(),
+                Stdio::null()
+            )
+            .is_err()
+        );
+        assert!(
+            spawn_guardian(
+                Path::new("/bin/true"),
+                Path::new("relative"),
+                Stdio::null(),
+                Stdio::null()
+            )
+            .is_err()
+        );
+        let temp = tempfile::tempdir()?;
+        assert!(
+            spawn_guardian(
+                &temp.path().join("missing"),
+                Path::new("/scope"),
+                Stdio::null(),
+                Stdio::null()
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn live_session_waits_across_poll_intervals_and_guardian_loss_fails() -> io::Result<()> {

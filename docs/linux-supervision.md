@@ -195,6 +195,11 @@ unexpected exit. Local tests cover multiple polling intervals, guardian loss and
 invalid messages. A new delegated case kills the actual guardian while its
 target is running and requires the still-held supervisor lease to cover scope
 cleanup; its hosted result and terminal behavior remain to be established.
+The actual-guardian cases now also share the supervisor's private-channel
+spawn routine, which starts the guardian in a separate process group with a
+cleared environment. The guardian-loss case uses the shared scope-recovery
+routine while holding the supervisor lease. These additions await delegated CI
+and do not yet wire recovery or spawning into the normal launcher.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;

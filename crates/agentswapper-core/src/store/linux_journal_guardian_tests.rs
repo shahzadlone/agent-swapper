@@ -508,26 +508,15 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool, guardian_lo
             }),
         )
         .unwrap();
-    let (channel, gate) = transport::pair().unwrap();
-    let foreground = rustix::process::getpgrp().as_raw_pid().to_string();
     let startup_deadline = Instant::now() + BUDGET;
-    let mut guardian = OwnedChild(
-        Command::new(executable)
-            .arg(linux_guardian::INTERNAL_ARG)
-            .arg(scope.path())
-            .arg(foreground)
-            .env_clear()
-            .stdin(Stdio::from(gate))
-            .stdout(Stdio::from(
-                File::create(temp.path().join("guardian_fixture.stdout")).unwrap(),
-            ))
-            .stderr(Stdio::from(
-                File::create(temp.path().join("guardian_fixture.stderr")).unwrap(),
-            ))
-            .process_group(0)
-            .spawn()
-            .unwrap(),
-    );
+    let (guardian, channel) = linux_guardian::spawn_guardian(
+        &executable,
+        scope.path(),
+        Stdio::from(File::create(temp.path().join("guardian_fixture.stdout")).unwrap()),
+        Stdio::from(File::create(temp.path().join("guardian_fixture.stderr")).unwrap()),
+    )
+    .unwrap();
+    let mut guardian = OwnedChild(guardian);
     let target = if parent_loss || guardian_loss {
         TARGET
     } else {
@@ -575,7 +564,7 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool, guardian_lo
         guardian.0.kill().unwrap();
         assert!(linux_guardian::wait_for_empty(&channel, &mut guardian.0).is_err());
         assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
-        scope.retire(Instant::now() + BUDGET).unwrap();
+        linux_guardian::recover_scope(&mut scope, Instant::now() + BUDGET).unwrap();
         assert!(cgroup::events_missing(scope.directory()).unwrap());
         assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
         drop(lease);
