@@ -363,6 +363,12 @@ fn kimi_legacy_home_requires_explicit_per_launch_consent() {
     assert_eq!(bypass["data"]["plan"]["kimi_legacy_preflight"], "bypassed");
     s.run("work")
         .arg("--allow-kimi-legacy")
+        .env("KIMI_CODE_OAUTH_HOST", "private-override-canary")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("KIMI_CODE_OAUTH_HOST"));
+    s.run("work")
+        .arg("--allow-kimi-legacy")
         .assert()
         .success()
         .stderr(predicate::str::contains("preflight bypassed"));
@@ -438,6 +444,26 @@ fn conflicting_authentication_never_exposes_secret() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("credential-canary"));
     let database = std::fs::read(s.state().join("registry.sqlite3")).unwrap();
     assert!(!database.windows(17).any(|w| w == b"credential-canary"));
+}
+
+#[test]
+fn empty_identity_overrides_are_still_conflicts() {
+    let s = Sandbox::new();
+    for (harness, key) in [
+        ("claude", "ANTHROPIC_FEDERATION_RULE_ID"),
+        ("codex", "CODEX_ACCESS_TOKEN"),
+        ("kimi", "KIMI_SHARE_DIR"),
+    ] {
+        s.add(harness, harness);
+        s.run(harness)
+            .env(key, "")
+            .assert()
+            .code(125)
+            .stderr(predicate::str::contains(key));
+    }
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert!(history["data"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -527,6 +553,12 @@ fn claude_shared_profile_requires_explicit_per_launch_consent() {
         bypass["data"]["plan"]["claude_shared_auth_preflight"],
         "bypassed"
     );
+    s.run("work")
+        .arg("--allow-claude-shared-auth")
+        .env("ANTHROPIC_IDENTITY_TOKEN", "private-override-canary")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("ANTHROPIC_IDENTITY_TOKEN"));
     s.run("work")
         .assert()
         .code(125)

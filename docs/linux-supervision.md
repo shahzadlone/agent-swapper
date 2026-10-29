@@ -52,7 +52,8 @@ cleanup affects the original directory, while a same-name replacement survives.
 Further provider-free tests replace the child after its descriptor is acquired:
 the removal function used by retirement and the rollback guard refuse the
 replacement. These tests use ordinary temporary directories; the actual cgroup
-retirement path still requires delegated-kernel evidence. The identity
+retirement path passed the existing delegated custody and terminal cases at
+`b9ee5e6`, but no adversarial replacement case ran on cgroupfs. The identity
 check and name-based removal are separate operations, so this does not prove
 safety against a same-user actor racing between them. A failed check can leave
 an empty original child behind; cleanup remains unresolved.
