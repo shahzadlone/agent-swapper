@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 6;
+const SCHEMA: i64 = 7;
 #[cfg(test)]
 mod crash_tests;
 mod journal;
@@ -182,7 +182,7 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if matches!(current, 1..=5) {
+        if matches!(current, 1..=6) {
             journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);

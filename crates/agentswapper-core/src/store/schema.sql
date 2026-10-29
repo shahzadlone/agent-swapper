@@ -32,4 +32,4 @@ CREATE UNIQUE INDEX unique_local_scope ON runs(json_extract(local_scope,'$.id'))
 CREATE TABLE mappings (
     directory TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id)
 );
-PRAGMA user_version=6;
+PRAGMA user_version=7;

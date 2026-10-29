@@ -126,7 +126,7 @@ Implemented, unreleased:
 - validated profile aliases and opaque IDs; register, list, show, rename,
   enable, disable, and unregister without deleting vendor files;
 - SQLite append-only events and projections in one transaction, full replay
-  verification, and backed-up schema-1 through schema-5 to schema-6 migrations;
+  verification, and backed-up schema-1 through schema-6 to schema-7 migrations;
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;

@@ -75,11 +75,18 @@ CLI executables now include an internal shim entry, which refuses launch without
 the private admission protocol and a validated scope. Ordinary launches do not
 call it, and it does not issue a stop receipt. The delegated journal fixture
 is configured to use the actual `aswp` binary on CI; this new path requires a
-successful hosted run before it is evidence.
+successful hosted run before it is evidence. The actual `aswp` shim passed
+both delegated journal cases in
+[CI run 40830277723](https://github.com/shahzadlone/agent-swapper/actions/runs/40830277723/job/123302647991)
+at `a6e07aa`.
 The delegated terminal fixture also routes the target through this shared
 shim and transfers all three original streams. Its non-delegated path remains
 the earlier terminal-only control case. The revised delegated terminal cases
 require their own hosted CI run; prior terminal results used the older shim.
+The revised terminal cases passed the delegated Linux step in
+[CI run 40829968967](https://github.com/shahzadlone/agent-swapper/actions/runs/40829968967/job/123301672399)
+at `b98df73`; they use the shared shim source in the fixture executable, not
+the `aswp` entry point.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).

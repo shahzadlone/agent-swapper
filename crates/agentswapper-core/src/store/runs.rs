@@ -27,12 +27,13 @@ pub enum ProcessCustody {
 #[serde(tag = "backend", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LocalScope {
     WindowsJob { id: Uuid },
+    LinuxCgroup { id: Uuid },
 }
 
 impl LocalScope {
     pub fn id(&self) -> Uuid {
         match self {
-            Self::WindowsJob { id } => *id,
+            Self::WindowsJob { id } | Self::LinuxCgroup { id } => *id,
         }
     }
 }
@@ -138,6 +139,43 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::Harness;
+
+    #[test]
+    fn linux_scope_cannot_be_finished_with_a_windows_or_uncontained_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let scope = Uuid::new_v4();
+        let id = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: scope }),
+            )
+            .unwrap();
+        store.observe_spawn(&id, 42).unwrap();
+        assert!(
+            store
+                .finish_run(id.clone(), RunCompletion::ChildExited(0))
+                .is_err()
+        );
+        assert!(
+            store
+                .record(crate::store::Event::RunFinished {
+                    id: id.clone(),
+                    exit_code: 0,
+                    outcome: "local_scope_empty".to_owned(),
+                    stopped_scope: Some(scope),
+                })
+                .is_err()
+        );
+        assert_eq!(store.run(&id).unwrap().custody, ProcessCustody::Unknown);
+        assert!(store.verify().unwrap().consistent);
+    }
 
     #[test]
     fn observations_do_not_promote_direct_exits_or_attestations_to_verified_custody() {

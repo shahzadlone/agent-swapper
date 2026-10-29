@@ -35,7 +35,7 @@ authenticate the database against a process running as the same user.
 
 ## Upgrades and backups
 
-Opening a schema-1 through schema-5 registry upgrades it to schema 6. Before changing it, the
+Opening a schema-1 through schema-6 registry upgrades it to schema 7. Before changing it, the
 upgrade writes a consistent SQLite snapshot, including committed WAL data, to
 `STATE_DIR/registry-backups/schema-N-SHA256.sqlite3`. An unchanged retry reuses
 an identical snapshot without overwriting it. Files use private permissions
@@ -78,6 +78,16 @@ receipt, an observed PID and a native profile; a direct exit, failed admission
 or operator attestation cannot be relabelled as empty. The event stores the
 receipt's scope UUID, and replay checks it against the original intent. This
 reports local Job membership only, never external work or credential isolation.
+Schema 7 also accepts a Linux cgroup scope identity in a run intent. It does
+not yet accept an automated Linux stop receipt: a pending Linux scope remains
+unresolved until operator attestation. The schema-6 upgrade rejects Linux scope
+events that could not have been produced by schema-6 software, checks the old
+DDL and retains the pre-upgrade snapshot.
+In a local Linux compatibility check, a previously built schema-6 preview
+`aswp` created a registry, the schema-7 executable upgraded it, and the older
+executable refused the upgraded registry with exit 125. The older binary had a
+dirty-build marker, so this evidence applies to those tested binaries rather
+than a clean release build.
 The upgrade checks old DDL before replacing projection tables and copies actual
 rows; projection corruption cannot disappear into a replay rebuild. The upgrade
 reconciles schema-1 timestamps, preserves missing observations as unknown,
@@ -87,7 +97,7 @@ opened or backed up by this migration.
 
 Keep all AgentSwapper processes on the same build during an upgrade. Current
 writers recheck the schema in every event transaction and refuse a changed or
-newer schema. A schema-5 supervisor still running during the schema-6 upgrade
+newer schema. A schema-6 supervisor still running during the schema-7 upgrade
 will refuse to record its exit; its intent remains pending and requires manual
 reconciliation. This does not retrofit schema guards into binaries that predate them.
 

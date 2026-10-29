@@ -731,7 +731,7 @@ fn v3_upgrade_preserves_observed_pending_run_and_exact_backup() {
     let before = v3_dump(&db);
     migrate(&mut db, &root, 3).unwrap();
     assert_eq!(v3_dump(&db), before);
-    assert_eq!(verify(&db).unwrap().schema_version, 6);
+    assert_eq!(verify(&db).unwrap().schema_version, SCHEMA);
     assert!(verify(&db).unwrap().consistent);
     assert_eq!(backups(&root).len(), 1);
     let backup = Connection::open(&backups(&root)[0]).unwrap();
@@ -944,7 +944,7 @@ fn v4_upgrade_preserves_gents_binding_and_native_pending_history_without_inventi
     migrate(&mut db, &root, 4).unwrap();
     assert_eq!(v4_dump(&db), before);
     assert!(verify(&db).unwrap().consistent);
-    assert_eq!(verify(&db).unwrap().schema_version, 6);
+    assert_eq!(verify(&db).unwrap().schema_version, SCHEMA);
     assert_eq!(backups(&root).len(), 1);
     let backup = Connection::open(&backups(&root)[0]).unwrap();
     assert_eq!(v4_dump(&backup), before);
@@ -1090,7 +1090,7 @@ fn v5_migration_keeps_sessions_and_pending_intents_without_inventing_custody() {
     migrate(&mut db, &root, 5).unwrap();
     assert_eq!(v5_dump(&db), before);
     assert!(verify(&db).unwrap().consistent);
-    assert_eq!(verify(&db).unwrap().schema_version, 6);
+    assert_eq!(verify(&db).unwrap().schema_version, SCHEMA);
     assert_eq!(backups(&root).len(), 1);
     let backup = Connection::open(&backups(&root)[0]).unwrap();
     assert_eq!(v5_dump(&backup), before);
@@ -1139,6 +1139,113 @@ fn v5_failed_migration_preserves_original_schema_rows_and_backup() {
                 .unwrap(),
             5
         );
+        assert_eq!(backups(&root).len(), 1);
+    }
+}
+
+#[test]
+fn v6_migration_preserves_scoped_pending_run_and_backup() {
+    use crate::store::LocalScope;
+    let (_temp, mut store) = setup();
+    let root = store.root().to_owned();
+    let profile = store
+        .register(Harness::Codex, "work".parse().unwrap())
+        .unwrap();
+    let scope = LocalScope::WindowsJob { id: Uuid::new_v4() };
+    let lease = store.lease(profile.id).unwrap();
+    let run = store
+        .begin_run_with_scope(&lease, "run", None, Some(scope.clone()))
+        .unwrap();
+    store.observe_spawn(&run, 4242).unwrap();
+    drop(lease);
+    let finished_profile = store
+        .register(Harness::Claude, "finished".parse().unwrap())
+        .unwrap();
+    let finished_lease = store.lease(finished_profile.id).unwrap();
+    let finished_scope = Uuid::new_v4();
+    let finished = store
+        .begin_run_with_scope(
+            &finished_lease,
+            "run",
+            None,
+            Some(LocalScope::WindowsJob { id: finished_scope }),
+        )
+        .unwrap();
+    store.observe_spawn(&finished, 4243).unwrap();
+    store
+        .record(Event::RunFinished {
+            id: finished.clone(),
+            exit_code: 0,
+            outcome: "local_scope_empty".to_owned(),
+            stopped_scope: Some(finished_scope),
+        })
+        .unwrap();
+    drop(finished_lease);
+    let before = projection_dump(&store.db).unwrap();
+    store.db.pragma_update(None, "user_version", 6).unwrap();
+    drop(store);
+    let mut upgraded = Store::open(&root).unwrap();
+    assert_eq!(projection_dump(&upgraded.db).unwrap(), before);
+    assert_eq!(upgraded.run(&run).unwrap().local_scope, Some(scope));
+    assert_eq!(upgraded.run(&run).unwrap().observed_pid, Some(4242));
+    assert_eq!(
+        upgraded.run(&finished).unwrap().custody,
+        crate::store::ProcessCustody::LocalScopeEmpty
+    );
+    assert!(matches!(upgraded.lease(profile.id), Err(Error::Busy)));
+    assert!(upgraded.verify().unwrap().consistent);
+    let copies = backups(&root);
+    assert_eq!(copies.len(), 1);
+    let backup = Connection::open(&copies[0]).unwrap();
+    assert_eq!(
+        backup
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        6
+    );
+    assert_eq!(projection_dump(&backup).unwrap(), before);
+    upgraded.attest_stopped(&run).unwrap();
+    assert!(upgraded.lease(profile.id).is_ok());
+}
+
+#[test]
+fn v6_migration_refuses_new_scope_events_and_schema_tampering() {
+    use crate::store::LocalScope;
+    for mutation in ["future_scope", "schema"] {
+        let (_temp, mut store) = setup();
+        let root = store.root().to_owned();
+        let profile = store
+            .register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        if mutation == "future_scope" {
+            let lease = store.lease(profile.id).unwrap();
+            store
+                .begin_run_with_scope(
+                    &lease,
+                    "run",
+                    None,
+                    Some(LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
+                )
+                .unwrap();
+        } else {
+            store
+                .db
+                .execute_batch("CREATE INDEX injected ON runs(kind)")
+                .unwrap();
+        }
+        store.db.pragma_update(None, "user_version", 6).unwrap();
+        let before = projection_dump(&store.db).unwrap();
+        let events = event_count(&store.db);
+        drop(store);
+        assert!(Store::open(&root).is_err());
+        let db = Connection::open(root.join("registry.sqlite3")).unwrap();
+        assert_eq!(
+            db.pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            6
+        );
+        assert_eq!(projection_dump(&db).unwrap(), before);
+        assert_eq!(event_count(&db), events);
         assert_eq!(backups(&root).len(), 1);
     }
 }

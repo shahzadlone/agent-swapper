@@ -78,6 +78,11 @@ fn fixture_paths() -> (PathBuf, PathBuf) {
     )
 }
 
+fn scope_id(path: &Path) -> uuid::Uuid {
+    let name = path.file_name().unwrap().to_str().unwrap();
+    uuid::Uuid::parse_str(name.strip_prefix("aswp-probe-").unwrap()).unwrap()
+}
+
 fn until(mut check: impl FnMut() -> bool) {
     let deadline = Instant::now() + BUDGET;
     while !check() {
@@ -230,7 +235,16 @@ fn supervisor_fixture() {
     let mut store = Store::open(&dir.join("state")).unwrap();
     let profile = store.profiles().unwrap().pop().unwrap();
     let lease = store.lease(profile.id).unwrap();
-    let run = store.begin_run(&lease, "run").unwrap();
+    let run = store
+        .begin_run_with_scope(
+            &lease,
+            "run",
+            None,
+            Some(LocalScope::LinuxCgroup {
+                id: scope_id(&scope),
+            }),
+        )
+        .unwrap();
     let (channel, gate) = transport::pair().unwrap();
     let canary = uuid::Uuid::new_v4().to_string();
     fs::write(dir.join("canary-expected"), &canary).unwrap();
@@ -343,6 +357,12 @@ fn supervisor_loss_before_go_keeps_journal_unresolved() {
         .parse()
         .unwrap();
     assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
+    assert_eq!(
+        store.run(&run).unwrap().local_scope,
+        Some(LocalScope::LinuxCgroup {
+            id: scope_id(scope.path())
+        })
+    );
     drop(store.acquire_lease(profile.id).unwrap());
     assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
     assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
@@ -423,6 +443,12 @@ fn real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup() {
     });
     let mut store = Store::open(&root).unwrap();
     assert_eq!(store.run(&run).unwrap().observed_pid, Some(expected_pid));
+    assert_eq!(
+        store.run(&run).unwrap().local_scope,
+        Some(LocalScope::LinuxCgroup {
+            id: scope_id(scope.path())
+        })
+    );
     assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
     fs::write(temp.path().join("retire"), b"retire").unwrap();
     controller_wait(temp.path(), || {

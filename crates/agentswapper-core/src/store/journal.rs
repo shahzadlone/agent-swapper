@@ -318,7 +318,7 @@ fn valid_timestamp(value: &str) -> bool {
 pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != from || !matches!(from, 1..=5) {
+    if version != from || !matches!(from, 1..=6) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -352,6 +352,15 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
     #[cfg(unix)]
     File::open(&directory)?.sync_all()?;
     private_fs::validate_file(&published)?;
+    if from == 6 {
+        let unsupported: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.event_log WHERE json_extract(payload,'$.type')='run_planned' AND json_extract(payload,'$.local_scope.backend')='linux_cgroup')",
+            [], |row| row.get(0),
+        )?;
+        if unsupported {
+            return Err(Error::CorruptRegistry);
+        }
+    }
     // Validate every event before changing the live projection. The envelope
     // timestamp is canonical, including for legacy events without a JSON time.
     let (rebuilt, _) = replay(&tx)?;
@@ -367,7 +376,13 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         }
         drop(update);
     }
-    if from >= 4 {
+    if from == 6 {
+        let legacy_schema = Connection::open_in_memory()?;
+        legacy_schema.execute_batch(include_str!("schema_v6.sql"))?;
+        if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
+            return Err(Error::ProjectionMismatch);
+        }
+    } else if from >= 4 {
         let legacy_schema = Connection::open_in_memory()?;
         legacy_schema.execute_batch(if from == 4 {
             include_str!("schema_v4.sql")
