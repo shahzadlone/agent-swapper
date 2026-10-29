@@ -1,16 +1,17 @@
 """Check that both rebuilt executable names must match the candidate."""
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, make_candidate
+from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, digest, make_candidate
 from verify_rebuilt_candidate import compare, verify_rebuild
 
 
 class RebuiltCandidateTests(unittest.TestCase):
     def test_candidate_integrity_and_source_binding_precede_comparison(self):
         name, target = next(iter(TARGETS.items()))
-        for mode in ("valid", "tamper", "wrong_revision"):
+        for mode in ("valid", "tamper", "wrong_revision", "dirty_marker", "stale_marker", "missing_marker"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 make_candidate(root, name, target, tamper=mode == "tamper")
@@ -18,6 +19,11 @@ class RebuiltCandidateTests(unittest.TestCase):
                 binaries.mkdir()
                 (binaries / "aswp").write_bytes(b"binary a")
                 (binaries / "agentswapper").write_bytes(b"binary b")
+                marker = {"schema": 1, "revision": REVISION, "dirty": mode == "dirty_marker",
+                          "lock_sha256": LOCK, "binaries": {"aswp": digest(b"binary a"),
+                          "agentswapper": digest(b"old" if mode == "stale_marker" else b"binary b")}}
+                if mode != "missing_marker":
+                    (binaries / "agentswapper-build.json").write_text(json.dumps(marker), encoding="utf-8")
                 revision = "c" * 40 if mode == "wrong_revision" else REVISION
                 if mode == "valid":
                     verify_rebuild(root / name, target, revision, LOCK, VERSION, SOURCE_FILES, binaries)

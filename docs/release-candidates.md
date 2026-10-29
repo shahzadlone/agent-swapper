@@ -72,7 +72,8 @@ job downloads the three candidates from that same run, verifies the target set,
 checksums, source revision, lockfile hash and archive inventory, and signs a
 provenance attestation. Before signing, a separate fresh hosted runner per
 platform rebuilds both executables with the candidate build script, validates
-the matching candidate, and compares each executable's SHA-256. This detects
+its clean checkout and build marker and the matching candidate, and compares
+each executable's SHA-256. This detects
 differences across those runners but does not establish independent control of
 the runner images, toolchain or dependency sources. It also compares the workspace version and project
 license and notices with the checked-out source. It verifies the Sigstore bundle against the repository,
