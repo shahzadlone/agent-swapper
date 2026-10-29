@@ -85,3 +85,9 @@ Signed distribution, independently reproducible builds, source and license
 review for the final dependency graph, and macOS notarization remain release
 gates. Attestation availability is subject to the repository's GitHub policy;
 an unsuccessful attestation job must not be described as verified.
+
+At `f206a3b`, [CI run 40822335892](https://github.com/shahzadlone/agent-swapper/actions/runs/40822335892)
+successfully built the three preview archives and completed the separate
+candidate verification, signing, Sigstore verification and bundle upload steps.
+This evidence applies to that commit and the verifier in that run; subsequent
+changes require their own successful run.
