@@ -14,6 +14,12 @@ read from the published registry archive after its SHA-256 is checked against
 are refused. Available dependency NOTICE files and the project's license and
 notices are included. This generation is a starting point for a release-specific
 license and notice review; it is not a legal determination.
+Candidate and separate-runner rebuild jobs use explicit `ubuntu-24.04`,
+`macos-15`, and `windows-2025` labels and record runner image, OS, compiler,
+libc and Rust information. GitHub can still update those images within a label;
+these labels do not pin an image digest or prove independent toolchain supply.
+GitHub documents both the available [runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
+and that [latest labels migrate](https://github.com/actions/runner-images#available-images).
 The report is generated to a temporary file, using cargo-about's documented
 file-output mode, so a PowerShell ancestor does not block the Windows build.
 
@@ -112,3 +118,11 @@ matched both binaries: `aswp` SHA-256
 Both builds shared a host, toolchain and dependency cache, and were not compared
 to a candidate archive. This is not independent reproduction or cross-platform
 evidence; the release gate remains open.
+
+The first separate-runner comparison with diagnostics at `faa2c5e` did not
+reproduce both candidate executables: the Linux `agentswapper` and Windows
+`agentswapper.exe` hashes differed, and signing was skipped. See the
+[Linux job](https://github.com/shahzadlone/agent-swapper/actions/runs/40829068872/job/123301885114)
+and [Windows job](https://github.com/shahzadlone/agent-swapper/actions/runs/40829068872/job/123301885194).
+The tool stopped at the first mismatch, so those results do not determine
+whether the `aswp` binaries matched. The cause has not been established.

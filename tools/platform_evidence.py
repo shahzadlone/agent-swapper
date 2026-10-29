@@ -2,6 +2,7 @@
 """Record non-secret platform facts for versioned custody verification."""
 
 import json
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -12,6 +13,13 @@ def main():
         ["rustc", "+1.98.0", "-Vv"], check=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
     ).stdout.strip()
+    try:
+        compiler = subprocess.run(
+            ["cc", "--version"], check=True, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+        ).stdout.splitlines()[0]
+    except (OSError, subprocess.SubprocessError, IndexError):
+        compiler = "unavailable"
     evidence = {
         "os": platform.system(),
         "release": platform.release(),
@@ -19,6 +27,10 @@ def main():
         "architecture": platform.machine(),
         "macos": platform.mac_ver()[0],
         "rust": rust,
+        "c_compiler": compiler,
+        "libc": platform.libc_ver(),
+        "runner_image": os.environ.get("ImageOS", "unknown"),
+        "runner_image_version": os.environ.get("ImageVersion", "unknown"),
     }
     encoded = json.dumps(evidence, sort_keys=True)
     destination = Path("target/platform-evidence.json")
