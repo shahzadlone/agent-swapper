@@ -208,6 +208,15 @@ including the journal/lease and outside-heartbeat assertions. That run's macOS
 job failed in a separate temporary-path test, so this is evidence for the Linux
 step rather than a passing whole-workflow result.
 
+The same delegated fixture now also kills the supervisor after the target PID
+is durably recorded but before GO. The guardian observes the closed channel,
+kills and retires the scope, and releases its duplicate lease. The observer
+checks that the target never crossed its gate, the PID remains in the journal,
+and the unresolved intent blocks reuse even after the lease can be reacquired.
+This case and the original journal guardian case passed the Linux job in
+[CI run 40826152704](https://github.com/shahzadlone/agent-swapper/actions/runs/40826152704/job/123289538202)
+at `ce4379d`. It does not qualify production admission or simultaneous loss.
+
 A further delegated-only case injects guardian SIGKILL through the parent's
 owned child handle. Before the target starts, the guardian transfers the parent
 and leaf directory descriptors to the foreground supervisor, which validates
