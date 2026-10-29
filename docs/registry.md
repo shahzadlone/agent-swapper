@@ -32,7 +32,14 @@ job repeats the four-opener registration case 25 times. Windows tests and all
 [CI run 40943875011](https://github.com/shahzadlone/agent-swapper/actions/runs/40943875011/job/123693999303).
 That run also caught a macOS-only path alias in the slow-initializer test:
 the test must reopen the normalized store root before directly taking its
-private lock. The fixture now uses that root; native macOS revalidation is pending.
+private lock. That corrected fixture passed on macOS at `a79532a` in
+[CI run 40954684338](https://github.com/shahzadlone/agent-swapper/actions/runs/40954684338).
+The same run exposed a separate Windows `NotFound` during concurrent open.
+Optional sidecar validation now treats disappearance between its metadata check
+and Windows handle open like absence at the first check; existing sidecars still
+require handle-based hardlink and reparse validation. Required registry and lock
+files keep their existing open rules. A targeted Windows regression exercises
+that interval and checks hardlink refusal; native revalidation is pending.
 
 Explicit verification, doctor, and run-history reads always perform full
 verification. This optimization relies on SQLite writes and working local

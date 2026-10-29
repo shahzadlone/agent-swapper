@@ -152,16 +152,29 @@ pub(crate) fn validate_file(path: &Path) -> Result<()> {
     };
     validate_file_metadata(&meta)?;
     #[cfg(windows)]
+    validate_optional_windows_handle(path)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_optional_windows_handle(path: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
     {
-        use std::os::windows::fs::OpenOptionsExt;
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(path)?;
-        validate_file_metadata(&file.metadata()?)?;
-        if winapi_util::file::information(&file)?.number_of_links() != 1 {
-            return Err(Error::UnsafePath);
-        }
+        Ok(file) => file,
+        // SQLite can remove an optional WAL/SHM/journal while its last peer
+        // connection closes, between our metadata check and this handle open.
+        // Absence already succeeds at the metadata stage. Do not create the
+        // sidecar here or extend this exception to required files or locks.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    validate_file_metadata(&file.metadata()?)?;
+    if winapi_util::file::information(&file)?.number_of_links() != 1 {
+        return Err(Error::UnsafePath);
     }
     Ok(())
 }
@@ -226,5 +239,27 @@ mod tests {
         fs::remove_file(alias).unwrap();
         assert!(file(&path).is_ok());
         assert!(validate_file(&path).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn optional_sidecar_can_disappear_between_metadata_and_handle_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("registry.sqlite3-wal");
+        drop(file(&path).unwrap());
+        validate_file_metadata(&fs::symlink_metadata(&path).unwrap()).unwrap();
+        // Reproduce a peer closing the last SQLite connection after the path
+        // check but before the Windows hardlink/reparse handle check.
+        fs::remove_file(&path).unwrap();
+        validate_optional_windows_handle(&path).unwrap();
+        assert!(!path.exists(), "validation must not recreate a sidecar");
+
+        let outside = directory.path().join("outside");
+        fs::write(&outside, "fixture").unwrap();
+        fs::hard_link(&outside, &path).unwrap();
+        assert!(matches!(
+            validate_optional_windows_handle(&path),
+            Err(Error::UnsafePath)
+        ));
     }
 }
