@@ -6,40 +6,27 @@ import json
 from pathlib import Path
 import subprocess
 import tomllib
-import zipfile
 
-from verify_candidate_set import verify_one
+from verify_candidate_set import read_bounded, verify_one
 from release_candidate import verify_build_marker
 
 
-def compare(archive, target, binaries):
-    suffix = ".exe" if "windows" in target else ""
-    with zipfile.ZipFile(archive) as candidate:
-        for name in ("aswp" + suffix, "agentswapper" + suffix):
-            path = binaries / name
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024 * 1024:
-                raise ValueError(f"rebuilt {name} is missing or invalid")
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-            expected = hashlib.sha256(candidate.read(name)).hexdigest()
-            if actual != expected:
-                raise ValueError(f"rebuilt {name} does not match candidate")
-            print(f"{name}: {actual}")
-
-
 def verify_rebuild(directory, target, revision, lock, version, source_files, binaries):
-    archive = verify_one(directory, target, revision, lock, version, source_files)
     suffix = ".exe" if "windows" in target else ""
     local = {}
     for name in ("aswp" + suffix, "agentswapper" + suffix):
         path = binaries / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024 * 1024:
             raise ValueError(f"rebuilt {name} is missing or invalid")
-        local[name] = path.read_bytes()
+        local[name] = read_bounded(path, 256 * 1024 * 1024)
     marker = binaries / "agentswapper-build.json"
     if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 65536:
         raise ValueError("rebuilt candidate marker is missing or invalid")
-    verify_build_marker(json.loads(marker.read_text(encoding="utf-8")), revision, False, lock, local)
-    compare(archive, target, binaries)
+    verify_build_marker(json.loads(read_bounded(marker, 65536)), revision, False, lock, local)
+    binary_hashes = {name: hashlib.sha256(data).hexdigest() for name, data in local.items()}
+    verify_one(directory, target, revision, lock, version, source_files, binary_hashes)
+    for name, value in binary_hashes.items():
+        print(f"{name}: {value}")
 
 
 def main():

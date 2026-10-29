@@ -4,6 +4,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from verify_candidate_set import TARGETS, digest, verify_set
@@ -47,6 +48,27 @@ def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=Fals
 
 
 class CandidateSetTests(unittest.TestCase):
+    def test_archive_validation_uses_the_checksummed_snapshot(self):
+        import verify_candidate_set
+        name, target = next(iter(TARGETS.items()))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = make_candidate(root, name, target)
+            read = verify_candidate_set.read_bounded
+
+            def replace_after_read(path, limit):
+                data = read(path, limit)
+                if path == archive:
+                    archive.write_bytes(b"replacement")
+                return data
+
+            with patch.object(verify_candidate_set, "read_bounded", side_effect=replace_after_read):
+                verify_candidate_set.verify_one(
+                    root / name, target, REVISION, LOCK, VERSION, SOURCE_FILES,
+                    {"aswp": digest(b"binary a"), "agentswapper": digest(b"binary b")},
+                )
+            self.assertEqual(archive.read_bytes(), b"replacement")
+
     def test_nonportable_paths_are_refused(self):
         from verify_candidate_set import safe_archive_name
         for name in ("../outside", "/absolute", "a//b", "a\\b", "a/CON.txt", "a/LPT².txt", "a/x:stream", "a/last.", "a/last ", "a/\x1b", "a/\u202efoo", "a/e\u0301"):

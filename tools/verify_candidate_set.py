@@ -2,6 +2,7 @@
 """Validate preview archives before the separate provenance-signing job."""
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -21,6 +22,14 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def read_bounded(path, limit):
+    with path.open("rb") as file:
+        data = file.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("candidate exceeds size limits")
+    return data
+
+
 def safe_archive_name(name):
     try:
         safe_path(name)
@@ -29,7 +38,7 @@ def safe_archive_name(name):
         return False
 
 
-def verify_one(directory, target, revision, lock_hash, version, source_files):
+def verify_one(directory, target, revision, lock_hash, version, source_files, expected_binaries=None):
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("candidate directory is missing or linked")
     entries = list(directory.iterdir())
@@ -44,10 +53,11 @@ def verify_one(directory, target, revision, lock_hash, version, source_files):
         raise ValueError("candidate files must be regular and unlinked")
     if archive.stat().st_size > 256 * 1024 * 1024 or checksum.stat().st_size > 1024:
         raise ValueError("candidate exceeds size limits")
-    data = archive.read_bytes()
-    if checksum.read_text(encoding="utf-8") != f"{digest(data)}  {archive.name}\n":
+    data = read_bounded(archive, 256 * 1024 * 1024)
+    checksum_text = read_bounded(checksum, 1024).decode("utf-8")
+    if checksum_text != f"{digest(data)}  {archive.name}\n":
         raise ValueError("candidate checksum mismatch")
-    with zipfile.ZipFile(archive) as bundle:
+    with zipfile.ZipFile(io.BytesIO(data)) as bundle:
         entries = bundle.infolist()
         names = [entry.filename for entry in entries]
         if len(entries) > 4096 or len(names) != len(set(names)) or sum(e.file_size for e in entries) > 512 * 1024 * 1024:
@@ -85,6 +95,10 @@ def verify_one(directory, target, revision, lock_hash, version, source_files):
         for name, expected in source_files.items():
             if name not in hashes or hashes[name] != digest(expected):
                 raise ValueError("candidate project notice does not match checked-out source")
+        if expected_binaries is not None:
+            names = {"aswp" + suffix, "agentswapper" + suffix}
+            if set(expected_binaries) != names or any(hashes[name] != expected_binaries[name] for name in names):
+                raise ValueError("rebuilt executables do not match candidate")
     return archive
 
 

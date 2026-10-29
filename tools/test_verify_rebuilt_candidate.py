@@ -5,7 +5,8 @@ import tempfile
 import unittest
 
 from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, digest, make_candidate
-from verify_rebuilt_candidate import compare, verify_rebuild
+from verify_candidate_set import verify_one
+from verify_rebuilt_candidate import verify_rebuild
 
 
 class RebuiltCandidateTests(unittest.TestCase):
@@ -37,21 +38,17 @@ class RebuiltCandidateTests(unittest.TestCase):
         for name, target in TARGETS.items():
             with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
-                archive = make_candidate(root, name, target)
-                binaries = root / "binaries"
-                binaries.mkdir()
+                make_candidate(root, name, target)
                 suffix = ".exe" if "windows" in target else ""
-                first = binaries / ("aswp" + suffix)
-                second = binaries / ("agentswapper" + suffix)
-                first.write_bytes(b"binary a")
-                second.write_bytes(b"binary b")
-                compare(archive, target, binaries)
-                second.write_bytes(b"different")
-                with self.assertRaisesRegex(ValueError, "does not match"):
-                    compare(archive, target, binaries)
-                second.unlink()
-                with self.assertRaisesRegex(ValueError, "missing or invalid"):
-                    compare(archive, target, binaries)
+                first, second = "aswp" + suffix, "agentswapper" + suffix
+                hashes = {first: digest(b"binary a"), second: digest(b"binary b")}
+                verify_one(root / name, target, REVISION, LOCK, VERSION, SOURCE_FILES, hashes)
+                for key in (first, second):
+                    invalid = {**hashes, key: digest(b"different")}
+                    with self.assertRaisesRegex(ValueError, "do not match"):
+                        verify_one(root / name, target, REVISION, LOCK, VERSION, SOURCE_FILES, invalid)
+                with self.assertRaisesRegex(ValueError, "do not match"):
+                    verify_one(root / name, target, REVISION, LOCK, VERSION, SOURCE_FILES, {first: hashes[first]})
 
 
 if __name__ == "__main__":
