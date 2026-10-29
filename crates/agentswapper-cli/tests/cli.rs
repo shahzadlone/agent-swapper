@@ -1370,12 +1370,13 @@ fn runtime_record_refuses_symbolic_links() {
 fn runtime_record_refuses_fifo_without_blocking() {
     let s = Sandbox::new();
     let home = gents_profile(&s, "127.0.0.1:9191", "worker");
-    rustix::fs::mkfifoat(
-        rustix::fs::CWD,
-        home.join("runtime.json"),
-        rustix::fs::Mode::from_raw_mode(0o600),
-    )
-    .unwrap();
+    assert!(
+        std::process::Command::new("/usr/bin/mkfifo")
+            .arg(home.join("runtime.json"))
+            .status()
+            .unwrap()
+            .success()
+    );
     gents_run(&s)
         .timeout(std::time::Duration::from_secs(3))
         .assert()
