@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shlex
 import signal
@@ -36,6 +37,8 @@ def check(binary, mode):
         before = termios.tcgetattr(slave)
         process = None
         output = bytearray()
+        stop = root / "shell-stop"
+        env["ASWP_FIXTURE_STOP"] = str(stop)
         try:
             def controlling_terminal():
                 try:
@@ -45,7 +48,12 @@ def check(binary, mode):
                     os.write(2, f"terminal setup: {type(error).__name__}: {error}\n".encode())
                     raise
             try:
-                process = subprocess.Popen(command + ["run", "fixture", "--experimental-native", "--executable", str(agent)],
+                # Keep the session leader alive while observing terminal state.
+                # Some systems revoke a PTY when its session leader exits, even
+                # if the controller still holds the slave open.
+                shell = 'trap ":" INT; "$@"; status=$?; printf "\\n__ASWP_EXIT=%s__\\n" "$status"; while [ ! -f "$ASWP_FIXTURE_STOP" ]; do sleep 0.05; done; exit "$status"'
+                args = ["/bin/sh", "-c", shell, "fixture-shell"] + command + ["run", "fixture", "--experimental-native", "--executable", str(agent)]
+                process = subprocess.Popen(args,
                                            cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave,
                                            preexec_fn=None if mode == "detached" else controlling_terminal)
             except subprocess.SubprocessError as error:
@@ -53,8 +61,10 @@ def check(binary, mode):
                 raise RuntimeError(f"could not start PTY fixture: {error}; {detail!r}") from error
             deadline = time.monotonic() + 10
             sent_interrupt = False
-            while process.poll() is None:
+            marker = None
+            while marker is None:
                 assert time.monotonic() < deadline, "fixture did not exit"
+                assert process.poll() is None, "fixture shell exited before reporting status"
                 if select.select([master], [], [], 0.05)[0]:
                     try:
                         data = os.read(master, 65536)
@@ -68,18 +78,9 @@ def check(binary, mode):
                     # The supervisor is our owned, unreaped process-group leader.
                     os.killpg(process.pid, signal.SIGINT)
                     sent_interrupt = True
-            while select.select([master], [], [], 0)[0]:
-                try:
-                    data = os.read(master, 65536)
-                except OSError as error:
-                    if error.errno != errno.EIO:
-                        raise
-                    break
-                if not data:
-                    break
-                output.extend(data)
+                marker = re.search(rb"__ASWP_EXIT=(\d+)__", output)
             expected = 130 if mode == "interrupt" else (125 if mode == "foreground-change" else 42)
-            assert process.returncode == expected, f"unexpected exit: {process.returncode}: {bytes(output)!r}"
+            assert int(marker.group(1)) == expected, f"unexpected exit: {bytes(output)!r}"
             assert b"fixture-ready" in output
             if mode not in ("detached", "foreground-change"):
                 assert termios.tcgetattr(slave) == before, "native agent left terminal attributes changed"
@@ -90,6 +91,8 @@ def check(binary, mode):
             run = json.loads(result.stdout)["data"][0]
             recorded_exit = 42 if mode == "foreground-change" else expected
             assert run["exitCode"] == recorded_exit and run["custody"] == "exited_uncontained"
+            stop.touch()
+            assert process.wait(timeout=3) == expected
         finally:
             if process is not None and process.poll() is None:
                 if mode == "detached":
