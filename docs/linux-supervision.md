@@ -222,7 +222,12 @@ without cgroup delegation exercises an active session and suspension beyond
 the old 30-second limit;
 this fixture behavior does not establish production deadline handling. A
 complete startup-phase deadline and failure reconciliation are still needed;
-per-operation transport bounds alone do not establish that guarantee.
+per-operation transport bounds alone do not establish that guarantee. The
+terminal fixture now requires a bounded READY/GO exchange before it hands the
+original streams to the admitted shim. A delayed-guardian case verifies that a
+parent timeout prevents target execution and that the guardian holds the lease
+through cleanup. That handshake has no journal commit and is not a production
+receipt: failure or simultaneous supervisor loss still needs reconciliation.
 Spawn trusted helpers before changing inherited interrupt dispositions in the
 frontend. The fixture's inherited-signal results do not qualify the current
 native-launch interrupt wrapper.

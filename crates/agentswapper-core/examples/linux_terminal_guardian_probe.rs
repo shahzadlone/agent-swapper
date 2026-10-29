@@ -28,8 +28,8 @@ mod fixture {
         cgroup,
     };
     use rustix::{
-        fd::AsFd,
-        net::{RecvFlags, recv},
+        fd::{AsFd, OwnedFd},
+        net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recv, recvmsg},
         process::{
             Pid, Signal, WaitOptions, getpgid, getpgrp, getpid, getppid, kill_process,
             set_child_subreaper, setsid, waitpid,
@@ -40,7 +40,8 @@ mod fixture {
     use std::{
         ffi::OsString,
         fs::{self, File},
-        io::{self, BufRead, IsTerminal, Write},
+        io::{self, BufRead, IoSliceMut, IsTerminal, Write},
+        mem::MaybeUninit,
         os::unix::{
             ffi::{OsStrExt, OsStringExt},
             process::{CommandExt, ExitStatusExt},
@@ -57,6 +58,7 @@ mod fixture {
     use wait_timeout::ChildExt;
 
     const BUDGET: Duration = Duration::from_secs(30);
+    const READY: &[u8] = b"ASWP-READY-1";
     const DIAGNOSTIC: &[u8] = b"target diagnostic stays on stderr\n";
 
     fn encode_flags(flags: [bool; 3]) -> String {
@@ -82,6 +84,62 @@ mod fixture {
             Ok(())
         } else {
             Err(io::Error::other(message))
+        }
+    }
+
+    fn receive_control(socket: impl AsFd, expected: &[u8]) -> io::Result<()> {
+        let mut bytes = [0_u8; 32];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+        let received = recvmsg(
+            socket,
+            &mut [IoSliceMut::new(&mut bytes)],
+            &mut ancillary,
+            RecvFlags::CMSG_CLOEXEC,
+        )?;
+        let mut unexpected = false;
+        for message in ancillary.drain() {
+            unexpected = true;
+            if let RecvAncillaryMessage::ScmRights(rights) = message {
+                // Dropping the owned rights closes them, including on refusal.
+                drop(rights.collect::<Vec<OwnedFd>>());
+            }
+        }
+        require(
+            !unexpected
+                && !received
+                    .flags
+                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                && received.bytes == expected.len()
+                && &bytes[..received.bytes] == expected,
+            "invalid guardian control packet",
+        )
+    }
+
+    #[cfg(test)]
+    mod control_tests {
+        use super::*;
+
+        #[test]
+        fn control_packets_require_exact_bytes_and_no_descriptors() -> io::Result<()> {
+            for (packet, attach, valid) in [
+                (READY, false, true),
+                (GO, false, false),
+                (READY, true, false),
+                (b"ASWP-READY-1-with-extra".as_slice(), false, false),
+                (
+                    b"ASWP-READY-1-with-extra-bytes-exceeding-control-buffer".as_slice(),
+                    false,
+                    false,
+                ),
+            ] {
+                let (sender, receiver) = pair()?;
+                let file = tempfile::tempfile()?;
+                let descriptors = if attach { vec![file.as_fd()] } else { vec![] };
+                send(&sender, packet, &descriptors)?;
+                assert_eq!(receive_control(&receiver, READY).is_ok(), valid);
+            }
+            Ok(())
         }
     }
 
@@ -188,15 +246,15 @@ mod fixture {
         // lock. The observer checks it independently while the parent is alive
         // and after a parent-only kill.
         let guardian_loss = dir.join("with-guardian-loss").exists();
+        rustix::net::sockopt::set_socket_timeout(
+            &channel,
+            rustix::net::sockopt::Timeout::Recv,
+            Some(Duration::from_secs(5)),
+        )?;
         let fallback = if guardian_loss {
             require(
                 delegated.is_some(),
                 "guardian-loss fixture requires delegation",
-            )?;
-            rustix::net::sockopt::set_socket_timeout(
-                &channel,
-                rustix::net::sockopt::Timeout::Recv,
-                Some(Duration::from_secs(5)),
             )?;
             let parent = File::from(receive(&channel)?);
             let leaf = File::from(receive(&channel)?);
@@ -215,6 +273,11 @@ mod fixture {
             drop(lease);
             None
         };
+        // The admitted shim cannot execute until the parent acknowledges that
+        // the guardian reached its prepared state. A lost or timed-out parent
+        // closes this channel and leaves the guardian responsible for cleanup.
+        receive_control(&channel, READY)?;
+        send(&channel, GO, &[])?;
         let mut injected = false;
         let status = loop {
             if dir.join("kill-parent").exists() {
@@ -347,6 +410,15 @@ mod fixture {
             )?;
             publish(dir, "admitted", json!({"pid":target.0.id()}))?;
         }
+        if dir.join("delay-before-ready").exists() {
+            cgroup::until(Instant::now() + Duration::from_secs(10), || {
+                Ok(dir.join("release-startup").exists().then_some(()))
+            })?;
+        }
+        let channel = rustix::io::dup(io::stdin())?;
+        send(&channel, READY, &[])?;
+        receive_control(&channel, GO)?;
+        drop(channel);
         for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
             send(&grant, GO, &[fd])?;
         }
@@ -577,6 +649,11 @@ mod fixture {
             _ => Err(io::Error::other("unknown fixture role")),
         };
         if let Err(error) = &result {
+            let _ = publish(
+                &dir,
+                &format!("failure-{}", role.to_string_lossy()),
+                json!({"role":role.to_string_lossy(),"error":error.to_string(),"errno":error.raw_os_error()}),
+            );
             let _ = publish(
                 &dir,
                 "failure",

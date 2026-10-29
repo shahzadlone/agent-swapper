@@ -120,6 +120,31 @@ def hold_live_session(shell, root):
         time.sleep(0.05)
 
 
+def startup_timeout(binary):
+    with tempfile.TemporaryDirectory(prefix="aswp-terminal-startup-") as directory:
+        root = Path(directory)
+        shell = Shell(root)
+        try:
+            (root / "delay-before-ready").touch()
+            offset = len(shell.output)
+            shell.send(f"{shlex.quote(str(binary))} parent {shlex.quote(str(root))}\n".encode())
+            shell.wait_for(lambda: (root / "failure-parent").exists(), seconds=9)
+            failure = json.loads((root / "failure-parent").read_text())
+            assert failure["role"] == "parent", failure
+            assert failure["errno"] == errno.EAGAIN, failure
+            shell.prompt(offset)
+            assert not lease_available(root), "guardian released lease before cleanup"
+            assert not (root / "target").exists(), "target started after startup timeout"
+            (root / "release-startup").touch()
+            shell.wait_for(lambda: lease_available(root), seconds=9)
+            assert not (root / "target").exists(), "target started after parent cancellation"
+            print("startup-timeout: pass", flush=True)
+        finally:
+            (root / "release-startup").touch()
+            (root / "release-lease").touch()
+            shell.close()
+
+
 def run_case(binary, mode, delegated=None):
     with tempfile.TemporaryDirectory(prefix="aswp-terminal-guardian-") as directory:
         root = Path(directory)
@@ -299,6 +324,8 @@ def main():
         modes.append("long-session")
     for mode in modes:
         run_case(binary, mode, delegated)
+    if delegated is None:
+        startup_timeout(binary)
     if delegated is not None:
         print("::notice title=Linux terminal cgroup::twelve terminal cases: normal raw-mode restoration, crash restoration observation, and detached-writer cleanup with retained lease", flush=True)
 

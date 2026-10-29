@@ -50,3 +50,7 @@ workspace = true
 [[example]]
 name = "linux_custody_probe"
 test = true
+
+[[example]]
+name = "linux_terminal_guardian_probe"
+test = true
