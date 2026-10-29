@@ -386,49 +386,41 @@ in CI for its platform-specific evidence.
 
 ## Remaining gates
 
-A separate provider-free CI experiment now asks the system systemd manager to
+A separate provider-free CI experiment asks the system systemd manager to
 start a nondelegated service as the ordinary runner user. It checks that the
 service and ancestor migration controls remain root-owned and cannot be opened
-for writing by that user, then lets the main process exit with a detached writer
-still active. Graceful and forced-stop trials require manager removal of the
-original scope, a stopped worker heartbeat and a continuing outside writer.
-This experiment runs only on disposable hosted CI; it never provisions a local
-service or changes host security settings. Both trials passed at `de6ed91` in
-[CI run 40904554997](https://github.com/shahzadlone/agent-swapper/actions/runs/40904554997/job/123555651888):
-the manager reported exit 0 for graceful cleanup and exit 1 for the forced-stop
-timeout, with scope removal and the outside heartbeat checked in both cases.
-The extended trial now also checks a separate same-user peer outside the scope;
-that check passed along with all three trials at `8be56a9` in
-[CI run 40905065256](https://github.com/shahzadlone/agent-swapper/actions/runs/40905065256/job/123557466073).
-A third trial kills the owned `systemd-run`
-client after readiness, checks that the populated workload remains owned by the
-manager, then permits main-process exit and requires descendant cleanup. A
-client's death is never classified as target exit; the measured client exit was
-`-9`, while original scope removal and worker cessation were checked separately.
-The stricter owned-client check failed at `0dad7f2` in
+for writing by either the target or a same-user peer outside the scope. Graceful
+exit, forced stop and client-loss trials require a stopped detached-worker
+heartbeat, removal of the original scope and a continuing outside writer.
+The original directory descriptor remains open, and its events file must also
+be absent after cleanup.
+
+Before failure injection, the fixture binds the exact unit, ordinary user,
+active transient state, main process, cgroup and nonzero invocation ID reported
+by the system manager. The main process must belong to that live scope; the
+invocation must remain unchanged after client loss. Parser tests reject
+mismatches, duplicate properties and malformed invocation IDs.
+
+The client-loss trial uses a CI-only privileged failure injector that directly
+owns the actual `systemd-run` child, checks its kernel command name, kills that
+owned handle and observes SIGKILL. The fixed service command runs the target as
+the private fixture directory's ordinary owner with that owner's primary group;
+it refuses a root target or an unrelated unit name. This corrects the earlier
+sudo-wrapper ambiguity exposed by the failed `0dad7f2` check in
 [CI run 40906167288](https://github.com/shahzadlone/agent-swapper/actions/runs/40906167288/job/123561390422).
-Earlier launcher-loss observations therefore do not prove that the actual
-`systemd-run` client was killed. A CI-only privileged failure injector now owns
-that client directly, verifies its command name, kills its owned child handle
-and checks SIGKILL status. Its fixed service command runs the target as the
-private fixture directory's ordinary owner with that owner's primary group;
-it refuses a root target or an unrelated unit name. This revised client-loss
-test is pending and does not introduce a production privileged helper.
-The next revision additionally retains the original directory descriptor and
-requires its events file to disappear after cleanup; all three trials passed
-with that observation at `3fc45f4` in
-[CI run 40905278683](https://github.com/shahzadlone/agent-swapper/actions/runs/40905278683/job/123558223756).
-The next fixture revision also queries the system manager for the exact unit,
-current user, active transient state, main process, cgroup and nonzero invocation
-ID. The main process is checked against live scope membership, and the invocation
-must remain unchanged after client loss. Local parser tests reject mismatches,
-duplicate properties and malformed invocation IDs. Hosted validation of this
-identity binding is pending; a trusted production manager connection and journal
-binding are still required before using it for recovery.
-The experiment does not
-qualify interactive terminal behavior, manager authentication, receipt binding,
-administrator adversaries, external delegated work or production integration.
-Using a system manager in a shipped backend would need an explicitly authorized
+
+All three revised trials passed at `db1b4bc` in
+[CI run 40906660611](https://github.com/shahzadlone/agent-swapper/actions/runs/40906660611/job/123563174439).
+The client statuses were 0 for graceful cleanup, 1 for the forced-stop timeout
+and -9 for the deliberately killed client. These statuses are separate from
+scope retirement and worker-stop observations; client death is never used as
+evidence of target exit.
+
+This experiment runs only on disposable hosted CI. It does not install a local
+service or a production privileged helper. Interactive terminal behavior,
+authenticated production manager access, journal and receipt binding,
+administrator adversaries and external delegated work remain unqualified.
+A shipped system-manager backend would need an explicitly authorized
 installation and a narrowly reviewed control interface.
 
 Same-user cgroup migration is a release-blocking containment concern. This
