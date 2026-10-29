@@ -138,6 +138,9 @@ struct LaunchArgs {
     /// Allow Kimi to inspect legacy data in the user's home for this launch.
     #[arg(long, requires = "experimental_native")]
     allow_kimi_legacy: bool,
+    /// Allow Claude to use an Anthropic profile shared outside the selected home.
+    #[arg(long, requires = "experimental_native")]
+    allow_claude_shared_auth: bool,
     /// Opt in to an attached gents chat client. External work may outlive it.
     #[arg(long, conflicts_with = "experimental_native")]
     experimental_gents: bool,
@@ -690,7 +693,8 @@ fn launch_profile(
     )?
     .with_session(launch.session)?
     .with_containment(launch.experimental_containment)?
-    .with_kimi_legacy_access(launch.allow_kimi_legacy);
+    .with_kimi_legacy_access(launch.allow_kimi_legacy)
+    .with_claude_shared_auth_access(launch.allow_claude_shared_auth);
     if launch.resume {
         plan = plan.with_latest_gents_session(store)?;
     }
@@ -738,9 +742,10 @@ fn launch_profile(
             .err()
             .map(|e| e.to_string());
         let legacy = plan.check_kimi_legacy().err().map(|e| e.to_string());
+        let shared_auth = plan.check_claude_shared_auth().err().map(|e| e.to_string());
         emit(
             json_mode,
-            &json!({"plan":preview,"environmentConflict":conflicts,"runtimeCheck":runtime_check,"kimiLegacyRisk":legacy}),
+            &json!({"plan":preview,"environmentConflict":conflicts,"runtimeCheck":runtime_check,"kimiLegacyRisk":legacy,"claudeSharedAuthRisk":shared_auth}),
             &format!(
                 "{} {}\nProgram: {}\n{}={}\nArguments: {} (contents redacted)\nIsolation: unverified. Quota: unknown. Containment: {}.{scope}\n{}",
                 preview.operation,
@@ -759,6 +764,11 @@ fn launch_profile(
             && !json_mode
         {
             writeln!(io::stdout(), "{legacy}")?;
+        }
+        if let Some(shared_auth) = shared_auth
+            && !json_mode
+        {
+            writeln!(io::stdout(), "{shared_auth}")?;
         }
         return Ok(0);
     }

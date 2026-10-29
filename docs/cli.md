@@ -105,6 +105,10 @@ the legacy files and cannot prevent later external changes.
 For Codex it includes access tokens, workload-identity configuration and the
 SQLite state-directory override. Custom provider credential variables are not
 enumerable from the environment alone, so these checks do not prove isolation.
+Claude launches also check for documented shared Anthropic profile indicators;
+an explicit `--allow-claude-shared-auth` permits one launch when one is present
+or the location is indeterminate. Managed settings and other credential sources
+remain unverified; see the [support matrix](support-matrix.md#claude-source-contract).
 
 Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout

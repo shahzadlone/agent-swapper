@@ -72,6 +72,7 @@ impl Sandbox {
         }
         cmd.env("HOME", self.temp.path().join("home"))
             .env("USERPROFILE", self.temp.path().join("home"))
+            .env("APPDATA", self.temp.path().join("home"))
             .current_dir(self.temp.path())
             .arg("--state-dir")
             .arg(self.state());
@@ -416,6 +417,104 @@ fn conflicting_authentication_never_exposes_secret() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("credential-canary"));
     let database = std::fs::read(s.state().join("registry.sqlite3")).unwrap();
     assert!(!database.windows(17).any(|w| w == b"credential-canary"));
+}
+
+#[test]
+fn claude_federation_and_provider_overrides_are_refused_without_exposing_values() {
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    for key in [
+        "ANTHROPIC_CONFIG_DIR",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_SERVICE_ACCOUNT_ID",
+        "ANTHROPIC_WORKSPACE_ID",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_AWS_API_KEY",
+        "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+    ] {
+        let output = s
+            .run("work")
+            .env(key, "private-claude-canary")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(125));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(key));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("private-claude-canary"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("private-claude-canary"));
+    }
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert!(history["data"].as_array().unwrap().is_empty());
+    let database = std::fs::read(s.state().join("registry.sqlite3")).unwrap();
+    assert!(
+        !database
+            .windows(b"private-claude-canary".len())
+            .any(|v| v == b"private-claude-canary")
+    );
+}
+
+#[test]
+fn claude_shared_profile_requires_explicit_per_launch_consent() {
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    let root = if cfg!(windows) {
+        s.temp.path().join("home/Anthropic")
+    } else {
+        s.temp.path().join("home/.config/anthropic")
+    };
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("active_config"), b"private-profile-canary").unwrap();
+    let preview = s
+        .command()
+        .args(["run", "work", "--dry-run", "--json", "--executable"])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert!(
+        preview["data"]["claudeSharedAuthRisk"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-claude-shared-auth")
+    );
+    s.run("work")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("--allow-claude-shared-auth"));
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert!(history["data"].as_array().unwrap().is_empty());
+    s.run("work")
+        .arg("--allow-claude-shared-auth")
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read(root.join("active_config")).unwrap(),
+        b"private-profile-canary"
+    );
+}
+
+#[test]
+fn claude_shared_profile_check_refuses_an_indeterminate_home() {
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    let variable = if cfg!(windows) { "APPDATA" } else { "HOME" };
+    s.run("work")
+        .env_remove(variable)
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("could not check"));
+    s.run("work")
+        .env(variable, "relative-home")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("could not check"));
 }
 
 #[test]

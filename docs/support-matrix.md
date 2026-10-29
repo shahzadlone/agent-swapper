@@ -21,6 +21,20 @@ The preview binds Claude Code through `CLAUDE_CONFIG_DIR`, Codex through
 version detection is not implemented. Native login command shapes are unverified and
 must pass the same version/platform matrix before being promoted.
 
+### Claude source contract
+
+The [Claude Code authentication reference](https://code.claude.com/docs/en/authentication)
+describes shared Anthropic profiles that may take precedence over the selected
+Claude login even with a separate `CLAUDE_CONFIG_DIR`. AgentSwapper checks for
+the documented default `active_config` and `configs/default.json` locations
+using metadata only. If either exists, or the base location is indeterminate,
+the launch requires `--allow-claude-shared-auth` in addition to the native
+opt-in. Known inherited federation, cloud-provider and configuration overrides
+are refused separately; the explicit shared-profile opt-in does not bypass those
+environment checks. The check does not read or modify the profile. It cannot
+stop changes after the check, inspect managed settings or prove that other
+credential mechanisms such as `apiKeyHelper` are isolated.
+
 ### Codex source contract
 
 The [official environment reference](https://learn.chatgpt.com/docs/config-file/environment-variables)

@@ -81,6 +81,14 @@ pub enum Error {
     )]
     EnvironmentConflict(&'static str),
     #[error(
+        "a shared Anthropic profile may override the Claude login; review it, then use --allow-claude-shared-auth to permit this launch"
+    )]
+    ClaudeSharedAuthPresent,
+    #[error(
+        "could not check the shared Anthropic profile location; review it, then use --allow-claude-shared-auth to permit this launch"
+    )]
+    ClaudeSharedAuthUnknown,
+    #[error(
         "Kimi may inspect legacy data in the user's home; review the migration risk, then use --allow-kimi-legacy to permit this launch"
     )]
     KimiLegacyPresent,
@@ -232,6 +240,8 @@ impl Error {
             Self::ExecutableNotFound => "executable_not_found",
             Self::UnsafeExecutable => "unsafe_executable",
             Self::EnvironmentConflict(_) => "environment_conflict",
+            Self::ClaudeSharedAuthPresent => "claude_shared_auth_present",
+            Self::ClaudeSharedAuthUnknown => "claude_shared_auth_unknown",
             Self::KimiLegacyPresent => "kimi_legacy_present",
             Self::KimiLegacyUnknown => "kimi_legacy_unknown",
             Self::UnverifiedNative => "native_unverified",

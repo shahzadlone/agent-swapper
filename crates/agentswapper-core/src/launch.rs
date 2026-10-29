@@ -28,6 +28,7 @@ pub struct LaunchPlan {
     selection: Option<SessionSelection>,
     containment: Option<Containment>,
     allow_kimi_legacy: bool,
+    allow_claude_shared_auth: bool,
 }
 
 /// Explicit experimental local-process backend; unsupported hosts never fall back.
@@ -61,6 +62,23 @@ fn check_kimi_legacy_home(home: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(Error::KimiLegacyUnknown),
     }
+}
+
+fn check_claude_shared_root(root: &Path) -> Result<()> {
+    if !root.is_absolute() || root.to_str().is_none() {
+        return Err(Error::ClaudeSharedAuthUnknown);
+    }
+    for path in [
+        root.join("active_config"),
+        root.join("configs/default.json"),
+    ] {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => return Err(Error::ClaudeSharedAuthPresent),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(Error::ClaudeSharedAuthUnknown),
+        }
+    }
+    Ok(())
 }
 
 impl SessionSelection {
@@ -158,6 +176,7 @@ impl LaunchPlan {
             selection: session.map(|_| SessionSelection::New),
             containment: None,
             allow_kimi_legacy: false,
+            allow_claude_shared_auth: false,
         })
     }
 
@@ -169,6 +188,29 @@ impl LaunchPlan {
     pub fn with_kimi_legacy_access(mut self, allow: bool) -> Self {
         self.allow_kimi_legacy = allow;
         self
+    }
+
+    /// Explicitly allow the shared Anthropic profile for this launch.
+    pub fn with_claude_shared_auth_access(mut self, allow: bool) -> Self {
+        self.allow_claude_shared_auth = allow;
+        self
+    }
+
+    /// Check only for the documented default profile indicators, without
+    /// opening or reading any credentials or profile contents.
+    pub fn check_claude_shared_auth(&self) -> Result<()> {
+        if self.profile.harness != Harness::Claude || self.allow_claude_shared_auth {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        let (variable, suffix) = ("APPDATA", "Anthropic");
+        #[cfg(not(windows))]
+        let (variable, suffix) = ("HOME", ".config/anthropic");
+        let home = PathBuf::from(std::env::var_os(variable).ok_or(Error::ClaudeSharedAuthUnknown)?);
+        if !home.is_absolute() || home.to_str().is_none() {
+            return Err(Error::ClaudeSharedAuthUnknown);
+        }
+        check_claude_shared_root(&home.join(suffix))
     }
 
     /// Metadata-only preflight; does not read, modify or migrate vendor data.
@@ -267,6 +309,7 @@ impl LaunchPlan {
             return Err(Error::UnverifiedNative);
         }
         self.check_environment(|key| std::env::var_os(key))?;
+        self.check_claude_shared_auth()?;
         self.check_kimi_legacy()?;
         self.execute_prepared(store)
     }
@@ -305,6 +348,7 @@ impl LaunchPlan {
         // The original preflight can become stale while waiting for the lease.
         // This narrows, but cannot remove, the race with external changes.
         self.check_kimi_legacy()?;
+        self.check_claude_shared_auth()?;
         let gents_session = match (self.session, &self.profile.gents) {
             (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
                 id,
@@ -547,6 +591,32 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::Harness;
+
+    #[test]
+    fn claude_shared_profile_check_refuses_default_or_active_without_reading_them() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(check_claude_shared_root(temp.path()).is_ok());
+        assert!(matches!(
+            check_claude_shared_root(Path::new("relative")),
+            Err(Error::ClaudeSharedAuthUnknown)
+        ));
+        std::fs::create_dir(temp.path().join("configs")).unwrap();
+        std::fs::write(temp.path().join("configs/default.json"), b"private").unwrap();
+        assert!(matches!(
+            check_claude_shared_root(temp.path()),
+            Err(Error::ClaudeSharedAuthPresent)
+        ));
+        std::fs::remove_file(temp.path().join("configs/default.json")).unwrap();
+        std::fs::write(temp.path().join("active_config"), b"private").unwrap();
+        assert!(matches!(
+            check_claude_shared_root(temp.path()),
+            Err(Error::ClaudeSharedAuthPresent)
+        ));
+        assert_eq!(
+            std::fs::read(temp.path().join("active_config")).unwrap(),
+            b"private"
+        );
+    }
 
     #[test]
     fn kimi_legacy_check_only_accepts_a_known_absolute_home_without_a_legacy_entry() {
