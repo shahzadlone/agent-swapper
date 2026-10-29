@@ -91,6 +91,16 @@ pub(crate) fn directory(path: &Path, create: bool) -> Result<()> {
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return Err(Error::UnsafePath);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(Error::UnsafePath);
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
