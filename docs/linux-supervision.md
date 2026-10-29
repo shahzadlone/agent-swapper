@@ -186,6 +186,14 @@ the observer then confirms it can acquire the lock. This is fixture evidence,
 not integration with the production profile lease or journal. The delegated
 cases require CI at the change's exact commit.
 
+A separate Linux test now passes a duplicate of the actual `ProfileLease` to a
+guardian fixture after recording a real run intent. It kills the owned supervisor,
+checks that the guardian's descriptor keeps manual recovery blocked, and then
+checks that the unfinished intent continues to block reuse after the descriptor
+is released. This validates the lease/journal boundary only: that fixture does
+not start an agent, manage a cgroup, or issue a cleanup receipt, and production
+launches do not yet transfer their lease to a guardian.
+
 A further delegated-only case injects guardian SIGKILL through the parent's
 owned child handle. Before the target starts, the guardian transfers the parent
 and leaf directory descriptors to the foreground supervisor, which validates

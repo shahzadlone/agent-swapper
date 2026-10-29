@@ -94,6 +94,9 @@ were included in the passing Windows test step at `73de1dd` in
 [CI run 40823947663](https://github.com/shahzadlone/agent-swapper/actions/runs/40823947663/job/123282560402).
 Embedded callers must opt in separately; the launch path now refuses a per-run
 Job until that root is installed. This later refusal requires its own hosted run.
+The dedicated pre-assignment crash step passed at `21ff67d` in
+[CI run 40824502796](https://github.com/shahzadlone/agent-swapper/actions/runs/40824502796/job/123284314125);
+the separate full test step for that commit was still running at this checkpoint.
 Dependency failure cleanup may wait without a timeout. Membership-list
 overflow was source-audited as an error path, not stress-tested with thousands of
 processes. Same-user malicious interference, external services, filesystem and

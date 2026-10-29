@@ -14,6 +14,8 @@ const SCHEMA: i64 = 6;
 #[cfg(test)]
 mod crash_tests;
 mod journal;
+#[cfg(all(test, target_os = "linux"))]
+mod lease_transfer_tests;
 mod runs;
 mod sessions;
 pub use journal::VerificationReport;
@@ -111,6 +113,15 @@ pub struct Store {
 pub struct ProfileLease {
     _file: File,
     profile: ProfileId,
+}
+
+/// On Linux, a guardian can receive a duplicate of the locked open-file
+/// description. The descriptor is a lease, not evidence that a process stopped.
+#[cfg(target_os = "linux")]
+impl std::os::fd::AsFd for ProfileLease {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        std::os::fd::AsFd::as_fd(&self._file)
+    }
 }
 
 impl Store {
