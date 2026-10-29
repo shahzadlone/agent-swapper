@@ -56,6 +56,14 @@ def reject_build_paths(binary, paths, windows):
                 raise ValueError("local build path found; use build_candidate_binaries.py")
 
 
+def verify_build_marker(marker, revision, dirty, lock_hash, binaries):
+    expected = {"schema": 1, "revision": revision, "dirty": dirty,
+                "lock_sha256": lock_hash,
+                "binaries": {name: digest(data) for name, data in binaries.items()}}
+    if marker != expected:
+        raise ValueError("candidate binaries do not match the current build marker; rebuild them")
+
+
 def add_locked_source(files, crate_bytes, expected_checksum):
     if digest(crate_bytes) != expected_checksum:
         raise ValueError("option-ext crate checksum mismatch")
@@ -131,6 +139,12 @@ def candidate(output, allow_dirty):
     for name in ("aswp", "agentswapper"):
         add(files, name + suffix, ROOT / "target" / "release" / (name + suffix), 0o755)
         reject_build_paths(files[name + suffix][0], (ROOT, Path.home()), os.name == "nt")
+    marker_path = ROOT / "target/release/agentswapper-build.json"
+    if marker_path.is_symlink() or not marker_path.is_file():
+        raise ValueError("candidate build marker is missing; rebuild the binaries")
+    verify_build_marker(json.loads(marker_path.read_text(encoding="utf-8")), revision, dirty,
+                        digest((ROOT / "Cargo.lock").read_bytes()),
+                        {name + suffix: files[name + suffix][0] for name in ("aswp", "agentswapper")})
     for name in ("LICENSE", "NOTICE"):
         add(files, name, ROOT / name)
     add(files, "assets/brand/THIRD_PARTY_NOTICES.txt", ROOT / "assets/brand/THIRD_PARTY_NOTICES.txt")

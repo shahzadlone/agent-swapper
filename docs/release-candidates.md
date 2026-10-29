@@ -32,7 +32,11 @@ The cached attribution tool is also not separately signed or attested.
 The ZIP contains `BUILD-INFO.json` with the revision, dirty state, Rust host,
 toolchain, lockfile hash, and hashes of its other contents. The build remaps
 workspace and home paths, and packaging refuses binaries containing those local
-paths. Entry order,
+paths. A build marker binds both binary hashes and the lockfile hash to the
+source revision and clean/dirty state; for clean builds the packager rejects
+binaries from a different revision. Dirty previews cannot prove their exact
+source contents. The marker is unsigned and does not establish independent
+build provenance. Entry order,
 timestamps and modes are fixed. Both extracted command names are smoke-tested
 with an isolated temporary home before the archive and its separate SHA-256
 file are written. A clean working tree is required in CI; `--allow-dirty` is

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import audit_attribution_tool
 import build_audited_deny
-from release_candidate import add_locked_source, digest, reject_build_paths, safe_path, write_candidate
+from release_candidate import add_locked_source, digest, reject_build_paths, safe_path, verify_build_marker, write_candidate
 
 
 def crate(entries):
@@ -28,6 +28,18 @@ def crate(entries):
 
 
 class CandidateSafety(unittest.TestCase):
+    def test_build_marker_refuses_stale_or_changed_binaries(self):
+        marker = {"schema": 1, "revision": "revision-a", "dirty": False,
+                  "lock_sha256": "lock-a", "binaries": {"aswp": digest(b"built")}}
+        verify_build_marker(marker, "revision-a", False, "lock-a", {"aswp": b"built"})
+        for revision, dirty, lock, data in (("revision-b", False, "lock-a", b"built"),
+                                            ("revision-a", True, "lock-a", b"built"),
+                                            ("revision-a", False, "lock-b", b"built"),
+                                            ("revision-a", False, "lock-a", b"changed")):
+            with self.subTest(revision=revision, dirty=dirty, lock=lock, data=data):
+                with self.assertRaisesRegex(ValueError, "do not match"):
+                    verify_build_marker(marker, revision, dirty, lock, {"aswp": data})
+
     def test_checker_build_marker_detects_binary_and_lock_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             binary = Path(temp) / "cargo-deny"
