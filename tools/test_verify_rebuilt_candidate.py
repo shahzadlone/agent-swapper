@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, digest, make_candidate
-from verify_candidate_set import RebuildMismatch, binary_difference, verify_one
+from verify_candidate_set import RebuildMismatch, binary_difference, pe_offset_location, verify_one
 from verify_rebuilt_candidate import diagnostic, verify_rebuild
 
 
@@ -20,12 +20,22 @@ class RebuiltCandidateTests(unittest.TestCase):
             return bytes(data)
 
         detail = binary_difference(pe(1), pe(2))
-        self.assertEqual(detail, (100, 100, 72, 1, 2))
+        self.assertEqual(detail, (100, 100, 72, 1, 2, (0, 72)))
         self.assertIn("first differing offset 72; PE timestamps 1/2", diagnostic(
             RebuildMismatch("aswp.exe", "a" * 64, "b" * 64, detail)))
-        self.assertEqual(binary_difference(b"a", b"ab"), (1, 2, 1, None, None))
+        self.assertEqual(binary_difference(b"a", b"ab"), (1, 2, 1, None, None, None))
         self.assertNotIn("injected", diagnostic(RebuildMismatch(
-            "aswp", "a" * 64, "b" * 64, (1, 2, 3, "injected", None))))
+            "aswp", "a" * 64, "b" * 64, (1, 2, 3, "injected", None, None))))
+        sectioned = bytearray(160)
+        sectioned[:2] = b"MZ"
+        sectioned[60:64] = (64).to_bytes(4, "little")
+        sectioned[64:68] = b"PE\0\0"
+        sectioned[70:72] = (1).to_bytes(2, "little")
+        sectioned[104:108] = (32).to_bytes(4, "little")
+        sectioned[108:112] = (128).to_bytes(4, "little")
+        self.assertEqual(pe_offset_location(sectioned, 130), (1, 2))
+        sectioned[70:72] = (97).to_bytes(2, "little")
+        self.assertIsNone(pe_offset_location(sectioned, 130))
 
     def test_diagnostics_do_not_include_arbitrary_error_contents(self):
         self.assertEqual(diagnostic(ValueError("secret\n::warning::injected")), "verification failed (ValueError)")
@@ -50,7 +60,7 @@ class RebuiltCandidateTests(unittest.TestCase):
             }), encoding="utf-8")
             with self.assertRaises(RebuildMismatch) as caught:
                 verify_rebuild(root / name, target, REVISION, LOCK, VERSION, SOURCE_FILES, binaries)
-            self.assertEqual(caught.exception.detail, (8, 14, 7, None, None))
+            self.assertEqual(caught.exception.detail, (8, 14, 7, None, None, None))
 
     def test_candidate_integrity_and_source_binding_precede_comparison(self):
         cases = ((name, target, mode) for name, target in TARGETS.items()

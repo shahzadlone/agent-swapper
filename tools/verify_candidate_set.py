@@ -131,10 +131,34 @@ def pe_timestamp(data):
     return int.from_bytes(data[offset + 8:offset + 12], "little")
 
 
+def pe_offset_location(data, position):
+    """Classify a position without printing file-controlled section names."""
+    if pe_timestamp(data) is None:
+        return None
+    offset = int.from_bytes(data[60:64], "little")
+    if offset > len(data) - 24:
+        return None
+    count = int.from_bytes(data[offset + 6:offset + 8], "little")
+    optional_size = int.from_bytes(data[offset + 20:offset + 22], "little")
+    table = offset + 24 + optional_size
+    if count > 96 or table > len(data) or count * 40 > len(data) - table:
+        return None
+    if position < table + count * 40:
+        return (0, position)
+    for index in range(count):
+        section = table + index * 40
+        size = int.from_bytes(data[section + 16:section + 20], "little")
+        start = int.from_bytes(data[section + 20:section + 24], "little")
+        if start <= position < start + size and start + size <= len(data):
+            return (index + 1, position - start)
+    return None
+
+
 def binary_difference(candidate, rebuilt):
     common = min(len(candidate), len(rebuilt))
     first = next((i for i in range(common) if candidate[i] != rebuilt[i]), common)
-    return (len(candidate), len(rebuilt), first, pe_timestamp(candidate), pe_timestamp(rebuilt))
+    return (len(candidate), len(rebuilt), first, pe_timestamp(candidate), pe_timestamp(rebuilt),
+            pe_offset_location(candidate, first))
 
 
 def verify_set(root, revision, lock_hash, version, source_files):

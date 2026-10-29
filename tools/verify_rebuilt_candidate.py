@@ -60,12 +60,18 @@ def diagnostic(error):
             and re.fullmatch(r"[0-9a-f]{64}", error.rebuilt)):
         message = f"{error.name} differs: candidate SHA-256 {error.candidate}; rebuilt SHA-256 {error.rebuilt}"
         detail = error.detail
-        if (isinstance(detail, tuple) and len(detail) == 5
+        if (isinstance(detail, tuple) and len(detail) == 6
                 and all(type(value) is int and 0 <= value <= 256 * 1024 * 1024 for value in detail[:3])
-                and all(value is None or type(value) is int and 0 <= value <= 0xffffffff for value in detail[3:])):
+                and all(value is None or type(value) is int and 0 <= value <= 0xffffffff for value in detail[3:5])):
             message += f"; sizes {detail[0]}/{detail[1]}; first differing offset {detail[2]}"
             if detail[3] is not None and detail[4] is not None:
                 message += f"; PE timestamps {detail[3]}/{detail[4]}"
+            location = detail[5]
+            if (isinstance(location, tuple) and len(location) == 2
+                    and type(location[0]) is int and 0 <= location[0] <= 96
+                    and type(location[1]) is int and 0 <= location[1] <= 256 * 1024 * 1024):
+                message += (f"; PE header offset {location[1]}" if location[0] == 0
+                            else f"; PE section {location[0]} offset {location[1]}")
         return message
     known = {
         "candidate directory is missing or linked": "candidate directory invalid",
