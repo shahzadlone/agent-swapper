@@ -18,6 +18,14 @@ TARGETS = {
 }
 
 
+class RebuildMismatch(ValueError):
+    def __init__(self, name, candidate, rebuilt):
+        super().__init__("rebuilt executables do not match candidate")
+        self.name = name
+        self.candidate = candidate
+        self.rebuilt = rebuilt
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -97,8 +105,11 @@ def verify_one(directory, target, revision, lock_hash, version, source_files, ex
                 raise ValueError("candidate project notice does not match checked-out source")
         if expected_binaries is not None:
             names = {"aswp" + suffix, "agentswapper" + suffix}
-            if set(expected_binaries) != names or any(hashes[name] != expected_binaries[name] for name in names):
+            if set(expected_binaries) != names:
                 raise ValueError("rebuilt executables do not match candidate")
+            for name in sorted(names):
+                if hashes[name] != expected_binaries[name]:
+                    raise RebuildMismatch(name, hashes[name], expected_binaries[name])
     return archive
 
 

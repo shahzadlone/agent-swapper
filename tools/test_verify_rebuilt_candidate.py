@@ -5,11 +5,18 @@ import tempfile
 import unittest
 
 from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, digest, make_candidate
-from verify_candidate_set import verify_one
-from verify_rebuilt_candidate import verify_rebuild
+from verify_candidate_set import RebuildMismatch, verify_one
+from verify_rebuilt_candidate import diagnostic, verify_rebuild
 
 
 class RebuiltCandidateTests(unittest.TestCase):
+    def test_diagnostics_do_not_include_arbitrary_error_contents(self):
+        self.assertEqual(diagnostic(ValueError("secret\n::warning::injected")), "verification failed (ValueError)")
+        mismatch = RebuildMismatch("aswp", "a" * 64, "b" * 64)
+        self.assertIn("candidate SHA-256 " + "a" * 64, diagnostic(mismatch))
+        self.assertIn("rebuilt SHA-256 " + "b" * 64, diagnostic(mismatch))
+        self.assertNotIn("injected", diagnostic(RebuildMismatch("\n::warning::injected", "a" * 64, "b" * 64)))
+
     def test_candidate_integrity_and_source_binding_precede_comparison(self):
         cases = ((name, target, mode) for name, target in TARGETS.items()
                  for mode in ("valid", "tamper", "wrong_revision", "dirty_marker", "stale_marker", "missing_marker", "invalid_marker_encoding"))

@@ -3,11 +3,13 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
 import subprocess
 import tomllib
 
-from verify_candidate_set import read_bounded, verify_one
+from verify_candidate_set import RebuildMismatch, read_bounded, verify_one
 from release_candidate import verify_build_marker
 
 
@@ -51,5 +53,32 @@ def main():
                    root / "target" / "release")
 
 
+def diagnostic(error):
+    if (isinstance(error, RebuildMismatch)
+            and error.name in {"aswp", "agentswapper", "aswp.exe", "agentswapper.exe"}
+            and re.fullmatch(r"[0-9a-f]{64}", error.candidate)
+            and re.fullmatch(r"[0-9a-f]{64}", error.rebuilt)):
+        return f"{error.name} differs: candidate SHA-256 {error.candidate}; rebuilt SHA-256 {error.rebuilt}"
+    known = {
+        "candidate directory is missing or linked": "candidate directory invalid",
+        "candidate must contain exactly one archive and checksum": "candidate inventory invalid",
+        "candidate checksum mismatch": "candidate checksum mismatch",
+        "candidate build information does not match this run": "candidate source binding mismatch",
+        "candidate binaries do not match the current build marker; rebuild them": "rebuild marker mismatch",
+        "rebuilt candidate requires a clean working tree": "rebuild checkout is dirty",
+        "rebuilt candidate marker is missing or invalid": "rebuild marker missing or invalid",
+    }
+    category = known.get(str(error))
+    if category:
+        return category
+    name = type(error).__name__
+    return "verification failed (" + (name if name.isalnum() else "error") + ")"
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=Candidate rebuild::{diagnostic(error)}", flush=True)
+        raise
