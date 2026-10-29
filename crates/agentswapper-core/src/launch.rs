@@ -340,9 +340,6 @@ impl LaunchPlan {
             return Err(Error::UnverifiedGents);
         }
         self.check_environment(|key| std::env::var_os(key))?;
-        if !self.check_gents_runtime()? {
-            return Err(Error::GentsRuntimeMismatch);
-        }
         self.execute_prepared(store)
     }
 
@@ -366,6 +363,9 @@ impl LaunchPlan {
         // This narrows, but cannot remove, the race with external changes.
         self.check_kimi_legacy()?;
         self.check_claude_shared_auth()?;
+        if self.profile.harness == Harness::Gents && !self.check_gents_runtime()? {
+            return Err(Error::GentsRuntimeMismatch);
+        }
         let gents_session = match (self.session, &self.profile.gents) {
             (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
                 id,
@@ -853,6 +853,18 @@ mod engine_tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
+    fn matching_runtime(plan: &LaunchPlan) {
+        let file = crate::private_fs::file(&plan.home.join("runtime.json")).unwrap();
+        serde_json::to_writer(
+            file,
+            &serde_json::json!({
+                "home": plan.home,
+                "graphql": plan.profile.gents.as_ref().unwrap().graphql_url()
+            }),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn core_opt_ins_cannot_authorize_the_other_engine_and_stale_binding_cannot_launch() {
         let temp = tempfile::tempdir().unwrap();
@@ -928,6 +940,7 @@ mod engine_tests {
             .unwrap()
             .with_latest_gents_session(&store)
             .unwrap();
+        matching_runtime(&plan);
         let old_source = plan.preview().resumed_from.unwrap();
         let mut peer = Store::open(&temp.path().join("state")).unwrap();
         complete(&mut peer);
@@ -960,6 +973,12 @@ mod engine_tests {
         let binary = std::env::current_exe().unwrap();
         let plan =
             LaunchPlan::build(&store, p.clone(), Some(&binary), &cwd, vec![], false).unwrap();
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::GentsRuntimeMismatch)
+        ));
+        assert!(store.runs(1).unwrap().is_empty());
+        matching_runtime(&plan);
         std::fs::remove_dir(cwd).unwrap();
         assert!(matches!(
             plan.execute_prepared(&mut store),

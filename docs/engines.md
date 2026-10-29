@@ -117,7 +117,8 @@ authorize gents, including through the Rust API.
 
 Before an actual launch, AgentSwapper reads only a bounded, private, regular
 `runtime.json` in the selected home and requires its `home` and `graphql` address
-to match. The known unbracketed IPv6 form written by gents 0.21.0 is accepted
+to match. This check runs after acquiring the profile lease and before recording
+the run intent. The known unbracketed IPv6 form written by gents 0.21.0 is accepted
 only when it exactly matches the bound address; the launched URL is bracketed.
 Missing state appears in a setup preview and blocks launch. The check neither
 contacts the server nor proves it is alive or authenticates its identity.
