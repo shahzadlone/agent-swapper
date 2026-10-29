@@ -406,7 +406,9 @@ manager, then permits main-process exit and requires descendant cleanup. A
 client's death is never classified as target exit; the measured client exit was
 `-9`, while original scope removal and worker cessation were checked separately.
 The next revision additionally retains the original directory descriptor and
-requires its events file to disappear after cleanup; that observation is pending.
+requires its events file to disappear after cleanup; all three trials passed
+with that observation at `3fc45f4` in
+[CI run 40905278683](https://github.com/shahzadlone/agent-swapper/actions/runs/40905278683/job/123558223756).
 The experiment does not
 qualify interactive terminal behavior, manager authentication, receipt binding,
 administrator adversaries, external delegated work or production integration.
