@@ -51,6 +51,12 @@ For an MSVC host, the build also passes the linker `/Brepro` option. Rust's
 uses this option to remove nondeterministic PE timestamp data when building
 the compiler. Its effect on AgentSwapper's separate-runner builds remains to
 be measured; the byte comparison and signing gate are unchanged.
+On the earlier `3bcfdf7` build, the Windows comparison reported equal
+`agentswapper.exe` lengths of 4,555,264 bytes and its first difference at
+offset 256, with PE timestamps `1793257779` and `1793258028`; see the
+[rebuild job](https://github.com/shahzadlone/agent-swapper/actions/runs/40832651386/job/123313788261).
+That establishes a timestamp difference, not that it was the only difference.
+The `/Brepro` build must independently reproduce before signing can proceed.
 The ZIP contains `BUILD-INFO.json` with the revision, dirty state, Rust host,
 toolchain, lockfile hash, and hashes of its other contents. The build remaps
 workspace and home paths, and packaging refuses binaries containing those local
