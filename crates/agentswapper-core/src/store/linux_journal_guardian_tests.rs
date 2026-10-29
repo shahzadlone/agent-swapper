@@ -568,8 +568,7 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
         startup_deadline,
     )
     .unwrap();
-    store.observe_spawn(&run, pid).unwrap();
-    transport::send_until(&channel, transport::GO, &[], startup_deadline).unwrap();
+    linux_guardian::record_and_go(&mut store, &run, pid, &channel, startup_deadline).unwrap();
     drop(lease);
     if parent_loss {
         controller_wait(temp.path(), || temp.path().join("heartbeat").exists());

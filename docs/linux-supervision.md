@@ -166,15 +166,18 @@ passed the delegated Linux job at `b827509` in
 [CI run 40831925937](https://github.com/shahzadlone/agent-swapper/actions/runs/40831925937/job/123307869893).
 That run predates the missing-events and same-name replacement observations;
 it does not qualify them or the production launcher. An additional delegated
-case now interrupts startup after transferring the scope and lease but before
-launch data, and requires cleanup while the journal remains unresolved. Its
-kernel-dependent result must be established by hosted CI.
+case interrupts startup after transferring the scope and lease but before
+launch data, and requires cleanup while the journal remains unresolved. That
+case passed in [CI run 40832828695](https://github.com/shahzadlone/agent-swapper/actions/runs/40832828695/job/123310703726)
+at `ef73630`.
 The actual-guardian fixture now shares a supervisor preparation routine that
 transfers the three custody capabilities, launch envelope and original streams,
 then receives the admitted PID under one absolute deadline. The fixture records
-the PID before sending GO under that same deadline. A local regression checks
-that an already-expired preparation transfers no capability. This routine is
-not wired into normal launches; its delegated test results await hosted CI.
+the PID before sending GO under that same deadline. Local regressions check
+that an already-expired preparation transfers no capability, that the receiver
+waits for GO, and that a journal failure never sends GO. A failed GO after the
+journal commit leaves the run unresolved. These routines are not wired into
+normal launches; their delegated test results await hosted CI.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;

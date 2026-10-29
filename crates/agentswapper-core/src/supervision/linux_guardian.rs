@@ -54,6 +54,21 @@ pub(crate) fn prepare(
     receive_pid(channel, deadline)
 }
 
+/// Durably record the admitted process before releasing its execution gate.
+/// A journal or transport error deliberately leaves the run unresolved.
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn record_and_go(
+    store: &mut crate::Store,
+    run: &str,
+    pid: u32,
+    channel: &OwnedFd,
+    deadline: Instant,
+) -> crate::Result<()> {
+    store.observe_spawn(run, pid)?;
+    transport::send_until(channel, transport::GO, &[], deadline)?;
+    Ok(())
+}
+
 #[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
 pub(crate) fn receive_pid(channel: impl AsFd, deadline: Instant) -> io::Result<u32> {
     let pid = u32::from_be_bytes(transport::receive_number_until(
@@ -224,6 +239,47 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gate_requires_recorded_pid_and_send_failure_keeps_run_unresolved() -> crate::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut store = crate::Store::open(&temp.path().join("state"))?;
+        let profile = store.register(crate::Harness::Claude, "work".parse()?)?;
+        let lease = store.lease(profile.id)?;
+        let run = store.begin_run(&lease, "run")?;
+        let (sender, receiver) = transport::pair()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        assert!(
+            record_and_go(
+                &mut store,
+                &uuid::Uuid::new_v4().to_string(),
+                42,
+                &sender,
+                deadline
+            )
+            .is_err()
+        );
+        let mut bytes = [0; 1];
+        assert!(matches!(
+            recv(&receiver, &mut bytes, RecvFlags::DONTWAIT),
+            Err(rustix::io::Errno::AGAIN)
+        ));
+        record_and_go(&mut store, &run, 42, &sender, deadline)?;
+        assert_eq!(store.run(&run)?.observed_pid, Some(42));
+        transport::receive_control_until(&receiver, transport::GO, deadline)?;
+        assert!(store.run(&run)?.outcome.is_none());
+
+        let other = store.register(crate::Harness::Claude, "other".parse()?)?;
+        let other_lease = store.lease(other.id)?;
+        let other_run = store.begin_run(&other_lease, "run")?;
+        let (sender, receiver) = transport::pair()?;
+        drop(receiver);
+        assert!(record_and_go(&mut store, &other_run, 43, &sender, deadline).is_err());
+        assert_eq!(store.run(&other_run)?.observed_pid, Some(43));
+        assert!(store.run(&other_run)?.outcome.is_none());
+        assert!(store.verify()?.consistent);
+        Ok(())
+    }
 
     #[test]
     fn supervisor_preparation_preserves_order_and_waits_for_explicit_go() -> io::Result<()> {
