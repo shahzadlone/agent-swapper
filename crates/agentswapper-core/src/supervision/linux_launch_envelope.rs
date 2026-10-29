@@ -366,7 +366,12 @@ mod tests {
     use std::process::Stdio;
     use wait_timeout::ChildExt;
 
-    const RECEIVER: &str = "supervision::linux_launch_envelope::tests::receiver_process_fixture";
+    fn receiver_role() -> String {
+        let path = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, path)| path);
+        format!("{path}::receiver_process_fixture")
+    }
 
     #[test]
     #[ignore = "receiver role invoked by the cross-process launch envelope test"]
@@ -382,7 +387,7 @@ mod tests {
     fn transfers_launch_to_another_process_without_argv_secrets() -> io::Result<()> {
         let (sender, receiver) = super::super::linux_admission_transport::pair()?;
         let mut child = Command::new(std::env::current_exe()?)
-            .args(["--exact", RECEIVER, "--ignored"])
+            .args(["--exact", &receiver_role(), "--ignored"])
             .stdin(Stdio::from(receiver))
             .stdout(Stdio::null())
             .stderr(Stdio::null())

@@ -7,6 +7,24 @@ mod admission_transport;
 #[cfg(target_os = "linux")]
 #[path = "../src/supervision/linux_cgroup.rs"]
 mod cgroup;
+#[cfg(target_os = "linux")]
+use admission_transport as linux_admission_transport;
+#[cfg(target_os = "linux")]
+use cgroup as linux_cgroup;
+#[cfg(target_os = "linux")]
+#[path = "../src/supervision/linux_launch_envelope.rs"]
+#[allow(
+    dead_code,
+    reason = "the fixture uses only part of the shared launch envelope"
+)]
+mod linux_launch_envelope;
+#[cfg(target_os = "linux")]
+#[path = "../src/supervision/linux_shim.rs"]
+#[allow(
+    dead_code,
+    reason = "the shim is exercised only by the delegated fixture"
+)]
+mod linux_shim;
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
@@ -26,6 +44,8 @@ mod fixture {
     use super::{
         admission_transport::{GO, pair, receive, receive_control, send},
         cgroup,
+        linux_launch_envelope::LaunchEnvelope,
+        linux_shim,
     };
     use rustix::{
         fd::AsFd,
@@ -378,8 +398,29 @@ mod fixture {
             None,
         )?;
         drop(channel);
+        if let Some(scope) = &scope {
+            for fd in [scope.parent().as_fd(), scope.directory().as_fd()] {
+                send(&grant, GO, &[fd])?;
+            }
+            let executable = std::env::current_exe()?;
+            let launch = LaunchEnvelope::capture(
+                executable.as_os_str(),
+                dir,
+                [
+                    OsString::from("target"),
+                    dir.as_os_str().to_owned(),
+                    OsString::from(encode_flags(flags)),
+                ],
+                [],
+                [],
+            )?;
+            launch.send_to(&grant)?;
+        }
         for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
             send(&grant, GO, &[fd])?;
+        }
+        if scope.is_some() {
+            send(&grant, GO, &[])?;
         }
         drop(grant);
         drop([input, output, diagnostic]);
@@ -452,16 +493,12 @@ mod fixture {
     }
 
     fn shim(dir: &Path, flags: [bool; 3], scope: Option<&Path>) -> io::Result<()> {
+        if let Some(scope) = scope {
+            return linux_shim::exec_until(io::stdin(), scope, Instant::now() + BUDGET);
+        }
         let input = receive(io::stdin())?;
         let output = receive(io::stdin())?;
         let diagnostic = receive(io::stdin())?;
-        if let Some(scope) = scope {
-            let directory = cgroup::checked_directory(scope)?;
-            require(
-                cgroup::contains(&directory, std::process::id())?,
-                "terminal shim was not admitted before GO",
-            )?;
-        }
         Err(command("target", dir)?
             .arg(encode_flags(flags))
             .stdin(Stdio::from(input))

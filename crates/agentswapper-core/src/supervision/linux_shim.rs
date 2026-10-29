@@ -42,7 +42,12 @@ mod tests {
     use std::{ffi::OsString, fs, os::fd::AsFd, process::Command, time::Duration};
     use wait_timeout::ChildExt;
 
-    const ROLE: &str = "supervision::linux_shim::tests::refusing_shim_fixture";
+    fn receiver_role() -> String {
+        let path = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, path)| path);
+        format!("{path}::refusing_shim_fixture")
+    }
 
     #[test]
     #[ignore = "shim role invoked by the invalid-scope subprocess test"]
@@ -82,7 +87,7 @@ mod tests {
         }
         transport::send(&channel, transport::GO, &[])?;
         let mut child = Command::new(std::env::current_exe()?)
-            .args(["--exact", ROLE, "--ignored"])
+            .args(["--exact", &receiver_role(), "--ignored"])
             .stdin(Stdio::from(receiver))
             .stdout(Stdio::null())
             .stderr(Stdio::null())

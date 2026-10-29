@@ -58,7 +58,9 @@ truncated transfers fail, and the stream operations use one absolute deadline.
 The delegated journal fixture now also transfers the envelope to a guardian
 started with a minimal environment; its target receives a generated canary
 only after GO. The guardian's initial command line and environment are checked
-for that canary. This combined case requires CI on its own commit. The actual
+for that canary. This combined case passed the delegated Linux step in
+[CI run 40829325192](https://github.com/shahzadlone/agent-swapper/actions/runs/40829325192/job/123299633910)
+at `de1cc1c`. The actual
 production guardian/shim lifecycle and authentication boundary remain to be
 integrated and tested. The fixture now starts a trusted shim, moves it into the
 scope, and records its PID before acknowledging admission. The shim validates
@@ -68,6 +70,10 @@ receives share one deadline. A local subprocess test supplies ordinary
 directories and confirms that a fully queued command cannot run; positive
 cgroup and crash results require delegated CI at this change's commit. The
 shim is not exposed by the production CLI and does not issue a stop receipt.
+The delegated terminal fixture also routes the target through this shared
+shim and transfers all three original streams. Its non-delegated path remains
+the earlier terminal-only control case. The revised delegated terminal cases
+require their own hosted CI run; prior terminal results used the older shim.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).
