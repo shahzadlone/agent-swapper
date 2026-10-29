@@ -225,8 +225,9 @@ pub fn main_entry(name: &'static str) -> i32 {
     {
         let mut args = std::env::args_os();
         let _ = args.next();
-        if args
-            .next()
+        let role = args.next();
+        if role
+            .as_ref()
             .is_some_and(|arg| arg == agentswapper_core::supervision::linux_shim::INTERNAL_ARG)
         {
             let scope = args.next().map(PathBuf::from);
@@ -236,6 +237,25 @@ pub fn main_entry(name: &'static str) -> i32 {
                 let _ = agentswapper_core::supervision::linux_shim::run_stdio(&scope);
             }
             let _ = writeln!(io::stderr(), "internal Linux admission failed");
+            return 125;
+        }
+        if role
+            .as_ref()
+            .is_some_and(|arg| arg == agentswapper_core::supervision::linux_guardian::INTERNAL_ARG)
+        {
+            let scope = args.next().map(PathBuf::from);
+            let foreground = args
+                .next()
+                .and_then(|value| value.to_str().and_then(|value| value.parse::<i32>().ok()));
+            if let (Some(scope), Some(foreground)) =
+                (scope.filter(|scope| scope.is_absolute()), foreground)
+                && args.next().is_none()
+                && agentswapper_core::supervision::linux_guardian::run_stdio(&scope, foreground)
+                    .is_ok()
+            {
+                return 0;
+            }
+            let _ = writeln!(io::stderr(), "internal Linux guardian failed");
             return 125;
         }
     }

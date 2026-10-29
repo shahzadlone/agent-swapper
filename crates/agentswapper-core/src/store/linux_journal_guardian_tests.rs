@@ -473,3 +473,140 @@ fn real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup() {
         "::notice title=Linux journal guardian::real lease and pending intent survived supervisor loss through detached cgroup cleanup"
     );
 }
+
+const GUARDIAN_EXIT_TARGET: &str = "store::linux_journal_guardian_tests::guardian_exit_target";
+
+#[test]
+#[ignore = "exit-status role for the internal guardian fixture"]
+fn guardian_exit_target() {
+    let mut grant = String::new();
+    io::stdin().lock().read_line(&mut grant).unwrap();
+    assert_eq!(grant, "GO\n");
+    std::process::exit(7);
+}
+
+fn internal_guardian_case(parent_loss: bool) {
+    use crate::supervision::linux_guardian;
+    let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
+    let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
+    let domain = cgroup::Domain::open(&delegated).unwrap();
+    let scope = domain.create().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("state");
+    let mut store = Store::open(&root).unwrap();
+    let profile = store
+        .register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    let lease = store.lease(profile.id).unwrap();
+    let run = store
+        .begin_run_with_scope(
+            &lease,
+            "run",
+            None,
+            Some(LocalScope::LinuxCgroup {
+                id: scope_id(scope.path()),
+            }),
+        )
+        .unwrap();
+    let (channel, gate) = transport::pair().unwrap();
+    let foreground = rustix::process::getpgrp().as_raw_pid().to_string();
+    let mut guardian = OwnedChild(
+        Command::new(executable)
+            .arg(linux_guardian::INTERNAL_ARG)
+            .arg(scope.path())
+            .arg(foreground)
+            .env_clear()
+            .stdin(Stdio::from(gate))
+            .stdout(Stdio::from(
+                File::create(temp.path().join("guardian_fixture.stdout")).unwrap(),
+            ))
+            .stderr(Stdio::from(
+                File::create(temp.path().join("guardian_fixture.stderr")).unwrap(),
+            ))
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
+    for fd in [
+        scope.parent().as_fd(),
+        scope.directory().as_fd(),
+        lease.as_fd(),
+    ] {
+        transport::send(&channel, transport::GO, &[fd]).unwrap();
+    }
+    let target = if parent_loss {
+        TARGET
+    } else {
+        GUARDIAN_EXIT_TARGET
+    };
+    let test_executable = std::env::current_exe().unwrap();
+    let launch = LaunchEnvelope::capture(
+        test_executable.as_os_str(),
+        temp.path(),
+        ["--exact".into(), target.into(), "--ignored".into()],
+        [],
+        [
+            (
+                "ASWP_JOURNAL_FIXTURE_DIR".into(),
+                Some(temp.path().as_os_str().to_owned()),
+            ),
+            (
+                "ASWP_JOURNAL_FIXTURE_SCOPE".into(),
+                Some(scope.path().as_os_str().to_owned()),
+            ),
+        ],
+    )
+    .unwrap();
+    launch.send_to(&channel).unwrap();
+    let mut input = tempfile::tempfile().unwrap();
+    input.write_all(b"GO\n").unwrap();
+    input.seek(SeekFrom::Start(0)).unwrap();
+    let output = File::create(temp.path().join("target_fixture.stdout")).unwrap();
+    let diagnostic = File::create(temp.path().join("target_fixture.stderr")).unwrap();
+    for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
+        transport::send(&channel, transport::GO, &[fd]).unwrap();
+    }
+    let pid = linux_guardian::receive_pid(&channel, Instant::now() + BUDGET).unwrap();
+    store.observe_spawn(&run, pid).unwrap();
+    transport::send(&channel, transport::GO, &[]).unwrap();
+    drop(lease);
+    if parent_loss {
+        controller_wait(temp.path(), || temp.path().join("heartbeat").exists());
+        assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
+        drop(channel);
+    } else {
+        assert_eq!(
+            linux_guardian::receive_exit(&channel, Instant::now() + BUDGET).unwrap(),
+            7
+        );
+        drop(channel);
+    }
+    let Some(status) = guardian.0.wait_timeout(BUDGET).unwrap() else {
+        panic!("guardian timed out");
+    };
+    assert!(status.success());
+    assert!(!scope.path().exists());
+    assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
+    assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
+    assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
+    store.attest_stopped(&run).unwrap();
+    assert!(store.verify().unwrap().consistent);
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_reports_exit_after_cleanup() {
+    internal_guardian_case(false);
+    println!(
+        "::notice title=Linux internal guardian exit::actual CLI guardian observed exit and retired the scope; journal remains pending"
+    );
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
+    internal_guardian_case(true);
+    println!(
+        "::notice title=Linux internal guardian EOF::actual CLI guardian retired target scope on channel loss; journal remains pending"
+    );
+}

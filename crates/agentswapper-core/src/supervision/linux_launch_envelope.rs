@@ -99,20 +99,18 @@ impl LaunchEnvelope {
     /// Send through a private, separately owned stream transferred by SCM_RIGHTS.
     /// The helper's argv and environment do not carry the encoded launch data.
     pub(crate) fn send_to(&self, channel: &OwnedFd) -> io::Result<()> {
-        use rustix::net::sockopt::{self, Timeout};
-        let deadline = Instant::now() + TRANSFER_BUDGET;
+        self.send_to_until(channel, Instant::now() + TRANSFER_BUDGET)
+    }
+
+    pub(crate) fn send_to_until(&self, channel: &OwnedFd, deadline: Instant) -> io::Result<()> {
         let bytes = self.encode()?;
         let (mut sender, receiver) = UnixStream::pair()?;
-        let previous = sockopt::socket_timeout(channel, Timeout::Send)?;
-        sockopt::set_socket_timeout(channel, Timeout::Send, Some(remaining(deadline)?))?;
-        let transfer = super::linux_admission_transport::send(
+        super::linux_admission_transport::send_until(
             channel,
             super::linux_admission_transport::GO,
             &[receiver.as_fd()],
-        );
-        let restore = sockopt::set_socket_timeout(channel, Timeout::Send, previous);
-        transfer?;
-        restore?;
+            deadline,
+        )?;
         drop(receiver);
         let length = u32::try_from(bytes.len())
             .map_err(|_| invalid())?

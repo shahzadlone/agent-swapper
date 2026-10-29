@@ -46,6 +46,8 @@ def main():
     for name, notice in [
         ("real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup", "Linux journal guardian"),
         ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),
+        ("internal_guardian_reports_exit_after_cleanup", "Linux internal guardian exit"),
+        ("internal_guardian_cleans_up_on_supervisor_channel_loss", "Linux internal guardian EOF"),
     ]:
         result = subprocess.run([str(core_test), "--ignored", "--exact",
                                  f"store::linux_journal_guardian_tests::{name}",

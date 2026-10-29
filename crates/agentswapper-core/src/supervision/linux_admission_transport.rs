@@ -53,6 +53,31 @@ pub(crate) fn send(socket: &OwnedFd, packet: &[u8], files: &[BorrowedFd<'_>]) ->
     require(written == packet.len(), "incomplete admission packet")
 }
 
+#[allow(
+    dead_code,
+    reason = "some fixture binaries do not use startup deadlines"
+)]
+pub(crate) fn send_until(
+    socket: &OwnedFd,
+    packet: &[u8],
+    files: &[BorrowedFd<'_>],
+    deadline: Instant,
+) -> io::Result<()> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::TimedOut, "guardian startup deadline expired")
+        })?;
+    let previous = sockopt::socket_timeout(socket, Timeout::Send)?;
+    sockopt::set_socket_timeout(socket, Timeout::Send, Some(remaining))?;
+    let result = send(socket, packet, files);
+    let restore = sockopt::set_socket_timeout(socket, Timeout::Send, previous);
+    result?;
+    restore?;
+    Ok(())
+}
+
 pub(crate) fn receive(socket: impl AsFd) -> io::Result<OwnedFd> {
     let mut bytes = [0_u8; 9];
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
@@ -113,6 +138,52 @@ pub(crate) fn receive_control_until(
     deadline: Instant,
 ) -> io::Result<()> {
     with_deadline(&socket, deadline, || receive_control(&socket, expected))
+}
+
+/// Receive an exact versioned control packet followed by a four-byte value.
+#[allow(
+    dead_code,
+    reason = "some fixture binaries do not exchange numeric control packets"
+)]
+pub(crate) fn receive_number_until(
+    socket: impl AsFd,
+    prefix: &[u8],
+    deadline: Instant,
+) -> io::Result<[u8; 4]> {
+    require(
+        !prefix.is_empty() && prefix.len() <= 28,
+        "invalid numeric control prefix",
+    )?;
+    with_deadline(&socket, deadline, || {
+        let mut bytes = [0_u8; 32];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+        let received = net::recvmsg(
+            &socket,
+            &mut [IoSliceMut::new(&mut bytes)],
+            &mut ancillary,
+            RecvFlags::CMSG_CLOEXEC,
+        )?;
+        let mut unexpected = false;
+        for message in ancillary.drain() {
+            unexpected = true;
+            if let RecvAncillaryMessage::ScmRights(rights) = message {
+                drop(rights.collect::<Vec<OwnedFd>>());
+            }
+        }
+        require(
+            !unexpected
+                && !received
+                    .flags
+                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                && received.bytes == prefix.len() + 4
+                && &bytes[..prefix.len()] == prefix,
+            "invalid numeric guardian packet",
+        )?;
+        bytes[prefix.len()..prefix.len() + 4]
+            .try_into()
+            .map_err(|_| io::Error::other("invalid numeric guardian packet"))
+    })
 }
 
 fn with_deadline<T>(

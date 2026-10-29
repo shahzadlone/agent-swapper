@@ -1,0 +1,217 @@
+//! Internal guardian for a delegated cgroup. Not yet wired to normal launches.
+use rustix::{
+    fs::OFlags,
+    net::{RecvFlags, recv},
+    process::{Pid, getpgid, getpgrp, getpid, getppid},
+};
+use std::{
+    fs::File,
+    io::{self, Write},
+    os::fd::AsFd,
+    os::unix::process::{CommandExt, ExitStatusExt},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+use wait_timeout::ChildExt;
+
+use super::{
+    linux_admission_transport as transport, linux_cgroup as cgroup,
+    linux_launch_envelope::LaunchEnvelope, linux_shim,
+};
+
+const STARTUP: Duration = Duration::from_secs(30);
+const CLEANUP: Duration = Duration::from_secs(10);
+const PID_PREFIX: &[u8] = b"ASWP-PID-1";
+const DONE_PREFIX: &[u8] = b"ASWP-DONE-1";
+
+/// Internal CLI role selector; scope and process group are not secret.
+#[doc(hidden)]
+pub const INTERNAL_ARG: &str = "__agentswapper_internal_linux_guardian_v1";
+
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn receive_pid(channel: impl AsFd, deadline: Instant) -> io::Result<u32> {
+    let pid = u32::from_be_bytes(transport::receive_number_until(
+        channel, PID_PREFIX, deadline,
+    )?);
+    if pid == 0 {
+        return Err(io::Error::other("invalid guardian PID"));
+    }
+    Ok(pid)
+}
+
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn receive_exit(channel: impl AsFd, deadline: Instant) -> io::Result<i32> {
+    let code = i32::from_be_bytes(transport::receive_number_until(
+        channel,
+        DONE_PREFIX,
+        deadline,
+    )?);
+    if !(0..=255).contains(&code) {
+        return Err(io::Error::other("invalid guardian exit status"));
+    }
+    Ok(code)
+}
+
+struct Target(Child);
+impl Drop for Target {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait_timeout(Duration::from_secs(3));
+    }
+}
+
+struct Scope {
+    parent: File,
+    leaf: File,
+    _lease: File,
+    path: PathBuf,
+    retired: bool,
+}
+impl Scope {
+    fn stop_and_retire(&mut self, deadline: Instant) -> io::Result<()> {
+        cgroup::validate_scope(&self.parent, &self.leaf, &self.path)?;
+        cgroup::control(&self.leaf, "cgroup.kill", OFlags::WRONLY)?.write_all(b"1\n")?;
+        cgroup::until(deadline, || {
+            Ok((!cgroup::populated(&self.leaf)?).then_some(()))
+        })?;
+        cgroup::retire_transferred(&self.parent, &self.leaf, &self.path, deadline)?;
+        self.retired = true;
+        Ok(())
+    }
+}
+impl Drop for Scope {
+    fn drop(&mut self) {
+        if !self.retired {
+            let _ = self.stop_and_retire(Instant::now() + Duration::from_secs(3));
+        }
+    }
+}
+
+/// Execute the private guardian protocol over stdin. Errors leave the journal
+/// unresolved; a successful message is not currently a production receipt.
+#[doc(hidden)]
+pub fn run_stdio(scope: &Path, foreground: i32) -> io::Result<()> {
+    let foreground =
+        Pid::from_raw(foreground).ok_or_else(|| io::Error::other("invalid foreground group"))?;
+    run(io::stdin(), scope, foreground, Instant::now() + STARTUP)
+}
+
+fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> io::Result<()> {
+    if getpgrp() != getpid() || getpgrp() == foreground || getpgid(getppid())? != foreground {
+        return Err(io::Error::other("guardian process group mismatch"));
+    }
+    let parent = File::from(transport::receive_until(&channel, deadline)?);
+    let leaf = File::from(transport::receive_until(&channel, deadline)?);
+    let lease = File::from(transport::receive_until(&channel, deadline)?);
+    cgroup::validate_scope(&parent, &leaf, path)?;
+    crate::private_fs::validate_file_metadata(&lease.metadata()?)
+        .map_err(|_| io::Error::other("invalid guardian lease"))?;
+    lease.try_lock().map_err(io::Error::other)?;
+    let mut scope = Scope {
+        parent,
+        leaf,
+        _lease: lease,
+        path: path.to_owned(),
+        retired: false,
+    };
+    let launch = LaunchEnvelope::receive_from_until(&channel, deadline)?;
+    let input = File::from(transport::receive_until(&channel, deadline)?);
+    let output = File::from(transport::receive_until(&channel, deadline)?);
+    let diagnostic = File::from(transport::receive_until(&channel, deadline)?);
+    let (grant, gate) = transport::pair()?;
+    // Resolve the running image in the forked child, so replacing the CLI's
+    // installed pathname cannot substitute a different shim between spawns.
+    let mut command = Command::new("/proc/self/exe");
+    command
+        .arg(linux_shim::INTERNAL_ARG)
+        .arg(path)
+        .env_clear()
+        .stdin(Stdio::from(gate))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(foreground.as_raw_pid());
+    let mut target = Target(command.spawn()?);
+    cgroup::control(&scope.leaf, "cgroup.procs", OFlags::WRONLY)?
+        .write_all(format!("{}\n", target.0.id()).as_bytes())?;
+    if !cgroup::contains(&scope.leaf, target.0.id())? {
+        return Err(io::Error::other("guardian failed to admit shim"));
+    }
+    let channel = rustix::io::dup(&channel)?;
+    let mut pid = PID_PREFIX.to_vec();
+    pid.extend_from_slice(&target.0.id().to_be_bytes());
+    transport::send_until(&channel, &pid, &[], deadline)?;
+    transport::receive_control_until(&channel, transport::GO, deadline)?;
+    for fd in [scope.parent.as_fd(), scope.leaf.as_fd()] {
+        transport::send_until(&grant, transport::GO, &[fd], deadline)?;
+    }
+    launch.send_to_until(&grant, deadline)?;
+    drop(launch);
+    for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
+        transport::send_until(&grant, transport::GO, &[fd], deadline)?;
+    }
+    transport::send_until(&grant, transport::GO, &[], deadline)?;
+    drop(grant);
+    drop([input, output, diagnostic]);
+    let status = loop {
+        let mut packet = [0_u8; 1];
+        match recv(&channel, &mut packet, RecvFlags::DONTWAIT) {
+            Ok((0, _)) => {
+                scope.stop_and_retire(Instant::now() + CLEANUP)?;
+                return Ok(());
+            }
+            Ok(_) => return Err(io::Error::other("unexpected guardian control message")),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
+            Err(error) => return Err(error.into()),
+        }
+        if let Some(status) = target.0.try_wait()? {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let code = match (status.code(), status.signal()) {
+        (Some(code), _) => code,
+        (None, Some(signal)) => 128 + signal,
+        _ => return Err(io::Error::other("target exit status unavailable")),
+    };
+    scope.stop_and_retire(Instant::now() + CLEANUP)?;
+    let mut done = DONE_PREFIX.to_vec();
+    done.extend_from_slice(&code.to_be_bytes());
+    transport::send_until(&channel, &done, &[], Instant::now() + CLEANUP)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_protocol_refuses_invalid_values_and_capabilities() -> io::Result<()> {
+        for (prefix, value, extra_fd, valid) in [
+            (PID_PREFIX, 42_u32, false, true),
+            (PID_PREFIX, 0_u32, false, false),
+            (PID_PREFIX, 42_u32, true, false),
+            (DONE_PREFIX, 7_u32, false, true),
+            (DONE_PREFIX, 256_u32, false, false),
+        ] {
+            let (sender, receiver) = transport::pair()?;
+            let file = tempfile::tempfile()?;
+            let mut packet = prefix.to_vec();
+            packet.extend_from_slice(&value.to_be_bytes());
+            let fds = if extra_fd { vec![file.as_fd()] } else { vec![] };
+            transport::send(&sender, &packet, &fds)?;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let accepted = if prefix == PID_PREFIX {
+                receive_pid(&receiver, deadline).is_ok()
+            } else {
+                receive_exit(&receiver, deadline).is_ok()
+            };
+            assert_eq!(accepted, valid);
+        }
+        let (sender, receiver) = transport::pair()?;
+        transport::send(&sender, b"ASWP-PID-1-too-long", &[])?;
+        assert!(receive_pid(&receiver, Instant::now() + Duration::from_secs(1)).is_err());
+        Ok(())
+    }
+}

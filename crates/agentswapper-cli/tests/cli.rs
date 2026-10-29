@@ -144,6 +144,88 @@ fn internal_linux_shim_refuses_missing_admission_without_opening_state() {
     assert!(!s.state().exists());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn internal_linux_guardian_refuses_untrusted_entry_without_opening_state() {
+    let s = Sandbox::new();
+    for program in [
+        assert_cmd::cargo::cargo_bin!("aswp"),
+        assert_cmd::cargo::cargo_bin!("agentswapper"),
+    ] {
+        let output = Command::new(program)
+            .env_clear()
+            .env("HOME", s.temp.path().join("home"))
+            .current_dir(s.temp.path())
+            .args([
+                "__agentswapper_internal_linux_guardian_v1",
+                "/tmp/aswp-probe-00000000-0000-4000-8000-000000000001",
+                "1",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(125));
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, b"internal Linux guardian failed\n");
+    }
+    assert!(!s.state().exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn internal_linux_guardian_rejects_non_cgroup_capabilities() {
+    use rustix::{
+        fd::AsFd,
+        net::{self, SendAncillaryBuffer, SendAncillaryMessage, SendFlags},
+        process::getpgrp,
+    };
+    use std::{fs::File, io::IoSlice, mem::MaybeUninit, os::unix::process::CommandExt};
+    let s = Sandbox::new();
+    let parent = File::open(s.temp.path()).unwrap();
+    let leaf = File::open(s.temp.path()).unwrap();
+    let lease = tempfile::tempfile().unwrap();
+    let (channel, gate) = net::socketpair(
+        net::AddressFamily::UNIX,
+        net::SocketType::SEQPACKET,
+        net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    let child = Command::new(assert_cmd::cargo::cargo_bin!("aswp"))
+        .env_clear()
+        .current_dir(s.temp.path())
+        .args([
+            "__agentswapper_internal_linux_guardian_v1",
+            "/tmp/aswp-probe-00000000-0000-4000-8000-000000000001",
+            &getpgrp().as_raw_pid().to_string(),
+        ])
+        .stdin(Stdio::from(gate))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    for fd in [parent.as_fd(), leaf.as_fd(), lease.as_fd()] {
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        let descriptors = [fd];
+        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
+        net::sendmsg(
+            &channel,
+            &[IoSlice::new(b"ASWP-GO-1")],
+            &mut ancillary,
+            SendFlags::NOSIGNAL,
+        )
+        .unwrap();
+    }
+    drop(channel);
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(125));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"internal Linux guardian failed\n");
+    assert!(!s.state().exists());
+}
+
 #[test]
 fn bare_command_in_pipes_preserves_help_and_json_without_opening_state() {
     let s = Sandbox::new();

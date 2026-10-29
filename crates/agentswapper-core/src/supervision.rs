@@ -32,3 +32,7 @@ pub(crate) mod linux_launch_envelope;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod linux_shim;
+
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub mod linux_guardian;
