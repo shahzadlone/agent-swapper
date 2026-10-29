@@ -200,9 +200,13 @@ run intent, transfers the actual profile lease, admits a gated fixture target
 to a dedicated cgroup, records its PID before acknowledging the launch, kills
 the supervisor, and independently checks the empty scope and held lease before
 retirement and release. The target changes session after admission; a separate
-outside-scope heartbeat must continue through cleanup. The pending journal intent remains unresolved until
-manual attestation. This is still fixture-only and requires a successful CI
-run at the commit containing it; no production stop receipt is implied.
+outside-scope heartbeat must continue through cleanup. The pending journal
+intent remains unresolved until manual attestation. This is still fixture-only;
+no production stop receipt is implied. The delegated step passed at `b81ab2b`
+in [CI run 40825373742](https://github.com/shahzadlone/agent-swapper/actions/runs/40825373742/job/123287079787),
+including the journal/lease and outside-heartbeat assertions. That run's macOS
+job failed in a separate temporary-path test, so this is evidence for the Linux
+step rather than a passing whole-workflow result.
 
 A further delegated-only case injects guardian SIGKILL through the parent's
 owned child handle. Before the target starts, the guardian transfers the parent

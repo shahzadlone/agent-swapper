@@ -181,8 +181,11 @@ mod tests {
     #[test]
     fn opened_private_file_rejects_multiple_hardlinks() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("lock");
-        let alias = directory.path().join("alias");
+        // macOS temporary directories commonly use the /var -> /private/var
+        // alias; production normalizes the state root before checking links.
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let path = root.join("lock");
+        let alias = root.join("alias");
         drop(file(&path).unwrap());
         fs::hard_link(&path, &alias).unwrap();
         assert!(matches!(file(&path), Err(Error::UnsafePath)));
