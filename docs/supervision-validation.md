@@ -50,9 +50,9 @@ Actual Windows builds used bundled SQLite in CI.
 
 The native-launch PTY fixture also exercises redirected stdin, a launch with
 only stderr attached, and a launch with all streams redirected while the child
-uses `/dev/tty`. All three passed locally on Linux;
-the updated cross-platform fixture must pass on macOS before that result is
-claimed there. Supervisor-crash terminal restoration remains unqualified.
+uses `/dev/tty`. These passed locally on Linux and in the Linux and macOS jobs
+at `04b88e5` in [CI run 40823502804](https://github.com/shahzadlone/agent-swapper/actions/runs/40823502804).
+Supervisor-crash terminal restoration remains unqualified.
 
 ## Assertions exercised
 

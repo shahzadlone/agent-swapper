@@ -73,7 +73,9 @@ spawn observation and completion. It also kills after removal's mapping
 deletion. Each trial reopens the real database,
 checks replay and projections, and checks that unfinished runs still fence
 profile reuse. A 224-trial run passed locally on Linux; CI is configured to run
-the same matrix on all three hosts. These hook points do not cover every SQL or
+the same matrix on all three hosts. The earlier 204-trial matrix passed on Linux,
+macOS and Windows at `04b88e5` in [CI run 40823502804](https://github.com/shahzadlone/agent-swapper/actions/runs/40823502804).
+These hook points do not cover every SQL or
 filesystem write, power loss, all profile operations, or provider processes,
 so they do not complete the broader crash-recovery gate.
 
