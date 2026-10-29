@@ -57,6 +57,11 @@ offset 256, with PE timestamps `1793257779` and `1793258028`; see the
 [rebuild job](https://github.com/shahzadlone/agent-swapper/actions/runs/40832651386/job/123313788261).
 That establishes a timestamp difference, not that it was the only difference.
 The `/Brepro` build must independently reproduce before signing can proceed.
+At `2efa444`, the three-platform independent rebuild gate passed and
+[CI run 40833782715](https://github.com/shahzadlone/agent-swapper/actions/runs/40833782715/job/123319973000)
+completed candidate-set verification, provenance signing, signed-provenance
+verification and bundle storage. This qualifies that internal candidate and
+workflow run only; subsequent source changes need their own rebuild evidence.
 The ZIP contains `BUILD-INFO.json` with the revision, dirty state, Rust host,
 toolchain, lockfile hash, and hashes of its other contents. The build remaps
 workspace and home paths, and packaging refuses binaries containing those local

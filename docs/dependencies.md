@@ -65,6 +65,9 @@ namespace or concurrent descriptor creation. Errors refuse target exec.
 The shim role is entered before normal CLI initialization; the core and
 actual-guardian tests do not yet prove all production embedding or race cases.
 The normal locked dependency audit and hosted integration remain required.
+The locked dependency audit passed with this graph at `2414290` in
+[CI run 40836137547](https://github.com/shahzadlone/agent-swapper/actions/runs/40836137547/job/123321241350).
+That does not substitute for the pending delegated integration and race tests.
 
 ## Terminal signal restoration
 

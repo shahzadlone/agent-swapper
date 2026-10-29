@@ -504,7 +504,16 @@ fn guardian_exit_target() {
         }
         let (dir, scope) = fixture_paths();
         let inherited = std::env::var_os("ASWP_JOURNAL_INHERITED_FD_PROBE").is_some();
-        let parent = if inherited {
+        let received = std::env::var_os("ASWP_JOURNAL_RECEIVED_FD_PROBE").is_some();
+        let received_file = if received {
+            fs::write(dir.join("capability-requested"), b"ready").unwrap();
+            Some(File::from(
+                transport::receive_until(io::stdin(), Instant::now() + BUDGET).unwrap(),
+            ))
+        } else {
+            None
+        };
+        let parent = if inherited || received {
             None
         } else {
             match cgroup::checked_directory(scope.parent().unwrap()) {
@@ -525,6 +534,8 @@ fn guardian_exit_target() {
         let result = if let Some(parent) = &parent {
             cgroup::control(parent, "cgroup.procs", OFlags::WRONLY)
                 .and_then(|mut file| file.write_all(pid.as_bytes()))
+        } else if let Some(mut file) = received_file {
+            file.write_all(pid.as_bytes())
         } else {
             io::stderr().write_all(pid.as_bytes())
         };
@@ -592,6 +603,7 @@ enum MigrationProbe {
     Namespace,
     InheritedFd,
     AmbientFd,
+    ReceivedFd,
 }
 
 fn internal_guardian_case(
@@ -603,14 +615,18 @@ fn internal_guardian_case(
     use crate::supervision::linux_guardian;
     let escape_probe = matches!(
         probe,
-        MigrationProbe::Direct | MigrationProbe::Namespace | MigrationProbe::InheritedFd
+        MigrationProbe::Direct
+            | MigrationProbe::Namespace
+            | MigrationProbe::InheritedFd
+            | MigrationProbe::ReceivedFd
     );
     let namespace_probe = matches!(
         probe,
-        MigrationProbe::Namespace | MigrationProbe::InheritedFd
+        MigrationProbe::Namespace | MigrationProbe::InheritedFd | MigrationProbe::ReceivedFd
     );
     let inherited_probe = probe == MigrationProbe::InheritedFd;
     let ambient_probe = probe == MigrationProbe::AmbientFd;
+    let received_probe = probe == MigrationProbe::ReceivedFd;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
     let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
     let domain = cgroup::Domain::open(&delegated).unwrap();
@@ -701,12 +717,23 @@ fn internal_guardian_case(
                 "ASWP_JOURNAL_AMBIENT_FD".into(),
                 ambient.as_ref().map(|fd| fd.as_raw_fd().to_string().into()),
             ),
+            (
+                "ASWP_JOURNAL_RECEIVED_FD_PROBE".into(),
+                received_probe.then(|| "1".into()),
+            ),
         ],
     )
     .unwrap();
-    let mut input = tempfile::tempfile().unwrap();
-    input.write_all(b"GO\n").unwrap();
-    input.seek(SeekFrom::Start(0)).unwrap();
+    let (input, sender) = if received_probe {
+        let (sender, receiver) = transport::pair().unwrap();
+        transport::send(&sender, b"GO\n", &[]).unwrap();
+        (File::from(receiver), Some(sender))
+    } else {
+        let mut input = tempfile::tempfile().unwrap();
+        input.write_all(b"GO\n").unwrap();
+        input.seek(SeekFrom::Start(0)).unwrap();
+        (input, None)
+    };
     let output = File::create(temp.path().join("target_fixture.stdout")).unwrap();
     let diagnostic = if inherited_probe {
         cgroup::control(scope.parent(), "cgroup.procs", OFlags::WRONLY).unwrap()
@@ -726,6 +753,14 @@ fn internal_guardian_case(
     )
     .unwrap();
     linux_guardian::record_and_go(&mut store, &run, pid, &channel, startup_deadline).unwrap();
+    let transfer = sender.map(|sender| {
+        let dir = temp.path().to_owned();
+        let file = cgroup::control(scope.parent(), "cgroup.procs", OFlags::WRONLY).unwrap();
+        thread::spawn(move || {
+            until(|| dir.join("capability-requested").exists());
+            transport::send(&sender, transport::GO, &[file.as_fd()]).unwrap();
+        })
+    });
     if guardian_loss {
         controller_wait(temp.path(), || temp.path().join("heartbeat").exists());
         assert!(cgroup::populated(scope.directory()).unwrap());
@@ -793,6 +828,9 @@ fn internal_guardian_case(
     let Some(status) = guardian.0.wait_timeout(BUDGET).unwrap() else {
         panic!("guardian timed out");
     };
+    if let Some(transfer) = transfer {
+        transfer.join().unwrap();
+    }
     assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
     assert!(cgroup::events_missing(scope.directory()).unwrap());
@@ -815,7 +853,9 @@ fn internal_guardian_case(
                 );
                 fs::write(temp.path().join("escaped-stop"), b"stop").unwrap();
                 until(|| temp.path().join("escaped-done").exists());
-                let title = if namespace_probe {
+                let title = if received_probe {
+                    "Linux post-exec cgroup capability"
+                } else if namespace_probe {
                     "Linux cgroup namespace migration"
                 } else {
                     "Linux cgroup migration"
@@ -823,7 +863,9 @@ fn internal_guardian_case(
                 println!("::notice title={title}::escaped writer survived retirement");
             }
             "denied" => {
-                let title = if namespace_probe {
+                let title = if received_probe {
+                    "Linux post-exec cgroup capability"
+                } else if namespace_probe {
                     "Linux cgroup namespace migration"
                 } else {
                     "Linux cgroup migration"
@@ -985,4 +1027,10 @@ fn internal_guardian_checks_inherited_cgroup_capability() {
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_closes_ambient_cgroup_capability() {
     internal_guardian_case(false, false, false, MigrationProbe::AmbientFd);
+}
+
+#[test]
+#[ignore = "requires delegated cgroup, unprivileged namespaces and the actual CLI guardian"]
+fn internal_guardian_checks_post_exec_cgroup_capability() {
+    internal_guardian_case(false, false, false, MigrationProbe::ReceivedFd);
 }

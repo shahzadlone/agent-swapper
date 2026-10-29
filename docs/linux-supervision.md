@@ -435,6 +435,11 @@ checks that the guardian received it, and verifies it is absent after target
 exec; that fixture awaits hosted CI. These checks do not cover capabilities
 received later or access through another process. A namespace boundary cannot
 be qualified without accounting for those paths.
+A further namespace fixture now receives a parent control descriptor over a
+standard-input socket after target exec, from a cooperating same-user peer
+outside the namespace, and attempts migration through it. This distinguishes
+initial descriptor hygiene from capabilities received later. Its hosted result
+is pending; it does not require or use provider credentials.
 The internal shim reports startup failures by exiting with status 125, which is
 also a possible exit status of an executed target. The guardian cannot
 distinguish those cases from the status alone, so it now treats either as an
