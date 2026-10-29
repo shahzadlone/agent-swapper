@@ -16,6 +16,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - name: Install pinned toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
       - name: Format
@@ -110,19 +112,87 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - run: rustup toolchain install 1.98.0 --profile minimal
       - name: Restore pinned dependency checker
         id: deny-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cargo/bin/cargo-deny*
-          key: deny-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.20.2
+          key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
       - if: steps.deny-cache.outputs.cache-hit != 'true'
-        run: cargo +1.98.0 install cargo-deny --version 0.20.2 --locked
+        run: |
+          cargo +1.98.0 install cargo-deny --version 0.20.2 --locked
+          python tools/build_audited_deny.py
+      - name: Verify dependency checker build marker
+        run: python tools/build_audited_deny.py --verify-only
       - name: Save pinned dependency checker
         if: steps.deny-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cargo/bin/cargo-deny*
-          key: deny-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.20.2
+          key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
       - run: cargo +1.98.0 deny --locked check
+
+  candidate:
+    needs: [test, dependencies]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Verify archive and tool-audit boundaries
+        run: python -m unittest discover -s tools -p test_release_candidate.py
+      - name: Restore pinned dependency checker
+        id: candidate-deny-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-deny*
+          key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
+      - name: Install dependency checker
+        if: steps.candidate-deny-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo +1.98.0 install cargo-deny --version 0.20.2 --locked
+          python tools/build_audited_deny.py
+      - name: Verify dependency checker build marker
+        run: python tools/build_audited_deny.py --verify-only
+      - name: Save dependency checker
+        if: steps.candidate-deny-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-deny*
+          key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
+      - name: Audit pinned attribution tool before installation
+        run: python tools/audit_attribution_tool.py
+      - name: Restore pinned attribution tool
+        id: about-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: about-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.3
+      - name: Install attribution tool
+        if: steps.about-cache.outputs.cache-hit != 'true'
+        run: cargo +1.98.0 install cargo-about --version 0.9.3 --locked --features cli
+      - name: Save pinned attribution tool
+        if: steps.about-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cargo/bin/cargo-about*
+          key: about-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.3
+      - name: Build optimized binaries
+        run: python tools/build_candidate_binaries.py
+      - name: Generate and verify unsigned candidate
+        run: python tools/release_candidate.py --output target/release-candidate
+      - name: Store internal CI candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-candidate-${{ runner.os }}-${{ runner.arch }}
+          path: target/release-candidate/
+          if-no-files-found: error
+          retention-days: 7

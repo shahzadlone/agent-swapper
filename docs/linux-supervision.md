@@ -205,9 +205,11 @@ Two additional provider-free cases put the target in actual terminal raw mode.
 On normal exit, the fixture supervisor restores the exact saved attributes while
 it still owns the foreground; the observer checks them after the shell resumes.
 On parent SIGKILL, the observer records whether the shell restored attributes,
-without treating that observation as a crash-recovery guarantee. The fixture
-restoration is not yet integrated with native launches. Both cases need the
-delegated CI run at their own commit.
+without treating that observation as a crash-recovery guarantee. The native
+launcher now separately snapshots and restores a foreground terminal after its
+direct child exits; that implementation does not integrate the cgroup guardian
+or guarantee recovery after supervisor failure. See the native terminal fixture
+in CI for its platform-specific evidence.
 
 ## Remaining gates
 

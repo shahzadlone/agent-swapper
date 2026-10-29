@@ -46,6 +46,9 @@ Read [dependency decisions](docs/dependencies.md) before upgrading encryption
 or translation crates. Handover CLI tests exercise the production KDF; nextest
 serializes that test group to limit concurrent memory use.
 
+The [candidate packaging check](docs/release-candidates.md) builds unsigned
+internal artifacts and verifies dependency attribution and archive boundaries.
+
 Use Conventional Commits for every new commit: `type(scope): description`.
 For example, `feat(engine): add optional gents chat profiles`,
 `fix(registry): preserve pending runs during migration`, or

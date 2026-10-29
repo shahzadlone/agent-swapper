@@ -1,0 +1,9 @@
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+# Build-tool graphs only, not AgentSwapper's runtime graph. See docs/release-candidates.md.
+ignore = [
+  { id = "RUSTSEC-2026-0391", reason = "Pinned tools use a fresh zstd read decoder for the embedded SPDX cache; they do not reuse with_context streams." },
+  { id = "RUSTSEC-2026-0398", reason = "The pinned tool graph does not enable or use zstd's seekable API." },
+  { id = "RUSTSEC-2026-0403", reason = "The pinned tool reads its embedded SPDX cache with zstd::stream::read::Decoder; the advisory excludes this API." },
+]
