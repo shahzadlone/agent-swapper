@@ -399,6 +399,23 @@ mod tests {
     }
 
     #[test]
+    fn nonempty_scope_is_not_reported_as_retired() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = File::open(directory.path()).unwrap();
+        let scope = directory.path().join("scope");
+        fs::create_dir(&scope).unwrap();
+        let leaf = File::open(&scope).unwrap();
+        let occupant = scope.join("occupant");
+        fs::write(&occupant, b"keep").unwrap();
+
+        assert!(!remove_named_child(&parent, &leaf, "scope".as_ref()).unwrap());
+        assert_eq!(fs::read(&occupant).unwrap(), b"keep");
+        fs::remove_file(&occupant).unwrap();
+        assert!(remove_named_child(&parent, &leaf, "scope".as_ref()).unwrap());
+        assert!(!scope.exists());
+    }
+
+    #[test]
     fn rollback_refuses_a_replacement_created_after_capability_acquisition() {
         let directory = tempfile::tempdir().unwrap();
         let parent = File::open(directory.path()).unwrap();
