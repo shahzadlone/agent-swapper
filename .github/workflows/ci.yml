@@ -94,6 +94,10 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 12
         run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(arbitrary_valid_lifecycles_replay_exactly)' --stress-count 10 --fail-fast
+      - name: Windows registry initialization concurrency stress
+        if: runner.os == 'Windows'
+        timeout-minutes: 6
+        run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(concurrent_first_open_and_duplicate_registration_are_serialized)' --stress-count 25 --fail-fast
       - name: Report failing tests
         if: failure()
         run: python tools/report_test_failures.py target/nextest/ci/junit.xml

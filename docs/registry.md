@@ -20,6 +20,16 @@ new baseline only after commit succeeds. A peer write or local edit forces a
 full replay. Changed connection settings and temporary schema objects are
 refused. Every new connection starts without a baseline.
 
+Registry initialization is serialized by the private bootstrap lock. Openers
+wait up to ten seconds for schema initialization or migration to finish before
+returning `Busy`; ordinary SQLite busy waits remain three seconds. The previous
+three-second bootstrap deadline expired for two of four concurrent Windows
+openers at `eec5834` in
+[CI run 40906877992](https://github.com/shahzadlone/agent-swapper/actions/runs/40906877992).
+A regression now holds initialization beyond that old deadline, and the Windows
+job repeats the four-opener registration case 25 times. Local checks pass;
+the native Windows result for the new deadline remains pending.
+
 Explicit verification, doctor, and run-history reads always perform full
 verification. This optimization relies on SQLite writes and working local
 filesystem locks; it does not authenticate raw database-file edits or detect

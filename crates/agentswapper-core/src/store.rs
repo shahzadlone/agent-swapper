@@ -13,6 +13,10 @@ use uuid::Uuid;
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
 const SCHEMA: i64 = 7;
+// Initialization is serialized across connections and may include durable
+// schema setup or migration. Allow queued openers to outlast one connection's
+// SQLite busy window, while still refusing an indefinitely held bootstrap lock.
+const BOOTSTRAP_WAIT: Duration = Duration::from_secs(10);
 #[cfg(test)]
 mod crash_tests;
 mod journal;
@@ -147,9 +151,7 @@ impl Store {
         loop {
             match bootstrap.try_lock() {
                 Ok(()) => break,
-                Err(std::fs::TryLockError::WouldBlock)
-                    if started.elapsed() < Duration::from_secs(3) =>
-                {
+                Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < BOOTSTRAP_WAIT => {
                     std::thread::sleep(Duration::from_millis(10))
                 }
                 Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Busy),
@@ -990,6 +992,25 @@ mod tests {
         s.enable(&p.alias, false).unwrap();
         assert!(matches!(s.begin_run(&lease, "run"), Err(Error::Disabled)));
         assert!(s.unfinished().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bootstrap_waits_for_a_slow_initializer_before_opening() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        drop(Store::open(&root).unwrap());
+        let bootstrap = private_fs::file(&root.join("registry.lock")).unwrap();
+        bootstrap.lock().unwrap();
+        let (ready, waiting) = std::sync::mpsc::channel();
+        let opener = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            Store::open(&root).map(|_| ())
+        });
+        waiting.recv().unwrap();
+        // Exercise contention beyond the former three-second deadline.
+        std::thread::sleep(Duration::from_secs(4));
+        drop(bootstrap);
+        opener.join().unwrap().unwrap();
     }
 
     #[test]
