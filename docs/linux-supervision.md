@@ -410,6 +410,9 @@ evidence of containment. The [kernel's `nsdelegate` mount option](https://docs.k
 is system-wide, and namespace setup may affect user identity, filesystem access,
 and agent behavior. The test does not yet qualify those effects, alternative
 escape paths, or this approach for production.
+The delegated driver now also reports whether its cgroup2 mount advertises
+`nsdelegate`; missing or ambiguous mount information is reported as unknown.
+This metadata is context for the experiment, not proof of a boundary.
 The Linux 6.8 [cgroup implementation](https://github.com/torvalds/linux/blob/v6.8/kernel/cgroup/cgroup.c)
 records a cgroup namespace at control-file open and uses that recorded
 namespace and the opening credentials during migration checks. A process that

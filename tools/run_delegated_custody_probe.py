@@ -9,6 +9,19 @@ import subprocess
 import sys
 
 
+def nsdelegate_observation(mountinfo):
+    """Report the mount's option without echoing untrusted mount text."""
+    options = []
+    for line in mountinfo.splitlines():
+        left, separator, right = line.partition(" - ")
+        prefix, suffix = left.split(), right.split()
+        if separator and len(prefix) >= 5 and len(suffix) >= 3 and prefix[4] == "/sys/fs/cgroup" and suffix[0] == "cgroup2":
+            options.append("nsdelegate" in suffix[2].split(","))
+    if len(options) != 1:
+        return "unknown"
+    return "enabled" if options[0] else "not reported"
+
+
 def main():
     if sys.platform != "linux" or os.geteuid() == 0:
         raise SystemExit("The fixture requires an unprivileged Linux process")
@@ -28,6 +41,8 @@ def main():
     if not relative.is_absolute() or ".." in relative.parts or relative == PurePosixPath("/"):
         raise SystemExit("Refusing an ambiguous or root cgroup")
     parent = Path("/sys/fs/cgroup").joinpath(*relative.parts[1:])
+    mount_option = nsdelegate_observation(Path("/proc/self/mountinfo").read_text())
+    print(f"::notice title=Linux cgroup namespace delegation::nsdelegate {mount_option}", flush=True)
     # Run the journal cases first so their notices remain visible if the CI
     # annotation limit truncates later notices from the same step.
     if len(sys.argv) == 4:
