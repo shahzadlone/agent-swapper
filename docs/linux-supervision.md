@@ -60,8 +60,9 @@ an empty original child behind; cleanup remains unresolved.
 The delegated probe also injects validation failure three times and checks for
 leftover children; those kernel-specific results require CI at the change's commit.
 That delegated rollback checkpoint passed all four CI jobs at `4b500ed`.
-These primitives and their rollback regressions now live in the private
-`examples/support/linux_cgroup.rs` module. Domain/group fields stay private;
+These primitives and their rollback regressions now live in the core's private
+`src/supervision/linux_cgroup.rs` module, shared with the existing probes.
+Domain/group fields stay private;
 consumers borrow the validated descriptors and retire the owned child through
 the shared implementation. This is preparation for testing terminal admission
 against the same cgroup code, not a production backend.

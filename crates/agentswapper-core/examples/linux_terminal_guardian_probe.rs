@@ -5,7 +5,7 @@
 #[path = "support/linux_admission_transport.rs"]
 mod admission_transport;
 #[cfg(target_os = "linux")]
-#[path = "support/linux_cgroup.rs"]
+#[path = "../src/supervision/linux_cgroup.rs"]
 mod cgroup;
 
 #[cfg(not(target_os = "linux"))]

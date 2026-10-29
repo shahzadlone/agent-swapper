@@ -23,7 +23,7 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
-#[path = "support/linux_cgroup.rs"]
+#[path = "../src/supervision/linux_cgroup.rs"]
 mod cgroup;
 
 #[cfg(target_os = "linux")]

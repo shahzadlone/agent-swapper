@@ -5,3 +5,12 @@
 
 #[cfg(windows)]
 pub mod windows_job;
+
+// Shared with the delegated fixtures while the guardian/journal integration
+// is being qualified. No production launch calls this module yet.
+#[cfg(target_os = "linux")]
+#[allow(
+    dead_code,
+    reason = "the guardian launch integration is not yet enabled"
+)]
+pub(crate) mod linux_cgroup;

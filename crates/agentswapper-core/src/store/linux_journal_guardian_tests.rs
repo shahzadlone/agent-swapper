@@ -1,8 +1,6 @@
 //! Delegated cgroup fixture with the real profile lease and durable journal.
 #![allow(clippy::unwrap_used)]
-#[allow(dead_code)]
-#[path = "../../examples/support/linux_cgroup.rs"]
-mod cgroup;
+use crate::supervision::linux_cgroup as cgroup;
 #[path = "../../examples/support/linux_admission_transport.rs"]
 mod transport;
 

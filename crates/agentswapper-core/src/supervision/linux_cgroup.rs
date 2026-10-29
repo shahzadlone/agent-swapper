@@ -1,5 +1,5 @@
-//! Shared Linux-only cgroup capabilities for provider-free experiments.
-//! These types are private to example binaries and cannot issue production receipts.
+//! Internal Linux cgroup capabilities shared with provider-free experiments.
+//! Not connected to native launches and unable to issue production receipts.
 use rustix::{
     fs::{AtFlags, CWD, Mode, OFlags, ResolveFlags, fstatfs, mkdirat, openat, openat2, unlinkat},
     process::geteuid,
