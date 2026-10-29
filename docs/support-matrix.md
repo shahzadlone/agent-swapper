@@ -41,10 +41,15 @@ documents these channels. It also permits arbitrary configured `api_key_env`
 names, so a finite conflict list cannot prove credential isolation.
 
 First-launch legacy migration can inspect `~/.kimi` independently of the new
-profile home, and `KIMI_SHARE_DIR` can redirect its source. AgentSwapper does not
-perform migration or create suppression markers in vendor data. Legacy-layout
-detection, migration/refresh traces and global credential-store behavior remain
-open gates. See the [migration resolver](https://github.com/MoonshotAI/kimi-code/blob/0c63065fbd7386132b3b8c914de37adfff4c8daf/apps/kimi-code/src/migration/legacy-source.ts)
+profile home, and `KIMI_SHARE_DIR` can redirect its source. Before starting Kimi,
+AgentSwapper checks for the legacy directory using metadata only and refuses a
+launch when it exists unless `--allow-kimi-legacy` is explicitly supplied for
+that launch. A missing, relative or otherwise indeterminate home also blocks
+launch unless the same explicit opt-in is supplied.
+This is a conservative preflight, not isolation: the directory may change after
+the check, and different Kimi versions may use other sources. AgentSwapper does not
+perform migration or create suppression markers in vendor data. Migration/refresh
+traces and global credential-store behavior remain open gates. See the [migration resolver](https://github.com/MoonshotAI/kimi-code/blob/0c63065fbd7386132b3b8c914de37adfff4c8daf/apps/kimi-code/src/migration/legacy-source.ts)
 and [migration guide](https://github.com/MoonshotAI/kimi-code/blob/0c63065fbd7386132b3b8c914de37adfff4c8daf/docs/en/guides/migration.md).
 
 ### Other workflows

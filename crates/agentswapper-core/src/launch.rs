@@ -27,6 +27,7 @@ pub struct LaunchPlan {
     resumed_from: Option<Uuid>,
     selection: Option<SessionSelection>,
     containment: Option<Containment>,
+    allow_kimi_legacy: bool,
 }
 
 /// Explicit experimental local-process backend; unsupported hosts never fall back.
@@ -49,6 +50,17 @@ pub enum SessionSelection {
     New,
     Explicit,
     Resume,
+}
+
+fn check_kimi_legacy_home(home: &Path) -> Result<()> {
+    if !home.is_absolute() || home.to_str().is_none() {
+        return Err(Error::KimiLegacyUnknown);
+    }
+    match std::fs::symlink_metadata(home.join(".kimi")) {
+        Ok(_) => Err(Error::KimiLegacyPresent),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(Error::KimiLegacyUnknown),
+    }
 }
 
 impl SessionSelection {
@@ -145,11 +157,33 @@ impl LaunchPlan {
             resumed_from: None,
             selection: session.map(|_| SessionSelection::New),
             containment: None,
+            allow_kimi_legacy: false,
         })
     }
 
     pub fn profile(&self) -> &Profile {
         &self.profile
+    }
+
+    /// Explicitly allow Kimi to inspect its legacy home during this launch.
+    pub fn with_kimi_legacy_access(mut self, allow: bool) -> Self {
+        self.allow_kimi_legacy = allow;
+        self
+    }
+
+    /// Metadata-only preflight; does not read, modify or migrate vendor data.
+    pub fn check_kimi_legacy(&self) -> Result<()> {
+        if self.profile.harness != Harness::Kimi || self.allow_kimi_legacy {
+            return Ok(());
+        }
+        #[cfg(windows)]
+        let variable = "USERPROFILE";
+        #[cfg(not(windows))]
+        let variable = "HOME";
+        // Node may fall back to the effective user's account directory when
+        // this variable is absent. Do not guess it using a different resolver.
+        let home = PathBuf::from(std::env::var_os(variable).ok_or(Error::KimiLegacyUnknown)?);
+        check_kimi_legacy_home(&home)
     }
 
     /// Local Job ownership never contains an externally owned gents runtime.
@@ -233,6 +267,7 @@ impl LaunchPlan {
             return Err(Error::UnverifiedNative);
         }
         self.check_environment(|key| std::env::var_os(key))?;
+        self.check_kimi_legacy()?;
         self.execute_prepared(store)
     }
 
@@ -267,6 +302,9 @@ impl LaunchPlan {
         // again before recording intent or spawning, preserving the invocation
         // path for programs whose behavior depends on their installed name.
         executable::validate(&self.program)?;
+        // The original preflight can become stale while waiting for the lease.
+        // This narrows, but cannot remove, the race with external changes.
+        self.check_kimi_legacy()?;
         let gents_session = match (self.session, &self.profile.gents) {
             (Some(id), Some(binding)) => Some(crate::store::GentsSession::new(
                 id,
@@ -510,6 +548,42 @@ mod tests {
     use super::*;
     use crate::Harness;
 
+    #[test]
+    fn kimi_legacy_check_only_accepts_a_known_absolute_home_without_a_legacy_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(check_kimi_legacy_home(temp.path()).is_ok());
+        assert!(matches!(
+            check_kimi_legacy_home(Path::new("relative")),
+            Err(Error::KimiLegacyUnknown)
+        ));
+        std::fs::write(temp.path().join(".kimi"), b"unchanged").unwrap();
+        assert!(matches!(
+            check_kimi_legacy_home(temp.path()),
+            Err(Error::KimiLegacyPresent)
+        ));
+        assert_eq!(
+            std::fs::read(temp.path().join(".kimi")).unwrap(),
+            b"unchanged"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kimi_legacy_check_refuses_dangling_links_and_non_utf8_home() {
+        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+        let temp = tempfile::tempdir().unwrap();
+        symlink(temp.path().join("missing"), temp.path().join(".kimi")).unwrap();
+        assert!(matches!(
+            check_kimi_legacy_home(temp.path()),
+            Err(Error::KimiLegacyPresent)
+        ));
+        let invalid = temp.path().join(OsString::from_vec(vec![0xff]));
+        assert!(matches!(
+            check_kimi_legacy_home(&invalid),
+            Err(Error::KimiLegacyUnknown)
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn launch_rechecks_changed_executable_permissions_before_journaling() {
@@ -560,7 +634,8 @@ mod tests {
             Vec::new(),
             false,
         )
-        .unwrap();
+        .unwrap()
+        .with_kimi_legacy_access(true);
         std::fs::remove_dir(&directory).unwrap();
         let expected = plan.command().spawn().unwrap_err();
         // No child can start, and this private entry avoids inspecting real

@@ -316,6 +316,57 @@ fn all_harnesses_forward_argv_without_a_shell_and_write_only_selected_home() {
     );
 }
 
+#[test]
+fn kimi_legacy_home_requires_explicit_per_launch_consent() {
+    let s = Sandbox::new();
+    s.add("kimi", "work");
+    let legacy = s.temp.path().join("home/.kimi");
+    std::fs::create_dir(&legacy).unwrap();
+    std::fs::write(legacy.join("sentinel"), b"unchanged").unwrap();
+    s.run("work")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("--allow-kimi-legacy"));
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert_eq!(history["data"].as_array().unwrap().len(), 0);
+    let preview = s
+        .command()
+        .args(["run", "work", "--dry-run", "--json", "--executable"])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert!(
+        preview["data"]["kimiLegacyRisk"]
+            .as_str()
+            .unwrap()
+            .contains("--allow-kimi-legacy")
+    );
+    s.run("work").arg("--allow-kimi-legacy").assert().success();
+    assert_eq!(
+        std::fs::read(legacy.join("sentinel")).unwrap(),
+        b"unchanged"
+    );
+}
+
+#[test]
+fn kimi_legacy_check_refuses_an_indeterminate_home() {
+    let s = Sandbox::new();
+    s.add("kimi", "work");
+    let variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    s.run("work")
+        .env_remove(variable)
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("could not determine"));
+    s.run("work")
+        .env(variable, "relative-home")
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("could not determine"));
+}
+
 #[cfg(unix)]
 #[test]
 fn non_utf8_native_arguments_survive() {

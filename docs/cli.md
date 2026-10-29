@@ -99,6 +99,9 @@ For Kimi this includes known OAuth endpoint/header overrides, temporary
 `KIMI_MODEL_*` settings, legacy migration-source overrides and Google SDK
 credential-file selection. The current CLI's source contract and its remaining
 migration/isolation limits are recorded in the [support matrix](support-matrix.md#kimi-source-contract).
+Kimi launches refuse a detected or indeterminate legacy home unless you opt in
+for that launch with `--allow-kimi-legacy`; the check does not read or migrate
+the legacy files and cannot prevent later external changes.
 
 Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout

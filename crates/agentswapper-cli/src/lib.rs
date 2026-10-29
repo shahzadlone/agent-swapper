@@ -135,6 +135,9 @@ struct LaunchArgs {
     /// Opt in to unverified native profile isolation. No automatic swapping.
     #[arg(long)]
     experimental_native: bool,
+    /// Allow Kimi to inspect legacy data in the user's home for this launch.
+    #[arg(long, requires = "experimental_native")]
+    allow_kimi_legacy: bool,
     /// Opt in to an attached gents chat client. External work may outlive it.
     #[arg(long, conflicts_with = "experimental_native")]
     experimental_gents: bool,
@@ -686,7 +689,8 @@ fn launch_profile(
         login,
     )?
     .with_session(launch.session)?
-    .with_containment(launch.experimental_containment)?;
+    .with_containment(launch.experimental_containment)?
+    .with_kimi_legacy_access(launch.allow_kimi_legacy);
     if launch.resume {
         plan = plan.with_latest_gents_session(store)?;
     }
@@ -733,9 +737,10 @@ fn launch_profile(
             .check_environment(|key| std::env::var_os(key))
             .err()
             .map(|e| e.to_string());
+        let legacy = plan.check_kimi_legacy().err().map(|e| e.to_string());
         emit(
             json_mode,
-            &json!({"plan":preview,"environmentConflict":conflicts,"runtimeCheck":runtime_check}),
+            &json!({"plan":preview,"environmentConflict":conflicts,"runtimeCheck":runtime_check,"kimiLegacyRisk":legacy}),
             &format!(
                 "{} {}\nProgram: {}\n{}={}\nArguments: {} (contents redacted)\nIsolation: unverified. Quota: unknown. Containment: {}.{scope}\n{}",
                 preview.operation,
@@ -750,6 +755,11 @@ fn launch_profile(
                     .unwrap_or("No known inherited routing conflict.")
             ),
         )?;
+        if let Some(legacy) = legacy
+            && !json_mode
+        {
+            writeln!(io::stdout(), "{legacy}")?;
+        }
         return Ok(0);
     }
     if json_mode {

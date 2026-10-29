@@ -81,6 +81,14 @@ pub enum Error {
     )]
     EnvironmentConflict(&'static str),
     #[error(
+        "Kimi may inspect legacy data in the user's home; review the migration risk, then use --allow-kimi-legacy to permit this launch"
+    )]
+    KimiLegacyPresent,
+    #[error(
+        "could not determine whether Kimi legacy data is present; check the user's home, then use --allow-kimi-legacy to permit this launch"
+    )]
+    KimiLegacyUnknown,
+    #[error(
         "native profile isolation is unverified; inspect --dry-run, then explicitly opt in with --experimental-native"
     )]
     UnverifiedNative,
@@ -224,6 +232,8 @@ impl Error {
             Self::ExecutableNotFound => "executable_not_found",
             Self::UnsafeExecutable => "unsafe_executable",
             Self::EnvironmentConflict(_) => "environment_conflict",
+            Self::KimiLegacyPresent => "kimi_legacy_present",
+            Self::KimiLegacyUnknown => "kimi_legacy_unknown",
             Self::UnverifiedNative => "native_unverified",
             Self::UnverifiedGents => "gents_unverified",
             Self::InvalidEngineBinding => "invalid_engine_binding",
