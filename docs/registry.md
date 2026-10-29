@@ -27,8 +27,12 @@ three-second bootstrap deadline expired for two of four concurrent Windows
 openers at `eec5834` in
 [CI run 40906877992](https://github.com/shahzadlone/agent-swapper/actions/runs/40906877992).
 A regression now holds initialization beyond that old deadline, and the Windows
-job repeats the four-opener registration case 25 times. Local checks pass;
-the native Windows result for the new deadline remains pending.
+job repeats the four-opener registration case 25 times. Windows tests and all
+25 stress iterations passed at `4482f09` in
+[CI run 40943875011](https://github.com/shahzadlone/agent-swapper/actions/runs/40943875011/job/123693999303).
+That run also caught a macOS-only path alias in the slow-initializer test:
+the test must reopen the normalized store root before directly taking its
+private lock. The fixture now uses that root; native macOS revalidation is pending.
 
 Explicit verification, doctor, and run-history reads always perform full
 verification. This optimization relies on SQLite writes and working local

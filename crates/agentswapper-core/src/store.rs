@@ -998,7 +998,11 @@ mod tests {
     fn bootstrap_waits_for_a_slow_initializer_before_opening() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");
-        drop(Store::open(&root).unwrap());
+        let store = Store::open(&root).unwrap();
+        // macOS temporary directories may use the /var -> /private/var alias.
+        // Private filesystem access takes the store's normalized root.
+        let root = store.root().to_owned();
+        drop(store);
         let bootstrap = private_fs::file(&root.join("registry.lock")).unwrap();
         bootstrap.lock().unwrap();
         let (ready, waiting) = std::sync::mpsc::channel();
