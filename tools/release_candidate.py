@@ -5,7 +5,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import stat
 import subprocess
@@ -15,6 +15,7 @@ import tomllib
 import zipfile
 from build_audited_deny import verify_installed
 from build_audited_about import verify_installed as verify_about
+from portable_archive import ensure_portable_names, safe_path
 
 ROOT = Path(__file__).resolve().parents[1]
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.+\-]+$")
@@ -26,17 +27,6 @@ def run(args, **kwargs):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
-
-
-def safe_path(name):
-    path = PurePosixPath(name)
-    if not name or path.is_absolute() or any(part in ("", ".", "..") for part in name.split("/")) or "\\" in name or "\x00" in name:
-        raise ValueError(f"unsafe archive entry: {name!r}")
-    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
-    for part in name.split("/"):
-        if part.endswith((" ", ".")) or part.split(".", 1)[0].upper() in reserved or any(c in '<>:"|?*' or ord(c) < 32 or ord(c) == 127 for c in part):
-            raise ValueError(f"nonportable archive entry: {name!r}")
-    return str(path)
 
 
 def add(files, name, path, mode=0o644):
@@ -186,6 +176,7 @@ def candidate(output, allow_dirty):
         "files": {name: digest(data) for name, (data, _) in sorted(files.items())},
     }
     files["BUILD-INFO.json"] = ((json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode(), 0o644)
+    ensure_portable_names(files)
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
         for name, (data, mode) in sorted(files.items()):

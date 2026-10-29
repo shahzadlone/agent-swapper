@@ -15,6 +15,11 @@ are refused. Available dependency NOTICE files and the project's license and
 notices are included. This generation is a starting point for a release-specific
 license and notice review; it is not a legal determination.
 
+Packaging and pre-attestation checks also reject Unicode control/format
+characters, non-NFC names, common case collisions, file/directory conflicts,
+and Windows reserved device names. These conservative checks do not model
+every filesystem's name-equivalence rules.
+
 Before installation, CI checks the exact tool and SPDX crate archives and
 extracted source against pinned hashes, then audits the tools' locked graphs.
 Its [separate advisory policy](../tools/build-tools-deny.toml) has three scoped

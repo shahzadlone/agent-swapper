@@ -13,6 +13,7 @@ import build_audited_deny
 import build_audited_about
 import release_candidate
 from release_candidate import add_locked_source, digest, reject_build_paths, safe_path, verify_build_marker, write_candidate
+from portable_archive import ensure_portable_names
 
 
 def crate(entries):
@@ -145,10 +146,16 @@ class CandidateSafety(unittest.TestCase):
         reject_build_paths(b"binary /build-home/source/file", ["/private/user"], False)
 
     def test_archive_paths_refuse_traversal_and_platform_ambiguity(self):
-        for name in ("", "/absolute", "../outside", "source/../outside", "source//x", "source/./x", "source\\x", "x\x00y", "source/CON.txt", "source/x:stream", "source/trailing."):
+        for name in ("", "/absolute", "../outside", "source/../outside", "source//x", "source/./x", "source\\x", "x\x00y", "source/CON.txt", "source/COM¹.txt", "source/x:stream", "source/trailing.", "source/\u202ename", "source/e\u0301"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 safe_path(name)
         self.assertEqual(safe_path("source/option-ext-0.2.0/LICENSE.txt"), "source/option-ext-0.2.0/LICENSE.txt")
+
+    def test_archive_names_refuse_case_collisions_and_file_directory_conflicts(self):
+        for entries in (("a/Foo", "A/foo"), ("parent", "parent/child"), ("Parent", "parent/child")):
+            with self.subTest(entries=entries), self.assertRaises(ValueError):
+                ensure_portable_names(entries)
+        ensure_portable_names(("source/a", "source/b", "NOTICE"))
 
     def test_locked_source_rejects_tamper_links_traversal_and_duplicates(self):
         good = crate([("option-ext-0.2.0/LICENSE.txt", b"license", "file")])

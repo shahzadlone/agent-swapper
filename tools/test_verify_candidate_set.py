@@ -12,7 +12,7 @@ REVISION = "a" * 40
 LOCK = "b" * 64
 
 
-def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=False):
+def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=False, collision=False):
     directory = root / name
     directory.mkdir()
     suffix = ".exe" if "windows" in target else ""
@@ -21,6 +21,8 @@ def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=Fals
              "PREVIEW.txt": b"Internal developer preview; not a signed or published release.\n"}
     if unsafe:
         files["../outside"] = b"bad"
+    if collision:
+        files["Notice"] = b"case collision"
     manifest = {"schema": 1, "version": "0.1.0-dev", "source_revision": REVISION,
                 "source_dirty": dirty, "target": target, "cargo_lock_sha256": LOCK,
                 "files": {name: digest(data) for name, data in files.items()}}
@@ -41,20 +43,21 @@ def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=Fals
 class CandidateSetTests(unittest.TestCase):
     def test_nonportable_paths_are_refused(self):
         from verify_candidate_set import safe_archive_name
-        for name in ("../outside", "/absolute", "a//b", "a\\b", "a/CON.txt", "a/x:stream", "a/last.", "a/last ", "a/\x1b"):
+        for name in ("../outside", "/absolute", "a//b", "a\\b", "a/CON.txt", "a/LPT².txt", "a/x:stream", "a/last.", "a/last ", "a/\x1b", "a/\u202efoo", "a/e\u0301"):
             with self.subTest(name=name):
                 self.assertFalse(safe_archive_name(name))
         self.assertTrue(safe_archive_name("source/option-ext-0.2.0/LICENSE.txt"))
 
     def test_valid_platform_set_and_tampering_refusal(self):
-        for mode in ("valid", "dirty", "tamper", "unsafe", "missing"):
+        for mode in ("valid", "dirty", "tamper", "unsafe", "collision", "missing"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 for index, (name, target) in enumerate(TARGETS.items()):
                     if mode == "missing" and index == 0:
                         continue
                     make_candidate(root, name, target, dirty=mode == "dirty" and index == 0,
-                                   tamper=mode == "tamper" and index == 0, unsafe=mode == "unsafe" and index == 0)
+                                   tamper=mode == "tamper" and index == 0, unsafe=mode == "unsafe" and index == 0,
+                                   collision=mode == "collision" and index == 0)
                 if mode == "valid":
                     self.assertEqual(len(verify_set(root, REVISION, LOCK)), 3)
                     with self.assertRaisesRegex(ValueError, "does not match this run"):

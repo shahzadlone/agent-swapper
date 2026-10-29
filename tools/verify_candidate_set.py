@@ -3,10 +3,11 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import stat
 import zipfile
+from portable_archive import ensure_portable_names, safe_path
 
 TARGETS = {
     "unsigned-candidate-Linux-X64": "x86_64-unknown-linux-gnu",
@@ -20,16 +21,11 @@ def digest(data):
 
 
 def safe_archive_name(name):
-    path = PurePosixPath(name)
-    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
-    if not name or path.is_absolute() or "\\" in name:
+    try:
+        safe_path(name)
+        return True
+    except ValueError:
         return False
-    for part in name.split("/"):
-        if (part in ("", ".", "..") or part.endswith((" ", "."))
-                or part.split(".", 1)[0].upper() in reserved
-                or any(c in '<>:"|?*' or ord(c) < 32 or ord(c) == 127 for c in part)):
-            return False
-    return True
 
 
 def verify_one(directory, target, revision, lock_hash):
@@ -55,6 +51,7 @@ def verify_one(directory, target, revision, lock_hash):
         names = [entry.filename for entry in entries]
         if len(entries) > 4096 or len(names) != len(set(names)) or sum(e.file_size for e in entries) > 512 * 1024 * 1024:
             raise ValueError("candidate entries exceed bounds or are duplicated")
+        ensure_portable_names(names)
         for entry in entries:
             name = entry.filename
             mode = entry.external_attr >> 16
