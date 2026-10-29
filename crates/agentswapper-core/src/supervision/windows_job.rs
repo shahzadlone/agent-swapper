@@ -84,6 +84,11 @@ impl WindowsJob {
         command: Command,
         admit: impl FnOnce(u32) -> io::Result<()>,
     ) -> io::Result<JobChild> {
+        if !process_root_installed() {
+            return Err(io::Error::other(
+                "process-lifetime root Job must be installed before spawning",
+            ));
+        }
         let mut command = CommandWrap::from(command);
         command.wrap(JobObject);
         self.spawn_wrapped(command, |native| admit(native.id()))

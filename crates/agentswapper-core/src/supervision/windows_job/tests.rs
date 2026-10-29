@@ -59,6 +59,20 @@ fn fixture_entry() {
 }
 
 #[test]
+fn public_spawn_refuses_without_process_root_before_creating_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("started");
+    let mut admitted = false;
+    let result = WindowsJob::create().unwrap().spawn(command(&marker), |_| {
+        admitted = true;
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(!admitted);
+    assert!(!marker.exists());
+}
+
+#[test]
 #[ignore = "fixture supervisor invoked by the root Job crash test"]
 fn root_gap_supervisor() {
     let dir = std::path::PathBuf::from(std::env::var_os("ASWP_ROOT_GAP_DIR").unwrap());

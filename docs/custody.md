@@ -168,8 +168,8 @@ exit, so a newly created suspended child inherits the root before per-run Job
 assignment. Installing the root affects the entire CLI process and all children
 it creates, and is refused when the existing Job hierarchy cannot accept it.
 Embedded core callers must explicitly install this process-wide root themselves;
-the launch path refuses to start or record an intent until they do. The lower-level
-Job API does not enforce that precondition by itself. The exact crash window is covered by a Windows fixture with an
+the launch path refuses to start or record an intent until they do, and the
+public per-run Job spawn method also refuses without the root. The exact crash window is covered by a Windows fixture with an
 independent outer Job observer. That fixture and the integrated CLI tests were
 included in the passing Windows test step at `73de1dd` in [CI run 40823947663](https://github.com/shahzadlone/agent-swapper/actions/runs/40823947663/job/123282560402).
 The later root-required refusal passed the Windows test step at `21ff67d` in

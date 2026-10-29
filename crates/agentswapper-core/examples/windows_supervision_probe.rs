@@ -21,7 +21,7 @@ fn main() {
 
 #[cfg(windows)]
 mod probe {
-    use agentswapper_core::supervision::windows_job::{JobChild, WindowsJob};
+    use agentswapper_core::supervision::windows_job::{JobChild, WindowsJob, install_process_root};
     use std::{
         fs::{self, File, TryLockError},
         io,
@@ -168,6 +168,7 @@ mod probe {
     }
 
     fn launch(dir: &Path) -> io::Result<JobChild> {
+        install_process_root()?;
         WindowsJob::create()?.spawn(command("worker", dir)?, |_| {
             std::thread::sleep(Duration::from_millis(500));
             require(!dir.join("executed").exists(), "target escaped suspension")?;
