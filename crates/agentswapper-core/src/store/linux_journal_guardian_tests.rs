@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 use crate::supervision::linux_admission_transport as transport;
 use crate::supervision::linux_cgroup as cgroup;
+use crate::supervision::linux_launch_envelope::LaunchEnvelope;
 
 use super::*;
 use rustix::{
@@ -98,6 +99,9 @@ fn target_fixture() {
     io::stdin().lock().read_line(&mut grant).unwrap();
     assert_eq!(grant, "GO\n");
     fs::write(dir.join("target-started"), b"started").unwrap();
+    if let Some(canary) = std::env::var_os("ASWP_JOURNAL_TARGET_CANARY") {
+        fs::write(dir.join("target-envelope"), canary.as_encoded_bytes()).unwrap();
+    }
     setsid().unwrap();
     let deadline = Instant::now() + BUDGET * 4;
     let mut tick = 0_u64;
@@ -118,9 +122,17 @@ fn guardian_fixture() {
     let leaf = File::from(transport::receive(io::stdin()).unwrap());
     let lease = File::from(transport::receive(io::stdin()).unwrap());
     cgroup::validate_scope(&parent, &leaf, &scope).unwrap();
+    let launch = LaunchEnvelope::receive_from(io::stdin()).unwrap();
     let mut target = OwnedChild(
-        command(TARGET, &dir, &scope)
+        launch
+            .command()
             .stdin(Stdio::piped())
+            .stdout(Stdio::from(
+                File::create(dir.join("target_fixture.stdout")).unwrap(),
+            ))
+            .stderr(Stdio::from(
+                File::create(dir.join("target_fixture.stderr")).unwrap(),
+            ))
             .spawn()
             .unwrap(),
     );
@@ -182,16 +194,50 @@ fn supervisor_fixture() {
     let lease = store.lease(profile.id).unwrap();
     let run = store.begin_run(&lease, "run").unwrap();
     let (channel, gate) = transport::pair().unwrap();
+    let canary = uuid::Uuid::new_v4().to_string();
+    fs::write(dir.join("canary-expected"), &canary).unwrap();
     let mut guardian = OwnedChild(
         command(GUARDIAN, &dir, &scope)
+            .env_clear()
+            .env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
+            .env("ASWP_JOURNAL_FIXTURE_SCOPE", &scope)
             .stdin(Stdio::from(gate))
             .process_group(0)
             .spawn()
             .unwrap(),
     );
+    for name in ["cmdline", "environ"] {
+        let bytes = fs::read(format!("/proc/{}/{name}", guardian.0.id())).unwrap();
+        assert!(
+            !bytes
+                .windows(canary.len())
+                .any(|window| window == canary.as_bytes())
+        );
+    }
     for fd in [parent.as_fd(), leaf.as_fd(), lease.as_fd()] {
         transport::send(&channel, transport::GO, &[fd]).unwrap();
     }
+    let executable = std::env::current_exe().unwrap();
+    let launch = LaunchEnvelope::capture(
+        executable.as_os_str(),
+        &dir,
+        ["--exact".into(), TARGET.into(), "--ignored".into()],
+        [],
+        [
+            (
+                "ASWP_JOURNAL_FIXTURE_DIR".into(),
+                Some(dir.as_os_str().to_owned()),
+            ),
+            (
+                "ASWP_JOURNAL_FIXTURE_SCOPE".into(),
+                Some(scope.as_os_str().to_owned()),
+            ),
+            ("ASWP_JOURNAL_TARGET_CANARY".into(), Some(canary.into())),
+        ],
+    )
+    .unwrap();
+    launch.send_to(&channel).unwrap();
+    drop(launch);
     sockopt::set_socket_timeout(&channel, Timeout::Recv, Some(Duration::from_secs(5))).unwrap();
     let mut pid = [0_u8; 32];
     let (count, length) = recv(&channel, &mut pid, RecvFlags::TRUNC).unwrap();
@@ -235,6 +281,7 @@ fn supervisor_loss_before_go_keeps_journal_unresolved() {
             .unwrap(),
     );
     controller_wait(temp.path(), || temp.path().join("run-id").exists());
+    assert!(!temp.path().join("target-envelope").exists());
     let run = fs::read_to_string(temp.path().join("run-id")).unwrap();
     let mut store = Store::open(&root).unwrap();
     assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
@@ -299,6 +346,11 @@ fn real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup() {
             .unwrap(),
     );
     controller_wait(temp.path(), || temp.path().join("run-id").exists());
+    assert!(temp.path().join("target-envelope").exists());
+    assert_eq!(
+        fs::read(temp.path().join("target-envelope")).unwrap(),
+        fs::read(temp.path().join("canary-expected")).unwrap()
+    );
     let run = fs::read_to_string(temp.path().join("run-id")).unwrap();
     let expected_pid: u32 = fs::read_to_string(temp.path().join("target-pid"))
         .unwrap()

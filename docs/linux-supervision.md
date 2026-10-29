@@ -55,7 +55,11 @@ unnamed stream whose descriptor travels on the guardian channel, and confirms
 the helper's initial command line and environment do not contain the test
 canaries. The receiver checks stream type, length and EOF; malformed and
 truncated transfers fail, and the stream operations use one absolute deadline.
-The actual guardian/shim lifecycle and authentication boundary remain to be
+The delegated journal fixture now also transfers the envelope to a guardian
+started with a minimal environment; its target receives a generated canary
+only after GO. The guardian's initial command line and environment are checked
+for that canary. This combined case requires CI on its own commit. The actual
+production guardian/shim lifecycle and authentication boundary remain to be
 integrated and tested.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
