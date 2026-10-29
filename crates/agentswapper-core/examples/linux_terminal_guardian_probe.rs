@@ -116,33 +116,6 @@ mod fixture {
         )
     }
 
-    #[cfg(test)]
-    mod control_tests {
-        use super::*;
-
-        #[test]
-        fn control_packets_require_exact_bytes_and_no_descriptors() -> io::Result<()> {
-            for (packet, attach, valid) in [
-                (READY, false, true),
-                (GO, false, false),
-                (READY, true, false),
-                (b"ASWP-READY-1-with-extra".as_slice(), false, false),
-                (
-                    b"ASWP-READY-1-with-extra-bytes-exceeding-control-buffer".as_slice(),
-                    false,
-                    false,
-                ),
-            ] {
-                let (sender, receiver) = pair()?;
-                let file = tempfile::tempfile()?;
-                let descriptors = if attach { vec![file.as_fd()] } else { vec![] };
-                send(&sender, packet, &descriptors)?;
-                assert_eq!(receive_control(&receiver, READY).is_ok(), valid);
-            }
-            Ok(())
-        }
-    }
-
     fn publish(dir: &Path, name: &str, value: serde_json::Value) -> io::Result<()> {
         let temporary = dir.join(format!("{name}.tmp"));
         fs::write(&temporary, serde_json::to_vec(&value)?)?;
@@ -665,5 +638,31 @@ mod fixture {
             );
         }
         result
+    }
+    #[cfg(test)]
+    mod control_tests {
+        use super::*;
+
+        #[test]
+        fn control_packets_require_exact_bytes_and_no_descriptors() -> io::Result<()> {
+            for (packet, attach, valid) in [
+                (READY, false, true),
+                (GO, false, false),
+                (READY, true, false),
+                (b"ASWP-READY-1-with-extra".as_slice(), false, false),
+                (
+                    b"ASWP-READY-1-with-extra-bytes-exceeding-control-buffer".as_slice(),
+                    false,
+                    false,
+                ),
+            ] {
+                let (sender, receiver) = pair()?;
+                let file = tempfile::tempfile()?;
+                let descriptors = if attach { vec![file.as_fd()] } else { vec![] };
+                send(&sender, packet, &descriptors)?;
+                assert_eq!(receive_control(&receiver, READY).is_ok(), valid);
+            }
+            Ok(())
+        }
     }
 }
