@@ -116,6 +116,34 @@ fn help_and_alias_work_without_opening_storage() {
         .stdout(predicate::str::contains("Usage: agentswapper"));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn internal_linux_shim_refuses_missing_admission_without_opening_state() {
+    let s = Sandbox::new();
+    for program in [
+        assert_cmd::cargo::cargo_bin!("aswp"),
+        assert_cmd::cargo::cargo_bin!("agentswapper"),
+    ] {
+        for scope in [
+            "relative",
+            "/tmp/aswp-probe-00000000-0000-4000-8000-000000000001",
+        ] {
+            let output = Command::new(program)
+                .env_clear()
+                .env("HOME", s.temp.path().join("home"))
+                .current_dir(s.temp.path())
+                .args(["__agentswapper_internal_linux_shim_v1", scope])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(125));
+            assert!(output.stdout.is_empty());
+            assert_eq!(output.stderr, b"internal Linux admission failed\n");
+        }
+    }
+    assert!(!s.state().exists());
+}
+
 #[test]
 fn bare_command_in_pipes_preserves_help_and_json_without_opening_state() {
     let s = Sandbox::new();

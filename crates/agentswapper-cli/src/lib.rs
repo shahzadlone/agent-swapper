@@ -221,6 +221,24 @@ fn parse_containment(value: &str) -> std::result::Result<Containment, String> {
 }
 
 pub fn main_entry(name: &'static str) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut args = std::env::args_os();
+        let _ = args.next();
+        if args
+            .next()
+            .is_some_and(|arg| arg == agentswapper_core::supervision::linux_shim::INTERNAL_ARG)
+        {
+            let scope = args.next().map(PathBuf::from);
+            if let Some(scope) = scope.filter(|scope| scope.is_absolute())
+                && args.next().is_none()
+            {
+                let _ = agentswapper_core::supervision::linux_shim::run_stdio(&scope);
+            }
+            let _ = writeln!(io::stderr(), "internal Linux admission failed");
+            return 125;
+        }
+    }
     let command = Cli::command().bin_name(name);
     let matches = match command.try_get_matches() {
         Ok(matches) => matches,

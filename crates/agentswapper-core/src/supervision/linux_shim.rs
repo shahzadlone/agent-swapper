@@ -1,12 +1,29 @@
-//! Trusted pre-exec shim for a delegated Linux scope; not yet wired to the CLI.
+//! Internal pre-exec entry for the experimental Linux guardian under development.
 use std::{
-    fs::File, io, os::fd::AsFd, os::unix::process::CommandExt, path::Path, process::Stdio,
-    time::Instant,
+    fs::File,
+    io,
+    os::fd::AsFd,
+    os::unix::process::CommandExt,
+    path::Path,
+    process::Stdio,
+    time::{Duration, Instant},
 };
 
 use super::{
     linux_admission_transport as transport, linux_cgroup, linux_launch_envelope::LaunchEnvelope,
 };
+
+/// Private protocol selector shared by the CLI and the guardian.
+#[doc(hidden)]
+pub const INTERNAL_ARG: &str = "__agentswapper_internal_linux_shim_v1";
+
+/// Internal CLI entry. The standard input must be the guardian's private
+/// admission socket; invalid capabilities or a missing GO refuse execution.
+/// This is not a standalone containment API or a production stop receipt.
+#[doc(hidden)]
+pub fn run_stdio(scope: &Path) -> io::Result<()> {
+    exec_until(io::stdin(), scope, Instant::now() + Duration::from_secs(30))
+}
 
 /// Receive capabilities, launch data and standard streams, then require GO.
 /// The caller must start this helper in a neutral environment and keep it in

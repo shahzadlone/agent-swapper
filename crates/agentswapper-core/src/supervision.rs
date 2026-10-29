@@ -30,8 +30,5 @@ pub(crate) mod linux_admission_transport;
 pub(crate) mod linux_launch_envelope;
 
 #[cfg(target_os = "linux")]
-#[allow(
-    dead_code,
-    reason = "the guardian launch integration is not yet enabled"
-)]
-pub(crate) mod linux_shim;
+#[doc(hidden)]
+pub mod linux_shim;

@@ -68,8 +68,12 @@ the parent/leaf identity and its own membership before accepting the envelope
 and again after GO, then execs the target with the transferred streams. Its
 receives share one deadline. A local subprocess test supplies ordinary
 directories and confirms that a fully queued command cannot run; positive
-cgroup and crash results require delegated CI at this change's commit. The
-shim is not exposed by the production CLI and does not issue a stop receipt.
+cgroup and crash results require delegated CI at this change's commit. Both
+CLI executables now include an internal shim entry, which refuses launch without
+the private admission protocol and a validated scope. Ordinary launches do not
+call it, and it does not issue a stop receipt. The delegated journal fixture
+is configured to use the actual `aswp` binary on CI; this new path requires a
+successful hosted run before it is evidence.
 The delegated terminal fixture also routes the target through this shared
 shim and transfers all three original streams. Its non-delegated path remains
 the earlier terminal-only control case. The revised delegated terminal cases

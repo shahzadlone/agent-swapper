@@ -137,15 +137,30 @@ fn guardian_fixture() {
     cgroup::validate_scope(&parent, &leaf, &scope).unwrap();
     let launch = LaunchEnvelope::receive_from(io::stdin()).unwrap();
     let (grant, gate) = transport::pair().unwrap();
-    let target = OwnedChild(
+    let mut shim = if let Some(executable) = std::env::var_os("ASWP_TEST_CLI_SHIM") {
+        assert!(Path::new(&executable).is_absolute());
+        let mut command = Command::new(executable);
+        command
+            .arg(linux_shim::INTERNAL_ARG)
+            .arg(&scope)
+            .stdout(Stdio::from(
+                File::create(dir.join("shim_fixture.stdout")).unwrap(),
+            ))
+            .stderr(Stdio::from(
+                File::create(dir.join("shim_fixture.stderr")).unwrap(),
+            ));
+        fs::write(dir.join("cli-shim"), b"selected").unwrap();
+        command
+    } else {
         command(SHIM, &dir, &scope)
-            .env_clear()
-            .env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
-            .env("ASWP_JOURNAL_FIXTURE_SCOPE", &scope)
-            .stdin(Stdio::from(gate))
-            .spawn()
-            .unwrap(),
-    );
+    };
+    let fixture_shim = std::env::var_os("ASWP_TEST_CLI_SHIM").is_none();
+    shim.env_clear();
+    if fixture_shim {
+        shim.env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
+            .env("ASWP_JOURNAL_FIXTURE_SCOPE", &scope);
+    }
+    let target = OwnedChild(shim.stdin(Stdio::from(gate)).spawn().unwrap());
     cgroup::control(&leaf, "cgroup.procs", OFlags::WRONLY)
         .unwrap()
         .write_all(format!("{}\n", target.0.id()).as_bytes())
@@ -219,11 +234,16 @@ fn supervisor_fixture() {
     let (channel, gate) = transport::pair().unwrap();
     let canary = uuid::Uuid::new_v4().to_string();
     fs::write(dir.join("canary-expected"), &canary).unwrap();
+    let mut guardian_command = command(GUARDIAN, &dir, &scope);
+    guardian_command
+        .env_clear()
+        .env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
+        .env("ASWP_JOURNAL_FIXTURE_SCOPE", &scope);
+    if let Some(executable) = std::env::var_os("ASWP_TEST_CLI_SHIM") {
+        guardian_command.env("ASWP_TEST_CLI_SHIM", executable);
+    }
     let mut guardian = OwnedChild(
-        command(GUARDIAN, &dir, &scope)
-            .env_clear()
-            .env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
-            .env("ASWP_JOURNAL_FIXTURE_SCOPE", &scope)
+        guardian_command
             .stdin(Stdio::from(gate))
             .process_group(0)
             .spawn()
@@ -304,6 +324,9 @@ fn supervisor_loss_before_go_keeps_journal_unresolved() {
             .unwrap(),
     );
     controller_wait(temp.path(), || temp.path().join("run-id").exists());
+    if std::env::var_os("ASWP_TEST_CLI_SHIM").is_some() {
+        assert!(temp.path().join("cli-shim").exists());
+    }
     assert!(!temp.path().join("target-envelope").exists());
     let run = fs::read_to_string(temp.path().join("run-id")).unwrap();
     let mut store = Store::open(&root).unwrap();
@@ -369,6 +392,9 @@ fn real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup() {
             .unwrap(),
     );
     controller_wait(temp.path(), || temp.path().join("run-id").exists());
+    if std::env::var_os("ASWP_TEST_CLI_SHIM").is_some() {
+        assert!(temp.path().join("cli-shim").exists());
+    }
     assert!(temp.path().join("target-envelope").exists());
     assert_eq!(
         fs::read(temp.path().join("target-envelope")).unwrap(),

@@ -41,6 +41,8 @@ def main():
     core_test = Path(sys.argv[3]).resolve(strict=True)
     env = os.environ.copy()
     env["ASWP_DELEGATED_CGROUP"] = str(parent)
+    shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
+    env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
     for name, notice in [
         ("real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup", "Linux journal guardian"),
         ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),

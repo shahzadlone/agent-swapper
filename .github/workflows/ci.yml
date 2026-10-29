@@ -107,6 +107,7 @@ jobs:
         shell: bash
         run: |
           cargo +1.98.0 build --locked -p agentswapper-core --example linux_custody_probe --example linux_terminal_guardian_probe
+          cargo +1.98.0 build --locked -p agentswapper-cli --bin aswp
           core_test="$(cargo +1.98.0 test --locked -p agentswapper-core --lib --no-run --message-format=json | python tools/find_core_test_binary.py)"
           test "$GITHUB_ACTIONS" = true
           test "$RUNNER_ENVIRONMENT" = github-hosted
