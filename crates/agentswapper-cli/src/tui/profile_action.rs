@@ -16,203 +16,6 @@ pub(super) enum Kind {
     Remove,
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-    use super::*;
-    use agentswapper_core::Harness;
-
-    fn key(action: &mut ProfileAction, store: &mut Store, code: KeyCode) -> Outcome {
-        action.key(
-            KeyEvent::new(code, KeyModifiers::NONE),
-            store,
-            Rect::new(0, 3, 80, 18),
-            false,
-            "work",
-        )
-    }
-
-    fn text(action: &mut ProfileAction, store: &mut Store, value: &str) {
-        action.key(
-            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
-            store,
-            Rect::new(0, 3, 80, 18),
-            false,
-            "work",
-        );
-        for value in value.chars() {
-            key(action, store, KeyCode::Char(value));
-        }
-    }
-
-    #[test]
-    fn rename_preserves_input_after_invalid_duplicate_and_changed_identity_reviews() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = Store::open(&temp.path().join("state")).unwrap();
-        let profile = store
-            .register(Harness::Claude, "work".parse().unwrap())
-            .unwrap();
-        let other = store
-            .register(Harness::Codex, "taken".parse().unwrap())
-            .unwrap();
-        let mut action = ProfileAction::new(profile.clone(), Kind::Rename);
-        text(&mut action, &mut store, "Invalid");
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        assert!(matches!(action.error, Some(Error::InvalidAlias)));
-        assert_eq!(action.draft, "Invalid");
-        text(&mut action, &mut store, "taken");
-        key(&mut action, &mut store, KeyCode::Enter);
-        assert!(matches!(action.error, Some(Error::DuplicateAlias)));
-        assert_eq!(action.draft, "taken");
-        text(&mut action, &mut store, "quiet-name");
-        let mut peer = Store::open(store.root()).unwrap();
-        peer.rename(&profile.alias, "elsewhere".parse().unwrap())
-            .unwrap();
-        let replacement = peer.register(Harness::Kimi, profile.alias.clone()).unwrap();
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        assert!(action.changed);
-        assert_eq!(action.profile.alias.to_string(), "elsewhere");
-        assert_eq!(action.draft, "quiet-name");
-        assert!(
-            matches!(key(&mut action, &mut store, KeyCode::Enter), Outcome::Changed { id, kind: Kind::Rename } if id == profile.id)
-        );
-        assert_eq!(
-            store.find_id(profile.id).unwrap().alias.to_string(),
-            "quiet-name"
-        );
-        assert_eq!(store.find(&profile.alias).unwrap().id, replacement.id);
-        assert_eq!(store.find(&other.alias).unwrap().id, other.id);
-        assert!(store.verify().unwrap().consistent);
-    }
-
-    #[test]
-    fn unregister_requires_selection_and_rechecks_busy_and_peer_changed_profiles() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = Store::open(&temp.path().join("state")).unwrap();
-        let profile = store
-            .register(Harness::Codex, "work".parse().unwrap())
-            .unwrap();
-        let home = store.profile_home(profile.id).unwrap();
-        std::fs::write(home.join("fixture-owned.txt"), "retained").unwrap();
-        let mut action = ProfileAction::new(profile.clone(), Kind::Remove);
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        assert!(store.find_id(profile.id).is_ok());
-        key(&mut action, &mut store, KeyCode::Char(' '));
-        let lease = store.lease(profile.id).unwrap();
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        assert!(matches!(action.error, Some(Error::Busy)));
-        drop(lease);
-        let mut peer = Store::open(store.root()).unwrap();
-        peer.rename(&profile.alias, "elsewhere".parse().unwrap())
-            .unwrap();
-        let replacement = peer
-            .register(Harness::Claude, profile.alias.clone())
-            .unwrap();
-        key(&mut action, &mut store, KeyCode::Enter);
-        assert!(!action.accepted);
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        key(&mut action, &mut store, KeyCode::Char(' '));
-        action.reset_acceptance();
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        key(&mut action, &mut store, KeyCode::Char(' '));
-        assert!(
-            matches!(key(&mut action, &mut store, KeyCode::Enter), Outcome::Changed { id, kind: Kind::Remove } if id == profile.id)
-        );
-        assert!(matches!(store.find_id(profile.id), Err(Error::NotFound)));
-        assert_eq!(store.find(&profile.alias).unwrap().id, replacement.id);
-        assert_eq!(
-            std::fs::read_to_string(home.join("fixture-owned.txt")).unwrap(),
-            "retained"
-        );
-        assert!(store.verify().unwrap().consistent);
-    }
-
-    #[test]
-    fn retired_identity_cannot_follow_its_alias_to_a_new_profile() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = Store::open(&temp.path().join("state")).unwrap();
-        let profile = store
-            .register(Harness::Claude, "work".parse().unwrap())
-            .unwrap();
-        let mut action = ProfileAction::new(profile.clone(), Kind::Rename);
-        store.remove_profile(profile.id).unwrap();
-        let replacement = store
-            .register(Harness::Codex, profile.alias.clone())
-            .unwrap();
-        text(&mut action, &mut store, "quiet-name");
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Enter),
-            Outcome::Continue
-        ));
-        assert!(matches!(action.error, Some(Error::NotFound)));
-        assert_eq!(store.find(&profile.alias).unwrap().id, replacement.id);
-        assert!(matches!(
-            key(&mut action, &mut store, KeyCode::Esc),
-            Outcome::Cancel
-        ));
-    }
-
-    #[test]
-    fn profile_dialogs_hide_labels_input_and_errors_at_every_supported_size() {
-        use super::super::{Dashboard, preview, tests::screenshot};
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = Store::open(&temp.path().join("state")).unwrap();
-        let profile = store
-            .register(Harness::Claude, "private-canary".parse().unwrap())
-            .unwrap();
-        let mut app = Dashboard::new(true);
-        app.refresh(&store).unwrap();
-        for (kind, name) in [(Kind::Rename, "rename"), (Kind::Remove, "unregister")] {
-            let mut action = ProfileAction::new(profile.clone(), kind);
-            action.draft = "draft-canary\u{202e}".to_owned();
-            action.error = Some(Error::SupervisionIncomplete {
-                run_id: "error-canary".to_owned(),
-                source: Box::new(Error::Busy),
-            });
-            app.profile_action = Some(action);
-            for (width, height) in [(20, 6), (40, 14), (44, 17), (80, 24), (100, 32), (160, 48)] {
-                let screen = screenshot(&app, width, height);
-                for canary in ["private-canary", "draft-canary", "error-canary", "\u{202e}"] {
-                    assert!(!screen.contains(canary));
-                }
-                if width >= 40 {
-                    assert!(screen.contains("Ctrl-P privacy"));
-                    preview::export(&app, &format!("{name}-private-{width}"), width, height);
-                }
-            }
-            app.masked = false;
-            let action = app.profile_action.as_mut().unwrap();
-            action.error = None;
-            let screen = screenshot(&app, 100, 32);
-            assert!(screen.contains("private-canary"));
-            if kind == Kind::Rename {
-                assert!(screen.contains("\\u{202e}"));
-            }
-            assert!(!screen.contains('\u{202e}'));
-            preview::export(&app, &format!("{name}-review"), 100, 32);
-            app.masked = true;
-        }
-    }
-}
-
 pub(super) struct ProfileAction {
     profile: Profile,
     kind: Kind,
@@ -454,6 +257,203 @@ impl ProfileAction {
             " Enter save  Ctrl-U clear  Esc cancel\n Ctrl-P privacy  Ctrl-G cancel\n PgUp/PgDn scroll  Ctrl-C quit"
         } else {
             " Space select  Enter unregister  Esc back\n Ctrl-P privacy  Ctrl-G cancel\n PgUp/PgDn scroll  Ctrl-C quit"
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use agentswapper_core::Harness;
+
+    fn key(action: &mut ProfileAction, store: &mut Store, code: KeyCode) -> Outcome {
+        action.key(
+            KeyEvent::new(code, KeyModifiers::NONE),
+            store,
+            Rect::new(0, 3, 80, 18),
+            false,
+            "work",
+        )
+    }
+
+    fn text(action: &mut ProfileAction, store: &mut Store, value: &str) {
+        action.key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            store,
+            Rect::new(0, 3, 80, 18),
+            false,
+            "work",
+        );
+        for value in value.chars() {
+            key(action, store, KeyCode::Char(value));
+        }
+    }
+
+    #[test]
+    fn rename_preserves_input_after_invalid_duplicate_and_changed_identity_reviews() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        let other = store
+            .register(Harness::Codex, "taken".parse().unwrap())
+            .unwrap();
+        let mut action = ProfileAction::new(profile.clone(), Kind::Rename);
+        text(&mut action, &mut store, "Invalid");
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        assert!(matches!(action.error, Some(Error::InvalidAlias)));
+        assert_eq!(action.draft, "Invalid");
+        text(&mut action, &mut store, "taken");
+        key(&mut action, &mut store, KeyCode::Enter);
+        assert!(matches!(action.error, Some(Error::DuplicateAlias)));
+        assert_eq!(action.draft, "taken");
+        text(&mut action, &mut store, "quiet-name");
+        let mut peer = Store::open(store.root()).unwrap();
+        peer.rename(&profile.alias, "elsewhere".parse().unwrap())
+            .unwrap();
+        let replacement = peer.register(Harness::Kimi, profile.alias.clone()).unwrap();
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        assert!(action.changed);
+        assert_eq!(action.profile.alias.to_string(), "elsewhere");
+        assert_eq!(action.draft, "quiet-name");
+        assert!(
+            matches!(key(&mut action, &mut store, KeyCode::Enter), Outcome::Changed { id, kind: Kind::Rename } if id == profile.id)
+        );
+        assert_eq!(
+            store.find_id(profile.id).unwrap().alias.to_string(),
+            "quiet-name"
+        );
+        assert_eq!(store.find(&profile.alias).unwrap().id, replacement.id);
+        assert_eq!(store.find(&other.alias).unwrap().id, other.id);
+        assert!(store.verify().unwrap().consistent);
+    }
+
+    #[test]
+    fn unregister_requires_selection_and_rechecks_busy_and_peer_changed_profiles() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let home = store.profile_home(profile.id).unwrap();
+        std::fs::write(home.join("fixture-owned.txt"), "retained").unwrap();
+        let mut action = ProfileAction::new(profile.clone(), Kind::Remove);
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        assert!(store.find_id(profile.id).is_ok());
+        key(&mut action, &mut store, KeyCode::Char(' '));
+        let lease = store.lease(profile.id).unwrap();
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        assert!(matches!(action.error, Some(Error::Busy)));
+        drop(lease);
+        let mut peer = Store::open(store.root()).unwrap();
+        peer.rename(&profile.alias, "elsewhere".parse().unwrap())
+            .unwrap();
+        let replacement = peer
+            .register(Harness::Claude, profile.alias.clone())
+            .unwrap();
+        key(&mut action, &mut store, KeyCode::Enter);
+        assert!(!action.accepted);
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        key(&mut action, &mut store, KeyCode::Char(' '));
+        action.reset_acceptance();
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        key(&mut action, &mut store, KeyCode::Char(' '));
+        assert!(
+            matches!(key(&mut action, &mut store, KeyCode::Enter), Outcome::Changed { id, kind: Kind::Remove } if id == profile.id)
+        );
+        assert!(matches!(store.find_id(profile.id), Err(Error::NotFound)));
+        assert_eq!(store.find(&profile.alias).unwrap().id, replacement.id);
+        assert_eq!(
+            std::fs::read_to_string(home.join("fixture-owned.txt")).unwrap(),
+            "retained"
+        );
+        assert!(store.verify().unwrap().consistent);
+    }
+
+    #[test]
+    fn retired_identity_cannot_follow_its_alias_to_a_new_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        let mut action = ProfileAction::new(profile.clone(), Kind::Rename);
+        store.remove_profile(profile.id).unwrap();
+        let replacement = store
+            .register(Harness::Codex, profile.alias.clone())
+            .unwrap();
+        text(&mut action, &mut store, "quiet-name");
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Enter),
+            Outcome::Continue
+        ));
+        assert!(matches!(action.error, Some(Error::NotFound)));
+        assert_eq!(store.find(&profile.alias).unwrap().id, replacement.id);
+        assert!(matches!(
+            key(&mut action, &mut store, KeyCode::Esc),
+            Outcome::Cancel
+        ));
+    }
+
+    #[test]
+    fn profile_dialogs_hide_labels_input_and_errors_at_every_supported_size() {
+        use super::super::{Dashboard, preview, tests::screenshot};
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Claude, "private-canary".parse().unwrap())
+            .unwrap();
+        let mut app = Dashboard::new(true);
+        app.refresh(&store).unwrap();
+        for (kind, name) in [(Kind::Rename, "rename"), (Kind::Remove, "unregister")] {
+            let mut action = ProfileAction::new(profile.clone(), kind);
+            action.draft = "draft-canary\u{202e}".to_owned();
+            action.error = Some(Error::SupervisionIncomplete {
+                run_id: "error-canary".to_owned(),
+                source: Box::new(Error::Busy),
+            });
+            app.profile_action = Some(action);
+            for (width, height) in [(20, 6), (40, 14), (44, 17), (80, 24), (100, 32), (160, 48)] {
+                let screen = screenshot(&app, width, height);
+                for canary in ["private-canary", "draft-canary", "error-canary", "\u{202e}"] {
+                    assert!(!screen.contains(canary));
+                }
+                if width >= 40 {
+                    assert!(screen.contains("Ctrl-P privacy"));
+                    preview::export(&app, &format!("{name}-private-{width}"), width, height);
+                }
+            }
+            app.masked = false;
+            let action = app.profile_action.as_mut().unwrap();
+            action.error = None;
+            let screen = screenshot(&app, 100, 32);
+            assert!(screen.contains("private-canary"));
+            if kind == Kind::Rename {
+                assert!(screen.contains("\\u{202e}"));
+            }
+            assert!(!screen.contains('\u{202e}'));
+            preview::export(&app, &format!("{name}-review"), 100, 32);
+            app.masked = true;
         }
     }
 }
