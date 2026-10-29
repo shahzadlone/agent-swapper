@@ -89,9 +89,11 @@ now explicit. A review is supporting evidence, not runtime qualification.
 
 Without a process-lifetime root Job, the supervisor-crash window before first
 Job assignment can leak a suspended process. The CLI now installs such a root
-for the experimental option; the new gap-specific fixture and integrated CLI
-change await hosted Windows execution. Embedded callers must opt in separately;
-the launch path refuses a per-run Job until that root is installed.
+for the experimental option. The gap-specific fixture and integrated CLI tests
+were included in the passing Windows test step at `73de1dd` in
+[CI run 40823947663](https://github.com/shahzadlone/agent-swapper/actions/runs/40823947663/job/123282560402).
+Embedded callers must opt in separately; the launch path now refuses a per-run
+Job until that root is installed. This later refusal requires its own hosted run.
 Dependency failure cleanup may wait without a timeout. Membership-list
 overflow was source-audited as an error path, not stress-tested with thousands of
 processes. Same-user malicious interference, external services, filesystem and

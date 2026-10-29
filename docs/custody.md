@@ -170,8 +170,9 @@ it creates, and is refused when the existing Job hierarchy cannot accept it.
 Embedded core callers must explicitly install this process-wide root themselves;
 the launch path refuses to start or record an intent until they do. The lower-level
 Job API does not enforce that precondition by itself. The exact crash window is covered by a Windows fixture with an
-independent outer Job observer; the new integration still requires hosted CI
-evidence. Dependency cleanup after a nested-wrapper failure can use an unbounded
+independent outer Job observer. That fixture and the integrated CLI tests were
+included in the passing Windows test step at `73de1dd` in [CI run 40823947663](https://github.com/shahzadlone/agent-swapper/actions/runs/40823947663/job/123282560402).
+The later root-required change needs its own hosted run. Dependency cleanup after a nested-wrapper failure can use an unbounded
 wait. The backend does not constrain work requested through WMI, COM, Task
 Scheduler, services or other outside processes, and does not defend against a
 malicious process with the same OS identity. Provider credential isolation,
