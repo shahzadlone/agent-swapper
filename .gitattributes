@@ -1,0 +1,2 @@
+# The audited build-tool lock is compared byte-for-byte across CI platforms.
+tools/cargo-deny-tool.lock text eol=lf
