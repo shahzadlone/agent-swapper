@@ -1,5 +1,6 @@
 //! Internal guardian for a delegated cgroup. Not yet wired to normal launches.
 use rustix::{
+    fd::{BorrowedFd, OwnedFd},
     fs::OFlags,
     net::{RecvFlags, recv},
     process::{Pid, getpgid, getpgrp, getpid, getppid},
@@ -31,6 +32,27 @@ const RETIRED: &[u8] = b"ASWP-RETIRED-1";
 /// Internal CLI role selector; scope and process group are not secret.
 #[doc(hidden)]
 pub const INTERNAL_ARG: &str = "__agentswapper_internal_linux_guardian_v1";
+
+/// Transfer the scope, lease, launch and streams under one startup deadline.
+/// The returned PID must be durably recorded before the caller sends GO.
+/// This preparation is experimental and is not a production launch API.
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn prepare(
+    channel: &OwnedFd,
+    capabilities: [BorrowedFd<'_>; 3],
+    launch: &LaunchEnvelope,
+    streams: [BorrowedFd<'_>; 3],
+    deadline: Instant,
+) -> io::Result<u32> {
+    for fd in capabilities {
+        transport::send_until(channel, transport::GO, &[fd], deadline)?;
+    }
+    launch.send_to_until(channel, deadline)?;
+    for fd in streams {
+        transport::send_until(channel, transport::GO, &[fd], deadline)?;
+    }
+    receive_pid(channel, deadline)
+}
 
 #[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
 pub(crate) fn receive_pid(channel: impl AsFd, deadline: Instant) -> io::Result<u32> {
@@ -202,6 +224,29 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_supervisor_startup_never_transfers_a_capability() -> io::Result<()> {
+        let (sender, receiver) = transport::pair()?;
+        let file = tempfile::tempfile()?;
+        let launch = LaunchEnvelope::capture("/bin/true".as_ref(), Path::new("/"), [], [], [])?;
+        let error = prepare(
+            &sender,
+            [file.as_fd(), file.as_fd(), file.as_fd()],
+            &launch,
+            [file.as_fd(), file.as_fd(), file.as_fd()],
+            Instant::now(),
+        )
+        .err()
+        .ok_or_else(|| io::Error::other("expired preparation unexpectedly succeeded"))?;
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let mut bytes = [0; 1];
+        assert!(matches!(
+            recv(&receiver, &mut bytes, RecvFlags::DONTWAIT),
+            Err(rustix::io::Errno::AGAIN)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn numeric_protocol_refuses_invalid_values_and_capabilities() -> io::Result<()> {

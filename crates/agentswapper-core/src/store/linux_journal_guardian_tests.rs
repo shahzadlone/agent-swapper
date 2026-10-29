@@ -510,6 +510,7 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
         .unwrap();
     let (channel, gate) = transport::pair().unwrap();
     let foreground = rustix::process::getpgrp().as_raw_pid().to_string();
+    let startup_deadline = Instant::now() + BUDGET;
     let mut guardian = OwnedChild(
         Command::new(executable)
             .arg(linux_guardian::INTERNAL_ARG)
@@ -527,13 +528,6 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
             .spawn()
             .unwrap(),
     );
-    for fd in [
-        scope.parent().as_fd(),
-        scope.directory().as_fd(),
-        lease.as_fd(),
-    ] {
-        transport::send(&channel, transport::GO, &[fd]).unwrap();
-    }
     let target = if parent_loss {
         TARGET
     } else {
@@ -557,18 +551,25 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
         ],
     )
     .unwrap();
-    launch.send_to(&channel).unwrap();
     let mut input = tempfile::tempfile().unwrap();
     input.write_all(b"GO\n").unwrap();
     input.seek(SeekFrom::Start(0)).unwrap();
     let output = File::create(temp.path().join("target_fixture.stdout")).unwrap();
     let diagnostic = File::create(temp.path().join("target_fixture.stderr")).unwrap();
-    for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
-        transport::send(&channel, transport::GO, &[fd]).unwrap();
-    }
-    let pid = linux_guardian::receive_pid(&channel, Instant::now() + BUDGET).unwrap();
+    let pid = linux_guardian::prepare(
+        &channel,
+        [
+            scope.parent().as_fd(),
+            scope.directory().as_fd(),
+            lease.as_fd(),
+        ],
+        &launch,
+        [input.as_fd(), output.as_fd(), diagnostic.as_fd()],
+        startup_deadline,
+    )
+    .unwrap();
     store.observe_spawn(&run, pid).unwrap();
-    transport::send(&channel, transport::GO, &[]).unwrap();
+    transport::send_until(&channel, transport::GO, &[], startup_deadline).unwrap();
     drop(lease);
     if parent_loss {
         controller_wait(temp.path(), || temp.path().join("heartbeat").exists());

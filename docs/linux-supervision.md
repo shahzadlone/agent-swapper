@@ -169,6 +169,12 @@ it does not qualify them or the production launcher. An additional delegated
 case now interrupts startup after transferring the scope and lease but before
 launch data, and requires cleanup while the journal remains unresolved. Its
 kernel-dependent result must be established by hosted CI.
+The actual-guardian fixture now shares a supervisor preparation routine that
+transfers the three custody capabilities, launch envelope and original streams,
+then receives the admitted PID under one absolute deadline. The fixture records
+the PID before sending GO under that same deadline. A local regression checks
+that an already-expired preparation transfers no capability. This routine is
+not wired into normal launches; its delegated test results await hosted CI.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;
