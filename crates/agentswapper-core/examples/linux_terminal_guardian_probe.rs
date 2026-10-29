@@ -127,6 +127,8 @@ mod fixture {
             json!({"pid":getpid().as_raw_pid(),"group":getpgrp().as_raw_pid()}),
         )?;
         let (channel, gate) = pair()?;
+        let lease = File::create_new(dir.join("lease"))?;
+        lease.try_lock().map_err(io::Error::other)?;
         // The guardian must survive an abrupt parent exit. Dropping Child must
         // not kill it; channel EOF, rather than a parent destructor, triggers cleanup.
         let mut helper = command("guardian", dir)?;
@@ -150,6 +152,11 @@ mod fixture {
         ] {
             send(&channel, GO, &[fd])?;
         }
+        send(&channel, GO, &[lease.as_fd()])?;
+        // Only the guardian's transferred open-file description retains this
+        // lock. The observer checks it independently while the parent is alive
+        // and after a parent-only kill.
+        drop(lease);
         let deadline = Instant::now() + BUDGET;
         let status = loop {
             if dir.join("kill-parent").exists() {
@@ -192,6 +199,7 @@ mod fixture {
         let input = File::from(receive(io::stdin())?);
         let output = File::from(receive(io::stdin())?);
         let diagnostic = File::from(receive(io::stdin())?);
+        let lease = File::from(receive(io::stdin())?);
         let domain = delegated.map(cgroup::Domain::open).transpose()?;
         let mut scope = domain.as_ref().map(cgroup::Domain::create).transpose()?;
         require(
@@ -299,6 +307,11 @@ mod fixture {
             )?;
             publish(dir, "writer-stopped", json!({"signal":9}))?;
         }
+        publish(dir, "cleanup-ready", json!({"leaseHeld":true}))?;
+        cgroup::until(Instant::now() + Duration::from_secs(10), || {
+            Ok(dir.join("release-lease").exists().then_some(()))
+        })?;
+        drop(lease);
         finished(dir, status, parent_eof)
     }
 

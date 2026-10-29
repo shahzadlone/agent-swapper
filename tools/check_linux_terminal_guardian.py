@@ -97,6 +97,16 @@ def foreground(shell, group):
     shell.wait_for(lambda: os.tcgetpgrp(shell.master) == group)
 
 
+def lease_available(root):
+    with (root / "lease").open("rb") as lease:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(lease, fcntl.LOCK_UN)
+        return True
+
+
 def run_case(binary, mode, delegated=None):
     with tempfile.TemporaryDirectory(prefix="aswp-terminal-guardian-") as directory:
         root = Path(directory)
@@ -117,6 +127,7 @@ def run_case(binary, mode, delegated=None):
             target = marker(shell, root, "target")
             parent = marker(shell, root, "parent")
             guardian = marker(shell, root, "guardian")
+            assert not lease_available(root), "guardian failed to retain transferred lease"
             assert target["group"] == parent["group"] == parent["pid"]
             assert guardian["group"] == guardian["pid"] != parent["group"]
             assert target["terminals"] == [True, True, mode != "redirected-stderr"]
@@ -177,13 +188,17 @@ def run_case(binary, mode, delegated=None):
             else:
                 raise AssertionError(f"unknown mode: {mode}")
 
-            finished = marker(shell, root, "finished")
+            assert marker(shell, root, "cleanup-ready") == {"leaseHeld": True}
+            assert not lease_available(root), "lease released before cleanup observation"
             if scope_path is not None:
                 assert marker(shell, root, "scope-finished") == {"retired": True}
                 assert not scope_path.exists(), "terminal scope was not retired"
                 if detached:
                     assert marker(shell, root, "writer-stopped") == {"signal": 9}
                     assert not (root / "writer-exited").exists()
+            (root / "release-lease").touch()
+            finished = marker(shell, root, "finished")
+            shell.wait_for(lambda: lease_available(root))
             if mode == "interrupt":
                 # The guardian may observe channel EOF before target SIGINT;
                 # a targeted kill on that path is still a fixture cleanup.
@@ -218,6 +233,7 @@ def run_case(binary, mode, delegated=None):
                 shell.wait_for(lambda: f"__ASWP_RC={expected}__".encode() in shell.output)
             print(f"{mode}: pass", flush=True)
         finally:
+            (root / "release-lease").touch()
             shell.close()
 
 

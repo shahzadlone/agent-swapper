@@ -163,8 +163,18 @@ inside the target cgroup before allowing either normal root exit or parent-only
 SIGKILL. The guardian is a subreaper; after its owned root Child is reaped and the
 scope is retired, it waits for that adopted writer and requires SIGKILL. The
 observer requires that evidence and refuses a voluntary writer exit. These two
-combined terminal/descendant cases await runtime CI at their own checkpoint;
+combined terminal/descendant cases passed at `d1d2afb` in [CI 40691671337](https://github.com/shahzadlone/agent-swapper/actions/runs/40691671337);
 they are never selected by the uncontained controller mode.
+
+The terminal fixture also transfers a locked temporary lease descriptor to the
+guardian after handing over the three standard streams. The parent drops its
+copy before the target starts. An independent opener verifies exclusion while
+the target runs, including after parent-only SIGKILL, and again after the
+guardian reports cleanup. Only after the observer checks scope retirement and
+detached-writer termination does it release the guardian to close the lease;
+the observer then confirms it can acquire the lock. This is fixture evidence,
+not integration with the production profile lease or journal. The delegated
+cases require CI at the change's exact commit.
 
 The parent-loss case passed the delegated Linux CI job at `3f541db`, including
 the explicit kernel-empty, lock-exclusion and outside-writer observations.
@@ -179,8 +189,8 @@ journal reconciliation remain open gates.
 
 ## Remaining gates
 
-Qualify the combined terminal/cgroup mode, then exercise detached descendants,
-lease retention and guardian loss through that same terminal topology.
+Qualify the combined terminal/cgroup mode with its transferred lease, then
+exercise guardian loss through that same terminal topology.
 Replace fixture lifetime limits with phase-specific startup/cleanup deadlines
 before production use; normal live sessions and suspension must not expire.
 Spawn trusted helpers before changing inherited interrupt dispositions in the
