@@ -29,6 +29,28 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def attribution_diagnostic(stderr, lock_text):
+    """Summarize known failures without publishing arbitrary subprocess output."""
+    message = stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else (stderr or "")
+    checks = {
+        "license resolution": "errors resolving licenses",
+        "license policy": "failed to satisfy license requirements",
+        "config parsing": "failed to parse config file",
+        "config deserialization": "failed to deserialize config file",
+        "config read": "failed to read config file",
+        "metadata": "failed to run cargo metadata",
+        "template": "template",
+        "network request": "failed to send request",
+        "filesystem access": "Access is denied",
+        "missing file": "The system cannot find the file specified",
+    }
+    matched = [label for label, needle in checks.items() if needle.lower() in message.lower()]
+    packages = tomllib.loads(lock_text).get("package", [])
+    names = sorted({p["name"] for p in packages if SAFE_NAME.fullmatch(p["name"])
+                    and re.search(r"(?<![A-Za-z0-9_-])" + re.escape(p["name"]) + r"(?![A-Za-z0-9_-])", message)})
+    return "categories: " + (", ".join(matched) or "unclassified") + "; lockfile names mentioned: " + (", ".join(names[:30]) or "none")
+
+
 def add(files, name, path, mode=0o644):
     name = safe_path(name)
     if name in files or path.is_symlink() or not path.is_file():
@@ -140,7 +162,11 @@ def candidate(output, allow_dirty):
         add(files, name, ROOT / name)
     add(files, "assets/brand/THIRD_PARTY_NOTICES.txt", ROOT / "assets/brand/THIRD_PARTY_NOTICES.txt")
     verify_about()
-    licenses = run(["cargo", "about", "generate", "--locked", "--workspace", "--fail", "tools/licenses.hbs"])
+    try:
+        licenses = run(["cargo", "about", "generate", "--locked", "--workspace", "--fail", "tools/licenses.hbs"])
+    except subprocess.CalledProcessError as error:
+        detail = attribution_diagnostic(error.stderr, (ROOT / "Cargo.lock").read_text(encoding="utf-8"))
+        raise ValueError("attribution tool failed; " + detail) from error
     if not licenses.strip() or b"option-ext" not in licenses:
         raise ValueError("dependency attribution is incomplete")
     files["THIRD_PARTY_LICENSES.txt"] = (licenses, 0o644)

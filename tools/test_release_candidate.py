@@ -32,6 +32,15 @@ def crate(entries):
 
 
 class CandidateSafety(unittest.TestCase):
+    def test_attribution_diagnostic_exposes_only_fixed_labels_and_locked_names(self):
+        lock = '[[package]]\nname = "example-crate"\nversion = "1.0.0"\n'
+        result = release_candidate.attribution_diagnostic(
+            b"failed to satisfy license requirements for example-crate: PRIVATE-SECRET\n"
+            b"encountered 1 errors resolving licenses", lock)
+        self.assertEqual(result, "categories: license resolution, license policy; lockfile names mentioned: example-crate")
+        self.assertNotIn("PRIVATE-SECRET", result)
+        self.assertIn("unclassified", release_candidate.attribution_diagnostic(b"PRIVATE-SECRET", lock))
+
     def test_ci_error_annotation_escapes_controls_and_omits_subprocess_output(self):
         failures = [ValueError("bad%\nvalue"),
                     release_candidate.subprocess.CalledProcessError(1, ["cargo", "about"], stderr=b"secret-output")]
