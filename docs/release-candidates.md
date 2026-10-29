@@ -15,8 +15,9 @@ are refused. Available dependency NOTICE files and the project's license and
 notices are included. This generation is a starting point for a release-specific
 license and notice review; it is not a legal determination.
 Candidate and separate-runner rebuild jobs use explicit `ubuntu-24.04`,
-`macos-15`, and `windows-2025` labels and record runner image, OS, compiler,
-libc and Rust information. GitHub can still update those images within a label;
+`macos-15`, and `windows-2025` labels and record runner image, OS, `cc` on
+PATH, libc and Rust information. The recorded `cc` may not be the compiler
+selected by the build, especially on Windows. GitHub can still update those images within a label;
 these labels do not pin an image digest or prove independent toolchain supply.
 GitHub documents both the available [runner labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
 and that [latest labels migrate](https://github.com/actions/runner-images#available-images).

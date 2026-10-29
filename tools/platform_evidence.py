@@ -27,7 +27,7 @@ def main():
         "architecture": platform.machine(),
         "macos": platform.mac_ver()[0],
         "rust": rust,
-        "c_compiler": compiler,
+        "cc_on_path": compiler,
         "libc": platform.libc_ver(),
         "runner_image": os.environ.get("ImageOS", "unknown"),
         "runner_image_version": os.environ.get("ImageVersion", "unknown"),
