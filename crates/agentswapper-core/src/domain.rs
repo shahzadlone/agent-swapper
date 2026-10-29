@@ -131,6 +131,11 @@ impl Harness {
                 "OPENAI_ORGANIZATION",
                 "OPENAI_PROJECT_ID",
                 "CODEX_API_KEY",
+                "CODEX_ACCESS_TOKEN",
+                "CODEX_SQLITE_HOME",
+                "OPENAI_FEDERATION_RULE_ID",
+                "OPENAI_IDENTITY_TOKEN_FILE",
+                "OPENAI_WORKLOAD_IDENTITY_CONTEXT",
                 "CODEX_HOME",
             ],
             Self::Kimi => &[

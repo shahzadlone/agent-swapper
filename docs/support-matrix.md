@@ -17,9 +17,20 @@ descendant cleanup, and native resume results. Keep dedicated account evidence
 outside public source if it contains identifiers.
 
 The preview binds Claude Code through `CLAUDE_CONFIG_DIR`, Codex through
-`CODEX_HOME`, and current Kimi Code through `KIMI_CODE_HOME`. Kimi legacy layout
-detection is not implemented. Native login command shapes are unverified and
+`CODEX_HOME`, and current Kimi Code through `KIMI_CODE_HOME`. Kimi legacy CLI
+version detection is not implemented. Native login command shapes are unverified and
 must pass the same version/platform matrix before being promoted.
+
+### Codex source contract
+
+The [official environment reference](https://learn.chatgpt.com/docs/config-file/environment-variables)
+documents access-token and workload-identity inputs, plus `CODEX_SQLITE_HOME`
+for SQLite state. Native launches refuse these inherited values before
+recording a run. Workload identity can take precedence over stored login, as
+described in the [official federation guide](https://developers.openai.com/api/docs/guides/workload-identity-federation).
+The reference also permits provider-specific secret names configured through
+`env_key`; a finite environment list cannot prove account isolation. Credential
+store behavior and real-provider qualification remain unverified.
 
 ### Kimi source contract
 

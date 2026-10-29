@@ -102,6 +102,9 @@ migration/isolation limits are recorded in the [support matrix](support-matrix.m
 Kimi launches refuse a detected or indeterminate legacy home unless you opt in
 for that launch with `--allow-kimi-legacy`; the check does not read or migrate
 the legacy files and cannot prevent later external changes.
+For Codex it includes access tokens, workload-identity configuration and the
+SQLite state-directory override. Custom provider credential variables are not
+enumerable from the environment alone, so these checks do not prove isolation.
 
 Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout

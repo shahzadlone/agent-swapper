@@ -419,6 +419,56 @@ fn conflicting_authentication_never_exposes_secret() {
 }
 
 #[test]
+fn codex_external_identity_and_state_overrides_are_refused_before_spawn() {
+    let s = Sandbox::new();
+    s.add("codex", "work");
+    for key in [
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_SQLITE_HOME",
+        "OPENAI_FEDERATION_RULE_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+        "OPENAI_WORKLOAD_IDENTITY_CONTEXT",
+    ] {
+        let preview = s
+            .command()
+            .args(["run", "work", "--dry-run", "--json", "--executable"])
+            .arg(fixture())
+            .env(key, "private-override-canary")
+            .output()
+            .unwrap();
+        assert!(preview.status.success());
+        let json: Value = serde_json::from_slice(&preview.stdout).unwrap();
+        assert!(
+            json["data"]["environmentConflict"]
+                .as_str()
+                .unwrap()
+                .contains(key)
+        );
+        assert!(!String::from_utf8_lossy(&preview.stdout).contains("private-override-canary"));
+        let result = s
+            .run("work")
+            .env(key, "private-override-canary")
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(125));
+        assert!(String::from_utf8_lossy(&result.stderr).contains(key));
+        assert!(!String::from_utf8_lossy(&result.stderr).contains("private-override-canary"));
+        assert!(!String::from_utf8_lossy(&result.stdout).contains("private-override-canary"));
+        let home = Path::new(json["data"]["plan"]["profile_home"].as_str().unwrap());
+        assert!(!home.join("fixture-owned.txt").exists());
+    }
+    let history = s.command().args(["runs", "--json"]).output().unwrap();
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    assert!(history["data"].as_array().unwrap().is_empty());
+    let database = std::fs::read(s.state().join("registry.sqlite3")).unwrap();
+    assert!(
+        !database
+            .windows(b"private-override-canary".len())
+            .any(|v| v == b"private-override-canary")
+    );
+}
+
+#[test]
 fn kimi_routing_overrides_are_reported_without_values_and_refused_before_spawn() {
     let s = Sandbox::new();
     s.add("kimi", "work");
