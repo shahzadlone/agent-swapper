@@ -1,6 +1,7 @@
 """Adversarial source-archive checks for internal release candidates."""
 import io
 import json
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import audit_attribution_tool
 import build_audited_deny
 import build_audited_about
+import release_candidate
 from release_candidate import add_locked_source, digest, reject_build_paths, safe_path, verify_build_marker, write_candidate
 
 
@@ -29,6 +31,22 @@ def crate(entries):
 
 
 class CandidateSafety(unittest.TestCase):
+    def test_ci_error_annotation_escapes_controls_and_omits_subprocess_output(self):
+        failures = [ValueError("bad%\nvalue"),
+                    release_candidate.subprocess.CalledProcessError(1, ["cargo", "about"], stderr=b"secret-output")]
+        for failure in failures:
+            output = io.StringIO()
+            with patch.object(release_candidate, "candidate", side_effect=failure), \
+                 patch.object(sys, "argv", ["release_candidate.py", "--output", "unused"]), \
+                 patch.dict(release_candidate.os.environ, {"GITHUB_ACTIONS": "true"}), \
+                 patch("sys.stdout", output):
+                with self.assertRaises(type(failure)):
+                    release_candidate.main()
+            self.assertIn("Candidate packaging", output.getvalue())
+            self.assertNotIn("secret-output", output.getvalue())
+            if isinstance(failure, ValueError):
+                self.assertIn("bad%25%0Avalue", output.getvalue())
+
     def test_attribution_build_marker_detects_binary_and_lock_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             binary = Path(temp) / "cargo-about"

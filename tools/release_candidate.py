@@ -228,7 +228,17 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-dirty", action="store_true", help="mark dirty local builds; never use for publication")
     args = parser.parse_args()
-    candidate(args.output, args.allow_dirty)
+    try:
+        candidate(args.output, args.allow_dirty)
+    except Exception as error:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # The candidate environment contains no real provider credentials.
+            # Do not include captured subprocess output, which can contain
+            # arbitrary package-provided text; include only the exception.
+            detail = f"{type(error).__name__}: {error}"[-3000:]
+            detail = detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Candidate packaging::{detail}", flush=True)
+        raise
 
 
 if __name__ == "__main__":
