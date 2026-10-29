@@ -99,6 +99,31 @@ pub(crate) fn populated(directory: &File) -> io::Result<bool> {
     }
 }
 
+fn validate_named_child(parent: &File, leaf: &File, name: &std::ffi::OsStr) -> io::Result<()> {
+    let named = File::from(openat2(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+    )?);
+    let actual = leaf.metadata()?;
+    let named = named.metadata()?;
+    require(
+        actual.dev() == named.dev() && actual.ino() == named.ino(),
+        "scope descriptor does not identify the parent's named child",
+    )
+}
+
+fn remove_named_child(parent: &File, leaf: &File, name: &std::ffi::OsStr) -> io::Result<bool> {
+    validate_named_child(parent, leaf, name)?;
+    match unlinkat(parent, name, AtFlags::REMOVEDIR) {
+        Ok(()) => Ok(true),
+        Err(rustix::io::Errno::BUSY | rustix::io::Errno::NOTEMPTY) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Validate a transferred direct-child capability before either supervisor
 /// uses it for cleanup. This is fixture-only and does not issue a receipt.
 pub(crate) fn validate_scope(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
@@ -117,19 +142,7 @@ pub(crate) fn validate_scope(parent: &File, leaf: &File, path: &Path) -> io::Res
                 .is_some()
         })
         .ok_or_else(|| io::Error::other("invalid fixture scope name"))?;
-    let expected = File::from(openat2(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
-    )?);
-    let actual = leaf.metadata()?;
-    let expected = expected.metadata()?;
-    require(
-        actual.dev() == expected.dev() && actual.ino() == expected.ino(),
-        "scope descriptor does not identify the parent's named child",
-    )?;
+    validate_named_child(parent, leaf, name.as_ref())?;
     require(
         !contains(leaf, std::process::id())?,
         "supervisor cannot contain itself",
@@ -151,11 +164,7 @@ pub(crate) fn retire_transferred(
     until(deadline, || {
         validate_scope(parent, leaf, path)?;
         require(!populated(leaf)?, "transferred scope became populated")?;
-        match unlinkat(parent, name, AtFlags::REMOVEDIR) {
-            Ok(()) => Ok(Some(())),
-            Err(rustix::io::Errno::BUSY | rustix::io::Errno::NOTEMPTY) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        Ok(remove_named_child(parent, leaf, name)?.then_some(()))
     })
 }
 
@@ -195,15 +204,7 @@ impl Domain {
         let mut created = NewDirectory::create(&parent, &name)?;
         let path = self.path.join(&name);
         let result = (|| {
-            // Resolve beneath the already-validated parent handle, rather
-            // than reopening the absolute delegated-parent path.
-            let directory = File::from(openat2(
-                &parent,
-                name.as_str(),
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-                Mode::empty(),
-                ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
-            )?);
+            let directory = created.directory.try_clone()?;
             validate_directory(&directory)?;
             let _ = control(&directory, "cgroup.kill", OFlags::WRONLY)?;
             check(&directory)?;
@@ -234,20 +235,41 @@ impl Domain {
 struct NewDirectory<'a> {
     parent: &'a File,
     name: &'a str,
+    directory: File,
     active: bool,
 }
 impl<'a> NewDirectory<'a> {
     fn create(parent: &'a File, name: &'a str) -> io::Result<Self> {
         mkdirat(parent, name, Mode::RUSR | Mode::WUSR | Mode::XUSR)?;
+        // Without a verified child descriptor, deleting by name could remove a
+        // replacement. Report a possible orphan if acquisition fails.
+        let directory = File::from(
+            openat2(
+                parent,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+            )
+            .map_err(|error| {
+                io::Error::other(format!(
+                    "created cgroup could not be opened; child may remain: {error}"
+                ))
+            })?,
+        );
         Ok(Self {
             parent,
             name,
+            directory,
             active: true,
         })
     }
     fn rollback(&mut self) -> io::Result<()> {
         if self.active {
-            unlinkat(self.parent, self.name, AtFlags::REMOVEDIR)?;
+            require(
+                remove_named_child(self.parent, &self.directory, self.name.as_ref())?,
+                "created child remains busy or populated",
+            )?;
             self.active = false;
         }
         Ok(())
@@ -284,13 +306,13 @@ impl Group {
             if populated(&self.directory)? {
                 return Ok(None);
             }
-            match unlinkat(&self.parent, self.name.as_str(), AtFlags::REMOVEDIR) {
-                Ok(()) => {
-                    self.retired = true;
-                    Ok(Some(()))
-                }
-                Err(rustix::io::Errno::BUSY | rustix::io::Errno::NOTEMPTY) => Ok(None),
-                Err(error) => Err(error.into()),
+            // The original handle remains the only kill target. A name that
+            // has been replaced must never authorize removing its replacement.
+            if remove_named_child(&self.parent, &self.directory, self.name.as_ref())? {
+                self.retired = true;
+                Ok(Some(()))
+            } else {
+                Ok(None)
             }
         })
     }
@@ -359,5 +381,36 @@ mod tests {
         let replacement = File::open(&original).unwrap();
         assert!(NewDirectory::create(&replacement, "child").is_err());
         assert!(original.join("child").is_dir());
+    }
+
+    #[test]
+    fn renamed_scope_cannot_authorize_removal_of_a_same_name_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = File::open(directory.path()).unwrap();
+        let original = directory.path().join("scope");
+        fs::create_dir(&original).unwrap();
+        let leaf = File::open(&original).unwrap();
+        validate_named_child(&parent, &leaf, "scope".as_ref()).unwrap();
+        fs::rename(&original, directory.path().join("moved")).unwrap();
+        fs::create_dir(&original).unwrap();
+        assert!(remove_named_child(&parent, &leaf, "scope".as_ref()).is_err());
+        assert!(original.is_dir());
+        assert!(directory.path().join("moved").is_dir());
+    }
+
+    #[test]
+    fn rollback_refuses_a_replacement_created_after_capability_acquisition() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = File::open(directory.path()).unwrap();
+        let owned = NewDirectory::create(&parent, "child").unwrap();
+        fs::rename(
+            directory.path().join("child"),
+            directory.path().join("moved"),
+        )
+        .unwrap();
+        fs::create_dir(directory.path().join("child")).unwrap();
+        drop(owned);
+        assert!(directory.path().join("child").is_dir());
+        assert!(directory.path().join("moved").is_dir());
     }
 }

@@ -43,10 +43,19 @@ results are recorded in [supervision validation](supervision-validation.md).
 
 Cgroup creation now opens the unique child relative to the validated parent
 descriptor with beneath/no-symlink/no-cross-mount resolution. It acquires its
-parent copy before creating anything, then rolls back the empty child if opening
-or validation fails. The rollback guard never acquires a name that already
-exists. A local regression renames/replaces the parent's path and verifies that
+parent copy before creating anything, then acquires a child descriptor before
+attempting rollback. If that descriptor cannot be acquired, the error reports
+that the child may remain; it does not delete by name. Validation failure after
+acquisition attempts rollback only when the name still identifies that child.
+A local regression renames/replaces the parent's path and verifies that
 cleanup affects the original directory, while a same-name replacement survives.
+Further provider-free tests replace the child after its descriptor is acquired:
+the removal function used by retirement and the rollback guard refuse the
+replacement. These tests use ordinary temporary directories; the actual cgroup
+retirement path still requires delegated-kernel evidence. The identity
+check and name-based removal are separate operations, so this does not prove
+safety against a same-user actor racing between them. A failed check can leave
+an empty original child behind; cleanup remains unresolved.
 The delegated probe also injects validation failure three times and checks for
 leftover children; those kernel-specific results require CI at the change's commit.
 That delegated rollback checkpoint passed all four CI jobs at `4b500ed`.
