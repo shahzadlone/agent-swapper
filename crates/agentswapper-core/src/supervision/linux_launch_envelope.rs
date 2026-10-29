@@ -125,14 +125,12 @@ impl LaunchEnvelope {
 
     /// Read one complete, bounded launch from an unnamed local socket pair.
     pub(crate) fn receive_from(channel: impl AsFd) -> io::Result<Self> {
-        use rustix::net::sockopt::{self, Timeout};
-        let deadline = Instant::now() + TRANSFER_BUDGET;
-        let previous = sockopt::socket_timeout(&channel, Timeout::Recv)?;
-        sockopt::set_socket_timeout(&channel, Timeout::Recv, Some(remaining(deadline)?))?;
-        let transfer = super::linux_admission_transport::receive(&channel);
-        let restore = sockopt::set_socket_timeout(&channel, Timeout::Recv, previous);
-        let input = transfer?;
-        restore?;
+        Self::receive_from_until(channel, Instant::now() + TRANSFER_BUDGET)
+    }
+
+    pub(crate) fn receive_from_until(channel: impl AsFd, deadline: Instant) -> io::Result<Self> {
+        use rustix::net::sockopt;
+        let input = super::linux_admission_transport::receive_until(&channel, deadline)?;
         let mut stream = UnixStream::from(input);
         if sockopt::socket_type(&stream)? != rustix::net::SocketType::STREAM
             || !stream.local_addr()?.is_unnamed()

@@ -12,7 +12,7 @@ use rustix::{
 use std::{
     io::{self, IoSlice, IoSliceMut},
     mem::MaybeUninit,
-    time::Duration,
+    time::{Duration, Instant},
 };
 pub(crate) const GO: &[u8] = b"ASWP-GO-1";
 fn require(value: bool, message: &'static str) -> io::Result<()> {
@@ -92,6 +92,47 @@ pub(crate) fn receive(socket: impl AsFd) -> io::Result<OwnedFd> {
         "received descriptor is inheritable",
     )?;
     Ok(input)
+}
+
+/// Apply one absolute startup deadline while retaining the caller's socket timeout.
+#[allow(
+    dead_code,
+    reason = "some fixture binaries do not use startup deadlines"
+)]
+pub(crate) fn receive_until(socket: impl AsFd, deadline: Instant) -> io::Result<OwnedFd> {
+    with_deadline(&socket, deadline, || receive(&socket))
+}
+
+#[allow(
+    dead_code,
+    reason = "some fixture binaries do not use startup deadlines"
+)]
+pub(crate) fn receive_control_until(
+    socket: impl AsFd,
+    expected: &[u8],
+    deadline: Instant,
+) -> io::Result<()> {
+    with_deadline(&socket, deadline, || receive_control(&socket, expected))
+}
+
+fn with_deadline<T>(
+    socket: impl AsFd,
+    deadline: Instant,
+    operation: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::TimedOut, "guardian startup deadline expired")
+        })?;
+    let previous = sockopt::socket_timeout(&socket, Timeout::Recv)?;
+    sockopt::set_socket_timeout(&socket, Timeout::Recv, Some(remaining))?;
+    let result = operation();
+    let restore = sockopt::set_socket_timeout(&socket, Timeout::Recv, previous);
+    let value = result?;
+    restore?;
+    Ok(value)
 }
 
 /// Receive an exact nonempty control message with no transferred capabilities.
@@ -180,6 +221,26 @@ mod tests {
         ));
         assert!(receive_control(&receiver, b"READY").is_err());
         observer.try_lock().map_err(io::Error::other)?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_or_expired_receives_restore_original_timeout() -> io::Result<()> {
+        let (sender, receiver) = pair()?;
+        let original = sockopt::socket_timeout(&receiver, Timeout::Recv)?;
+        assert_eq!(
+            receive_until(&receiver, Instant::now())
+                .err()
+                .map(|e| e.kind()),
+            Some(io::ErrorKind::TimedOut)
+        );
+        drop(sender);
+        assert!(receive_until(&receiver, Instant::now() + Duration::from_secs(1)).is_err());
+        assert_eq!(sockopt::socket_timeout(&receiver, Timeout::Recv)?, original);
+        assert!(
+            receive_control_until(&receiver, GO, Instant::now() + Duration::from_secs(1)).is_err()
+        );
+        assert_eq!(sockopt::socket_timeout(&receiver, Timeout::Recv)?, original);
         Ok(())
     }
 }

@@ -60,7 +60,14 @@ started with a minimal environment; its target receives a generated canary
 only after GO. The guardian's initial command line and environment are checked
 for that canary. This combined case requires CI on its own commit. The actual
 production guardian/shim lifecycle and authentication boundary remain to be
-integrated and tested.
+integrated and tested. The fixture now starts a trusted shim, moves it into the
+scope, and records its PID before acknowledging admission. The shim validates
+the parent/leaf identity and its own membership before accepting the envelope
+and again after GO, then execs the target with the transferred streams. Its
+receives share one deadline. A local subprocess test supplies ordinary
+directories and confirms that a fully queued command cannot run; positive
+cgroup and crash results require delegated CI at this change's commit. The
+shim is not exposed by the production CLI and does not issue a stop receipt.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).

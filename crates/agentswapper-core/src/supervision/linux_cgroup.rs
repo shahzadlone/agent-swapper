@@ -126,13 +126,9 @@ fn remove_named_child(parent: &File, leaf: &File, name: &std::ffi::OsStr) -> io:
 
 /// Validate a transferred direct-child capability before either supervisor
 /// uses it for cleanup. This is fixture-only and does not issue a receipt.
-pub(crate) fn validate_scope(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
+fn validate_identity(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
     validate_directory(parent)?;
     validate_directory(leaf)?;
-    require(
-        contains(parent, std::process::id())?,
-        "supervisor is outside scope parent",
-    )?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -142,10 +138,35 @@ pub(crate) fn validate_scope(parent: &File, leaf: &File, path: &Path) -> io::Res
                 .is_some()
         })
         .ok_or_else(|| io::Error::other("invalid fixture scope name"))?;
-    validate_named_child(parent, leaf, name.as_ref())?;
+    validate_named_child(parent, leaf, name.as_ref())
+}
+
+pub(crate) fn validate_scope(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
+    validate_identity(parent, leaf, path)?;
+    require(
+        contains(parent, std::process::id())?,
+        "supervisor is outside scope parent",
+    )?;
     require(
         !contains(leaf, std::process::id())?,
         "supervisor cannot contain itself",
+    )
+}
+
+/// Refuse target execution unless this process is in the validated child.
+#[allow(
+    dead_code,
+    reason = "some fixture binaries do not run the admitted shim"
+)]
+pub(crate) fn validate_admitted(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
+    validate_identity(parent, leaf, path)?;
+    require(
+        !contains(parent, std::process::id())?,
+        "shim remains in parent cgroup",
+    )?;
+    require(
+        contains(leaf, std::process::id())?,
+        "shim is not in the admitted cgroup",
     )
 }
 

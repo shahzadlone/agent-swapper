@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used)]
 use crate::supervision::linux_admission_transport as transport;
 use crate::supervision::linux_cgroup as cgroup;
-use crate::supervision::linux_launch_envelope::LaunchEnvelope;
+use crate::supervision::{linux_launch_envelope::LaunchEnvelope, linux_shim};
 
 use super::*;
 use rustix::{
@@ -16,7 +16,7 @@ use rustix::{
 };
 use std::{
     fs,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
     process::{Child, Command, Stdio},
     thread,
@@ -25,6 +25,7 @@ use wait_timeout::ChildExt;
 
 const SUPERVISOR: &str = "store::linux_journal_guardian_tests::supervisor_fixture";
 const GUARDIAN: &str = "store::linux_journal_guardian_tests::guardian_fixture";
+const SHIM: &str = "store::linux_journal_guardian_tests::shim_fixture";
 const TARGET: &str = "store::linux_journal_guardian_tests::target_fixture";
 const BUDGET: Duration = Duration::from_secs(20);
 const ACK: &[u8] = b"ASWP-JOURNALED-1";
@@ -49,7 +50,12 @@ fn controller_wait(dir: &Path, mut check: impl FnMut() -> bool) {
     let deadline = Instant::now() + BUDGET;
     while !check() {
         if Instant::now() >= deadline {
-            for role in ["supervisor_fixture", "guardian_fixture", "target_fixture"] {
+            for role in [
+                "supervisor_fixture",
+                "guardian_fixture",
+                "shim_fixture",
+                "target_fixture",
+            ] {
                 for stream in ["stdout", "stderr"] {
                     if let Ok(text) = fs::read_to_string(dir.join(format!("{role}.{stream}"))) {
                         eprintln!(
@@ -115,6 +121,13 @@ fn target_fixture() {
 }
 
 #[test]
+#[ignore = "shim role for the delegated journal guardian fixture"]
+fn shim_fixture() {
+    let (_, scope) = fixture_paths();
+    linux_shim::exec_until(io::stdin(), &scope, Instant::now() + BUDGET).unwrap();
+}
+
+#[test]
 #[ignore = "guardian role for the delegated journal guardian fixture"]
 fn guardian_fixture() {
     let (dir, scope) = fixture_paths();
@@ -123,16 +136,13 @@ fn guardian_fixture() {
     let lease = File::from(transport::receive(io::stdin()).unwrap());
     cgroup::validate_scope(&parent, &leaf, &scope).unwrap();
     let launch = LaunchEnvelope::receive_from(io::stdin()).unwrap();
-    let mut target = OwnedChild(
-        launch
-            .command()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(
-                File::create(dir.join("target_fixture.stdout")).unwrap(),
-            ))
-            .stderr(Stdio::from(
-                File::create(dir.join("target_fixture.stderr")).unwrap(),
-            ))
+    let (grant, gate) = transport::pair().unwrap();
+    let target = OwnedChild(
+        command(SHIM, &dir, &scope)
+            .env_clear()
+            .env("ASWP_JOURNAL_FIXTURE_DIR", &dir)
+            .env("ASWP_JOURNAL_FIXTURE_SCOPE", &scope)
+            .stdin(Stdio::from(gate))
             .spawn()
             .unwrap(),
     );
@@ -158,7 +168,20 @@ fn guardian_fixture() {
         fs::write(dir.join("guardian-pre-go-cleaned"), b"cleaned").unwrap();
         return;
     }
-    target.0.stdin.take().unwrap().write_all(b"GO\n").unwrap();
+    for fd in [parent.as_fd(), leaf.as_fd()] {
+        transport::send(&grant, transport::GO, &[fd]).unwrap();
+    }
+    launch.send_to(&grant).unwrap();
+    let mut input = tempfile::tempfile().unwrap();
+    input.write_all(b"GO\n").unwrap();
+    input.seek(SeekFrom::Start(0)).unwrap();
+    let output = File::create(dir.join("target_fixture.stdout")).unwrap();
+    let diagnostic = File::create(dir.join("target_fixture.stderr")).unwrap();
+    for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
+        transport::send(&grant, transport::GO, &[fd]).unwrap();
+    }
+    transport::send(&grant, transport::GO, &[]).unwrap();
+    drop(grant);
     until(|| dir.join("heartbeat").exists());
     fs::write(dir.join("guardian-ready"), b"ready").unwrap();
     until(|| {
