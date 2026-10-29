@@ -398,10 +398,15 @@ service or changes host security settings. Both trials passed at `de6ed91` in
 the manager reported exit 0 for graceful cleanup and exit 1 for the forced-stop
 timeout, with scope removal and the outside heartbeat checked in both cases.
 The extended trial now also checks a separate same-user peer outside the scope;
-that additional result is pending. A third trial kills the owned `systemd-run`
+that check passed along with all three trials at `8be56a9` in
+[CI run 40905065256](https://github.com/shahzadlone/agent-swapper/actions/runs/40905065256/job/123557466073).
+A third trial kills the owned `systemd-run`
 client after readiness, checks that the populated workload remains owned by the
 manager, then permits main-process exit and requires descendant cleanup. A
-client's death is never classified as target exit; this added trial is pending.
+client's death is never classified as target exit; the measured client exit was
+`-9`, while original scope removal and worker cessation were checked separately.
+The next revision additionally retains the original directory descriptor and
+requires its events file to disappear after cleanup; that observation is pending.
 The experiment does not
 qualify interactive terminal behavior, manager authentication, receipt binding,
 administrator adversaries, external delegated work or production integration.

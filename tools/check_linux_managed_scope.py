@@ -113,6 +113,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, close_fds=True)
     manager = None
+    scope_descriptor = None
     try:
         wait_for(lambda: (directory / 'outside-heartbeat').exists())
         with (directory / 'manager.log').open('wb') as log:
@@ -133,6 +134,10 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             require((directory / 'peer-controls-checked').exists(), "same-user peer permissions were not checked")
             require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
                     "managed scope was not populated before cleanup")
+            scope_descriptor = os.open(scope, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            opened, named = os.fstat(scope_descriptor), scope.stat()
+            require((opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
+                    and opened.st_uid == 0, "opened scope identity does not match")
             before = (directory / 'outside-heartbeat').read_text()
             if client_loss:
                 manager.kill()
@@ -147,6 +152,14 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             if not forced and not client_loss:
                 require(result == 0, "graceful managed service failed")
             wait_for(lambda: not scope.exists(), seconds=5)
+            try:
+                events = os.open('cgroup.events', os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                                 dir_fd=scope_descriptor)
+            except FileNotFoundError:
+                pass
+            else:
+                os.close(events)
+                raise RuntimeError("original managed scope retirement was not observed")
             heartbeat = (directory / 'worker-heartbeat').read_text()
             time.sleep(0.15)
             require((directory / 'worker-heartbeat').read_text() == heartbeat,
@@ -155,6 +168,8 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             require(outside.poll() is None, "outside writer was terminated")
             print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; systemd-run exit {result}', flush=True)
     finally:
+        if scope_descriptor is not None:
+            os.close(scope_descriptor)
         (directory / 'outside-stop').write_text('stop')
         try:
             outside.wait(timeout=3)
