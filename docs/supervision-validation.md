@@ -48,6 +48,11 @@ A full Windows-target Clippy check covered all targets without linking/running
 Windows binaries; the SQLite build was bypassed for this metadata-only check.
 Actual Windows builds used bundled SQLite in CI.
 
+The native-launch PTY fixture also exercises redirected stdin and a launch with
+only stderr attached to the foreground terminal. Both passed locally on Linux;
+the updated cross-platform fixture must pass on macOS before that result is
+claimed there. Supervisor-crash terminal restoration remains unqualified.
+
 ## Assertions exercised
 
 Admission is suspended before assignment and a deliberately delayed callback.

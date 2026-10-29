@@ -116,8 +116,10 @@ belongs to the child, so actual launches cannot use `--json`.
 Both the preview and the launch message identify explicitly bypassed provider
 preflights; a bypass does not establish that the selected account is isolated.
 
-On Unix, a launch whose stdin is its foreground controlling terminal saves its attributes and
-restores them after the child is observed to exit. If the foreground changes or
+On Unix, a launch with a foreground controlling terminal attached to stdin,
+stdout or stderr saves its attributes and restores them after the child is
+observed to exit. If all three streams are redirected, no terminal is captured.
+If the foreground changes or
 restoration fails, the command reports `terminal_restore_failed`; run history
 still records the child's actual exit. A non-controlling PTY is left to its
 owner. Supervisor crashes and uncontained descendants remain separate custody
