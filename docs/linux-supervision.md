@@ -55,6 +55,9 @@ These primitives and their rollback regressions now live in the private
 consumers borrow the validated descriptors and retire the owned child through
 the shared implementation. This is preparation for testing terminal admission
 against the same cgroup code, not a production backend.
+Received capabilities now explicitly require directory descriptors before
+filesystem and ownership validation. A provider-free regression rejects both
+ordinary files and, when available, a real cgroup control-file descriptor.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;

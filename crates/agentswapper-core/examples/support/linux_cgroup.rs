@@ -46,6 +46,10 @@ pub(crate) fn checked_directory(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 pub(crate) fn validate_directory(file: &File) -> io::Result<()> {
+    // Received descriptors are not necessarily opened with O_DIRECTORY. Refuse
+    // control-file handles before considering filesystem or ownership checks.
+    let metadata = file.metadata()?;
+    require(metadata.is_dir(), "cgroup capability is not a directory")?;
     // CGROUP2_SUPER_MAGIC from the kernel's cgroup v2 interface contract.
     require(
         fstatfs(file)?.f_type == 0x6367_7270,
@@ -55,7 +59,6 @@ pub(crate) fn validate_directory(file: &File) -> io::Result<()> {
         !geteuid().is_root(),
         "run the probe as an ordinary delegated user",
     )?;
-    let metadata = file.metadata()?;
     require(
         metadata.uid() == geteuid().as_raw() && metadata.mode() & 0o022 == 0,
         "cgroup is not privately delegated to this user",
@@ -256,6 +259,27 @@ mod tests {
         let link = directory.path().join("link");
         std::os::unix::fs::symlink(directory.path(), &link).unwrap();
         assert!(checked_directory(&link).is_err());
+    }
+
+    #[test]
+    fn control_file_descriptors_cannot_be_used_as_directory_capabilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("control");
+        fs::write(&path, b"unchanged").unwrap();
+        let file = File::open(&path).unwrap();
+        assert_eq!(
+            validate_directory(&file).unwrap_err().to_string(),
+            "cgroup capability is not a directory"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"unchanged");
+        // When cgroup v2 is mounted, also exercise a real control-file handle;
+        // this requires no delegation and performs no writes.
+        if let Ok(control) = File::open("/sys/fs/cgroup/cgroup.controllers") {
+            assert_eq!(
+                validate_directory(&control).unwrap_err().to_string(),
+                "cgroup capability is not a directory"
+            );
+        }
     }
 
     #[test]
