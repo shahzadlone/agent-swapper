@@ -41,16 +41,20 @@ def main():
     core_test = Path(sys.argv[3]).resolve(strict=True)
     env = os.environ.copy()
     env["ASWP_DELEGATED_CGROUP"] = str(parent)
-    result = subprocess.run([str(core_test), "--ignored", "--exact",
-                             "store::linux_journal_guardian_tests::real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup",
-                             "--nocapture"], env=env, check=False, timeout=90,
-                            capture_output=True, text=True)
-    sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    if result.returncode:
-        return result.returncode
-    if "::notice title=Linux journal guardian::" not in result.stdout or "1 passed; 0 failed" not in result.stdout:
-        raise SystemExit("delegated journal guardian test did not actually run and pass")
+    for name, notice in [
+        ("real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup", "Linux journal guardian"),
+        ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),
+    ]:
+        result = subprocess.run([str(core_test), "--ignored", "--exact",
+                                 f"store::linux_journal_guardian_tests::{name}",
+                                 "--nocapture"], env=env, check=False, timeout=90,
+                                capture_output=True, text=True)
+        sys.stdout.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        if result.returncode:
+            return result.returncode
+        if f"::notice title={notice}::" not in result.stdout or "1 passed; 0 failed" not in result.stdout:
+            raise SystemExit(f"delegated journal guardian test {name} did not actually run and pass")
     return 0
 
 

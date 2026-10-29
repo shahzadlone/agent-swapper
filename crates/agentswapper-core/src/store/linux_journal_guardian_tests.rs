@@ -98,6 +98,7 @@ fn target_fixture() {
     let mut grant = String::new();
     io::stdin().lock().read_line(&mut grant).unwrap();
     assert_eq!(grant, "GO\n");
+    fs::write(dir.join("target-started"), b"started").unwrap();
     setsid().unwrap();
     let deadline = Instant::now() + BUDGET * 4;
     let mut tick = 0_u64;
@@ -138,6 +139,17 @@ fn guardian_fixture() {
     let mut ack = [0_u8; 32];
     let (count, length) = recv(io::stdin(), &mut ack, RecvFlags::TRUNC).unwrap();
     assert_eq!(count, length);
+    if count == 0 {
+        cgroup::control(&leaf, "cgroup.kill", OFlags::WRONLY)
+            .unwrap()
+            .write_all(b"1\n")
+            .unwrap();
+        until(|| !cgroup::populated(&leaf).unwrap());
+        cgroup::retire_transferred(&parent, &leaf, &scope, Instant::now() + BUDGET).unwrap();
+        drop(lease);
+        fs::write(dir.join("guardian-pre-go-cleaned"), b"cleaned").unwrap();
+        return;
+    }
     assert_eq!(&ack[..count], ACK);
     target.0.stdin.take().unwrap().write_all(b"GO\n").unwrap();
     until(|| dir.join("heartbeat").exists());
@@ -191,6 +203,11 @@ fn supervisor_fixture() {
     assert_eq!(count, length);
     let pid: u32 = std::str::from_utf8(&pid[..count]).unwrap().parse().unwrap();
     store.observe_spawn(&run, pid).unwrap();
+    if dir.join("pause-before-go").exists() {
+        fs::write(dir.join("run-id.tmp"), &run).unwrap();
+        fs::rename(dir.join("run-id.tmp"), dir.join("run-id")).unwrap();
+        until(|| false);
+    }
     transport::send(&channel, ACK, &[]).unwrap();
     until(|| dir.join("guardian-ready").exists());
     fs::write(dir.join("run-id.tmp"), run).unwrap();
@@ -199,6 +216,53 @@ fn supervisor_fixture() {
     while Instant::now() < deadline && guardian.0.try_wait().unwrap().is_none() {
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup"]
+fn supervisor_loss_before_go_keeps_journal_unresolved() {
+    let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
+    let domain = cgroup::Domain::open(&delegated).unwrap();
+    let scope = domain.create().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("state");
+    let mut store = Store::open(&root).unwrap();
+    let profile = store
+        .register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    drop(store);
+    fs::write(temp.path().join("pause-before-go"), b"pause").unwrap();
+    let mut supervisor = OwnedChild(
+        command(SUPERVISOR, temp.path(), scope.path())
+            .stdin(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
+    controller_wait(temp.path(), || temp.path().join("run-id").exists());
+    let run = fs::read_to_string(temp.path().join("run-id")).unwrap();
+    let mut store = Store::open(&root).unwrap();
+    assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
+    supervisor.0.kill().unwrap();
+    supervisor.0.wait().unwrap();
+    controller_wait(temp.path(), || {
+        temp.path().join("guardian-pre-go-cleaned").exists()
+    });
+    assert!(!scope.path().exists());
+    assert!(!temp.path().join("target-started").exists());
+    let pid: u32 = fs::read_to_string(temp.path().join("target-pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
+    drop(store.acquire_lease(profile.id).unwrap());
+    assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
+    assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
+    store.attest_stopped(&run).unwrap();
+    assert!(store.verify().unwrap().consistent);
+    println!(
+        "::notice title=Linux pre-GO guardian::supervisor loss before GO preserved unresolved intent and stopped the gated target"
+    );
 }
 
 #[test]
