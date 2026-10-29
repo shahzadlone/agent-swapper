@@ -5,6 +5,15 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
+The latest completed evidence is `08facc1`:
+[CI run 40959372054](https://github.com/shahzadlone/agent-swapper/actions/runs/40959372054)
+passed Linux/macOS dashboard transitions, Windows native console restoration,
+the dependency policy, all three candidate builds, separate-runner byte
+comparisons and preview provenance verification. Subsequent ConPTY/dashboard
+changes need their own completed run. Real-provider qualification, automated
+subscription switching, platform containment and signed public distribution
+remain separate unfinished gates.
+
 The matrix builds the two optimized executables on its Linux, macOS and Windows
 host targets using the pinned Rust toolchain. `cargo-about 0.9.3` generates the
 dependency license text using [about.toml](../about.toml), with crate-specific
@@ -49,14 +58,15 @@ input, not proof that every compiler and dependency honors it.
 For an MSVC host, the build also passes the linker `/Brepro` option. Rust's
 [bootstrap source](https://doc.rust-lang.org/beta/nightly-rustc/src/bootstrap/core/build_steps/compile.rs.html)
 uses this option to remove nondeterministic PE timestamp data when building
-the compiler. Its effect on AgentSwapper's separate-runner builds remains to
-be measured; the byte comparison and signing gate are unchanged.
+the compiler. AgentSwapper's separate-runner comparisons have passed with this
+option; every new candidate must still pass its own byte comparison before
+preview provenance is signed.
 On the earlier `3bcfdf7` build, the Windows comparison reported equal
 `agentswapper.exe` lengths of 4,555,264 bytes and its first difference at
 offset 256, with PE timestamps `1793257779` and `1793258028`; see the
 [rebuild job](https://github.com/shahzadlone/agent-swapper/actions/runs/40832651386/job/123313788261).
 That establishes a timestamp difference, not that it was the only difference.
-The `/Brepro` build must independently reproduce before signing can proceed.
+That earlier failure is retained as diagnostic evidence for future regressions.
 At `2efa444`, the three-platform independent rebuild gate passed and
 [CI run 40833782715](https://github.com/shahzadlone/agent-swapper/actions/runs/40833782715/job/123319973000)
 completed candidate-set verification, provenance signing, signed-provenance
