@@ -50,7 +50,13 @@ reconstructs a command with an explicit environment; a local subprocess test
 checks byte preservation and directory selection. Envelope buffers are
 zeroized on drop, but process-environment snapshots, `Command` and operating
 system copies are outside that guarantee. The envelope is not yet transferred
-over the guardian channel or used by production launch.
+by production launch. A provider-free subprocess test transfers it over an
+unnamed stream whose descriptor travels on the guardian channel, and confirms
+the helper's initial command line and environment do not contain the test
+canaries. The receiver checks stream type, length and EOF; malformed and
+truncated transfers fail, and the stream operations use one absolute deadline.
+The actual guardian/shim lifecycle and authentication boundary remain to be
+integrated and tested.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).
