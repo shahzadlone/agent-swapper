@@ -87,8 +87,11 @@ shared session/binding check. That check was moved before the branch. Public pla
 builders already refused the incompatible metadata, but the shared invariant is
 now explicit. A review is supporting evidence, not runtime qualification.
 
-The supervisor-crash window before first Job assignment can leak a suspended
-process. Dependency failure cleanup may wait without a timeout. Membership-list
+Without a process-lifetime root Job, the supervisor-crash window before first
+Job assignment can leak a suspended process. The CLI now installs such a root
+for the experimental option; the new gap-specific fixture and integrated CLI
+change await hosted Windows execution. Embedded callers must opt in separately.
+Dependency failure cleanup may wait without a timeout. Membership-list
 overflow was source-audited as an error path, not stress-tested with thousands of
 processes. Same-user malicious interference, external services, filesystem and
 credential isolation, actual provider versions and account refresh remain outside

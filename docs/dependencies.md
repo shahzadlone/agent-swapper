@@ -100,9 +100,11 @@ so descendants inherit both. The outer Job provides kill-on-close independently.
 Neither library's presence nor a clean advisory scan proves these invariants;
 [backend fixtures](custody.md) must exercise them on Windows. Some internal
 process-wrap failure cleanup uses an unbounded native wait; the wrapper's own
-normal stop polling and admission-guard waits are bounded. A crash before the
-first assignment can leak a suspended process. No new advisory or licensing
-exception was added.
+normal stop polling and admission-guard waits are bounded. Without the optional
+process-lifetime root Job, a crash before the first assignment can leak a
+suspended process. The CLI now installs that root for the explicit Windows
+containment option; its new crash-window fixture awaits hosted validation.
+No new advisory or licensing exception was added.
 
 ## Licensing and distribution
 
