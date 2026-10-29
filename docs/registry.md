@@ -48,6 +48,10 @@ is opened without following symlinks and without blocking on a FIFO. Parent-path
 replacement races and Windows ACL privacy are not eliminated by these checks.
 The [Windows ACL qualification notes](windows-acl.md) describe the remaining
 privacy work and the evaluated libraries.
+SQLite opens the registry and its migration reader with `SQLITE_OPEN_NOFOLLOW`;
+the direct symlink refusal is tested on Unix. This adds protection at the
+database open but does not bind SQLite's connection to the previously inspected
+file handle or establish Windows reparse-point behavior.
 
 Schema 2 made the journal envelope timestamp authoritative for each run's
 start. Schema 3 adds optional PID and spawn-time observations. Schema 4 adds validated

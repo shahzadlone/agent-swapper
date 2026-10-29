@@ -4,7 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -159,7 +161,7 @@ impl Store {
         for suffix in ["-wal", "-shm", "-journal"] {
             private_fs::validate_file(&root.join(format!("registry.sqlite3{suffix}")))?;
         }
-        let mut db = Connection::open(&path)?;
+        let mut db = open_registry(&path)?;
         db.busy_timeout(Duration::from_secs(3))?;
         journal::configure(&db)?;
         let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -587,6 +589,20 @@ impl Store {
     }
 }
 
+fn open_registry(path: &Path) -> Result<Connection> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?)
+}
+
+fn open_registry_read_only(path: &Path) -> Result<Connection> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?)
+}
+
 fn canonical_directory(path: &Path) -> Result<String> {
     let path = dunce::canonicalize(path)?;
     if !path.is_dir() {
@@ -803,6 +819,27 @@ mod tests {
             s.db.execute("UPDATE main.event_log SET payload='{}'", [])
                 .is_err()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sqlite_open_itself_refuses_a_replaced_symlink() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let target = root.join("target.sqlite3");
+        let db = Connection::open(&target).unwrap();
+        db.execute_batch(
+            "CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('unchanged');",
+        )
+        .unwrap();
+        drop(db);
+        let before = std::fs::read(&target).unwrap();
+        let path = root.join("registry.sqlite3");
+        symlink(&target, &path).unwrap();
+        assert!(open_registry(&path).is_err());
+        assert!(open_registry_read_only(&path).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), before);
     }
 
     #[test]

@@ -331,10 +331,7 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
     let destination = file.path().to_str().ok_or(Error::NonUtf8Path)?;
     // The migration write lock also fences older writers. A second, read-only
     // connection sees precisely the committed source being upgraded.
-    let reader = Connection::open_with_flags(
-        root.join("registry.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+    let reader = super::open_registry_read_only(&root.join("registry.sqlite3"))?;
     reader.busy_timeout(Duration::from_secs(3))?;
     reader.execute("VACUUM INTO ?1", [destination])?;
     file.as_file().sync_all()?;
