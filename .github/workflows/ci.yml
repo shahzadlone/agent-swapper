@@ -64,7 +64,7 @@ jobs:
       - name: Journal process-crash recovery matrix
         timeout-minutes: 12
         env:
-          ASWP_JOURNAL_CRASH_TRIALS: '220'
+          ASWP_JOURNAL_CRASH_TRIALS: '224'
         run: cargo +1.98.0 test --locked -p agentswapper-core --lib store::crash_tests::crash_lifecycle_reopens_consistently -- --ignored --exact
       - name: Dashboard terminal entry and restoration
         if: runner.os != 'Windows'

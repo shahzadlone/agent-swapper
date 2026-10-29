@@ -11,6 +11,14 @@ use std::{
 const CHILD: &str = "store::crash_tests::crash_child";
 const WAIT: Duration = Duration::from_secs(15);
 
+fn binding(port: u16) -> crate::GentsBinding {
+    crate::GentsBinding::new(
+        format!("127.0.0.1:{port}").parse().unwrap(),
+        "worker".parse().unwrap(),
+    )
+    .unwrap()
+}
+
 struct OwnedChild(Child);
 impl Drop for OwnedChild {
     fn drop(&mut self) {
@@ -35,8 +43,8 @@ fn crash_child() {
         .find(|p| p.alias.to_string() == "work")
         .unwrap();
     let lease = match action.as_str() {
-        "register" | "rename" | "disable" | "remove" => None,
-        "plan" => Some(store.lease(profile.id).unwrap()),
+        "register" | "rename" | "disable" | "remove" | "rebind" => None,
+        "plan" | "gents-plan" => Some(store.lease(profile.id).unwrap()),
         // These cases model the existing launcher's already-held lease after
         // a durable intent. `lease` intentionally refuses unfinished runs.
         _ => Some(store.acquire_lease(profile.id).unwrap()),
@@ -48,7 +56,7 @@ fn crash_child() {
             "mappings"
         } else if matches!(
             action.as_str(),
-            "register" | "rename" | "disable" | "remove"
+            "register" | "rename" | "disable" | "remove" | "rebind"
         ) {
             "profiles"
         } else {
@@ -83,8 +91,17 @@ fn crash_child() {
         "remove" => {
             store.remove(&profile.alias).unwrap();
         }
+        "rebind" => {
+            store.bind_gents(&profile.alias, binding(9192)).unwrap();
+        }
         "plan" => {
             store.begin_run(lease.as_ref().unwrap(), "run").unwrap();
+        }
+        "gents-plan" => {
+            let session = GentsSession::new(Uuid::new_v4(), profile.gents.unwrap(), None);
+            store
+                .begin_run_with_session(lease.as_ref().unwrap(), "run", Some(session))
+                .unwrap();
         }
         "spawn" => {
             store.observe_spawn(&run, 42).unwrap();
@@ -109,10 +126,10 @@ fn crash_child() {
 #[ignore = "subprocess crash-recovery matrix; run explicitly"]
 fn crash_lifecycle_reopens_consistently() {
     let trials: usize = std::env::var("ASWP_JOURNAL_CRASH_TRIALS")
-        .unwrap_or_else(|_| "22".into())
+        .unwrap_or_else(|_| "28".into())
         .parse()
         .unwrap();
-    assert!((22..=1000).contains(&trials));
+    assert!((28..=1000).contains(&trials));
     let cases = [
         ("register", "event"),
         ("register", "projection"),
@@ -127,9 +144,15 @@ fn crash_lifecycle_reopens_consistently() {
         ("remove", "projection"),
         ("remove", "mapping"),
         ("remove", "committed"),
+        ("rebind", "event"),
+        ("rebind", "projection"),
+        ("rebind", "committed"),
         ("plan", "event"),
         ("plan", "projection"),
         ("plan", "committed"),
+        ("gents-plan", "event"),
+        ("gents-plan", "projection"),
+        ("gents-plan", "committed"),
         ("spawn", "event"),
         ("spawn", "projection"),
         ("spawn", "committed"),
@@ -142,9 +165,15 @@ fn crash_lifecycle_reopens_consistently() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");
         let mut store = Store::open(&root).unwrap();
-        let profile = store
-            .register(Harness::Claude, "work".parse().unwrap())
-            .unwrap();
+        let profile = if matches!(action, "rebind" | "gents-plan") {
+            store
+                .register_gents("work".parse().unwrap(), binding(9191))
+                .unwrap()
+        } else {
+            store
+                .register(Harness::Claude, "work".parse().unwrap())
+                .unwrap()
+        };
         if action == "remove" {
             store.map(&profile.alias, temp.path()).unwrap();
         }
@@ -235,7 +264,17 @@ fn crash_lifecycle_reopens_consistently() {
                     assert!(recovered.profiles().unwrap().is_empty());
                     assert!(recovered.mappings().unwrap().is_empty());
                 }
+                "rebind" => assert_eq!(
+                    recovered.profiles().unwrap()[0]
+                        .gents
+                        .as_ref()
+                        .unwrap()
+                        .address()
+                        .port(),
+                    9192
+                ),
                 "plan" => assert_eq!(recovered.unfinished().unwrap().len(), 1),
+                "gents-plan" => assert!(recovered.runs(1).unwrap()[0].gents_session.is_some()),
                 "spawn" => assert_eq!(recovered.run(&run).unwrap().observed_pid, Some(42)),
                 "finish" => assert_eq!(recovered.run(&run).unwrap().exit_code, Some(7)),
                 _ => unreachable!(),

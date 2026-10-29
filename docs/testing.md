@@ -68,10 +68,11 @@ categories and the tail containing any minimized input and replay seed.
 
 The separate journal crash matrix kills an owned subprocess at the event-log
 write, projection write, and immediately after commit for registration, rename,
-disable, removal, run intent, spawn observation and completion. It also kills
-after removal's mapping deletion. Each trial reopens the real database,
+disable, removal, engine rebinding, native and external-session run intents,
+spawn observation and completion. It also kills after removal's mapping
+deletion. Each trial reopens the real database,
 checks replay and projections, and checks that unfinished runs still fence
-profile reuse. A 220-trial run passed locally on Linux; CI is configured to run
+profile reuse. A 224-trial run passed locally on Linux; CI is configured to run
 the same matrix on all three hosts. These hook points do not cover every SQL or
 filesystem write, power loss, all profile operations, or provider processes,
 so they do not complete the broader crash-recovery gate.
