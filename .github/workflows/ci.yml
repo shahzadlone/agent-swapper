@@ -151,6 +151,18 @@ jobs:
           key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
       - run: cargo +1.98.0 deny --locked check
 
+  linux-manager-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Qualify root-owned service cleanup
+        run: |
+          python3 -m unittest discover -s tools -p test_linux_managed_scope.py -v
+          python3 tools/check_linux_managed_scope.py
+
   linux-namespace-evidence:
     # A second distribution image gives the experimental namespace boundary a
     # chance to run without weakening the newer runner's security settings.

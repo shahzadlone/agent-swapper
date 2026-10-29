@@ -386,6 +386,19 @@ in CI for its platform-specific evidence.
 
 ## Remaining gates
 
+A separate provider-free CI experiment now asks the system systemd manager to
+start a nondelegated service as the ordinary runner user. It checks that the
+service and ancestor migration controls remain root-owned and cannot be opened
+for writing by that user, then lets the main process exit with a detached writer
+still active. Graceful and forced-stop trials require manager removal of the
+original scope, a stopped worker heartbeat and a continuing outside writer.
+This experiment runs only on disposable hosted CI; it never provisions a local
+service or changes host security settings. Its result is pending. It does not
+qualify interactive terminal behavior, manager authentication, receipt binding,
+administrator adversaries, external delegated work or production integration.
+Using a system manager in a shipped backend would need an explicitly authorized
+installation and a narrowly reviewed control interface.
+
 Same-user cgroup migration is a release-blocking containment concern. This
 prototype requires the delegated parent `cgroup.procs` to be writable, and the
 target currently runs with the same user identity as the supervisor. The
