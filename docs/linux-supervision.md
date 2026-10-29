@@ -157,6 +157,15 @@ visible files during destruction; those implementation details need qualificatio
 on supported kernels and against the complete failure model before relying on
 the missing file as proof.
 
+The actual CLI guardian's two-step empty-observation and retirement handshake
+passed the delegated Linux job at `b827509` in
+[CI run 40831925937](https://github.com/shahzadlone/agent-swapper/actions/runs/40831925937/job/123307869893).
+That run predates the missing-events and same-name replacement observations;
+it does not qualify them or the production launcher. An additional delegated
+case now interrupts startup after transferring the scope and lease but before
+launch data, and requires cleanup while the journal remains unresolved. Its
+kernel-dependent result must be established by hosted CI.
+
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;
 the guardian has a different process group and no terminal standard streams.
