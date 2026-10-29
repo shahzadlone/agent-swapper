@@ -14,6 +14,8 @@ read from the published registry archive after its SHA-256 is checked against
 are refused. Available dependency NOTICE files and the project's license and
 notices are included. This generation is a starting point for a release-specific
 license and notice review; it is not a legal determination.
+The report is generated to a temporary file, using cargo-about's documented
+file-output mode, so a PowerShell ancestor does not block the Windows build.
 
 Packaging and pre-attestation checks also reject Unicode control/format
 characters, non-NFC names, common case collisions, file/directory conflicts,

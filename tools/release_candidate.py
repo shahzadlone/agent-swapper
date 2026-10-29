@@ -162,11 +162,20 @@ def candidate(output, allow_dirty):
         add(files, name, ROOT / name)
     add(files, "assets/brand/THIRD_PARTY_NOTICES.txt", ROOT / "assets/brand/THIRD_PARTY_NOTICES.txt")
     verify_about()
-    try:
-        licenses = run(["cargo", "about", "generate", "--locked", "--workspace", "--fail", "tools/licenses.hbs"])
-    except subprocess.CalledProcessError as error:
-        detail = attribution_diagnostic(error.stderr, (ROOT / "Cargo.lock").read_text(encoding="utf-8"))
-        raise ValueError("attribution tool failed; " + detail) from error
+    # cargo-about refuses stdout redirection if PowerShell is any ancestor,
+    # including the standard Windows CI shell. Its supported file-output mode
+    # avoids PowerShell encoding changes and works on the other hosts as well.
+    with tempfile.TemporaryDirectory(prefix="aswp-attribution-") as temp:
+        report = Path(temp) / "licenses.txt"
+        try:
+            run(["cargo", "about", "generate", "--locked", "--workspace", "--fail",
+                 "--output-file", str(report), "tools/licenses.hbs"])
+        except subprocess.CalledProcessError as error:
+            detail = attribution_diagnostic(error.stderr, (ROOT / "Cargo.lock").read_text(encoding="utf-8"))
+            raise ValueError("attribution tool failed; " + detail) from error
+        if report.is_symlink() or not report.is_file():
+            raise ValueError("dependency attribution report is missing or invalid")
+        licenses = report.read_bytes()
     if not licenses.strip() or b"option-ext" not in licenses:
         raise ValueError("dependency attribution is incomplete")
     files["THIRD_PARTY_LICENSES.txt"] = (licenses, 0o644)
