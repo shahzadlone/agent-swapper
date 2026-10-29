@@ -130,6 +130,8 @@ pub enum Error {
         "windows-job containment requires Windows and a native profile; gents runtime work is externally owned"
     )]
     UnsupportedContainment,
+    #[error("windows-job containment requires a process-lifetime root Job before launch")]
+    WindowsRootRequired,
     #[error(
         "could not confirm completion of supervised run {run_id}; inspect `aswp runs {run_id}` and verify its processes have stopped before manual recovery"
     )]
@@ -254,6 +256,7 @@ impl Error {
             Self::UnsupportedGentsOperation => "unsupported_gents_operation",
             Self::UnsupportedSession => "unsupported_session",
             Self::UnsupportedContainment => "unsupported_containment",
+            Self::WindowsRootRequired => "windows_root_required",
             Self::SupervisionIncomplete { .. } => "supervision_incomplete",
             Self::NoRecordedSession => "no_recorded_session",
             Self::SessionNotResumable => "session_not_resumable",

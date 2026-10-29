@@ -24,6 +24,7 @@ use win32job::{ExtendedLimitInfo, Job};
 
 const CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(10);
+static ROOT: OnceLock<std::result::Result<Job, String>> = OnceLock::new();
 
 /// Permanently place this process in a kill-on-close root Job. Every child
 /// created afterwards inherits the Job unless an existing external Job permits
@@ -32,7 +33,6 @@ const POLL: Duration = Duration::from_millis(10);
 /// must prevent a contained launch. The non-inherited handle stays open until
 /// process termination; closing it sooner would terminate the caller itself.
 pub fn install_process_root() -> io::Result<()> {
-    static ROOT: OnceLock<std::result::Result<Job, String>> = OnceLock::new();
     ROOT.get_or_init(|| {
         let setup = || -> io::Result<Job> {
             let mut limits = ExtendedLimitInfo::new();
@@ -46,6 +46,10 @@ pub fn install_process_root() -> io::Result<()> {
     .as_ref()
     .map(|_| ())
     .map_err(|error| io::Error::other(error.clone()))
+}
+
+pub(crate) fn process_root_installed() -> bool {
+    ROOT.get().is_some_and(std::result::Result::is_ok)
 }
 
 /// An unused local scope. Dropping it closes its sole Job handle.

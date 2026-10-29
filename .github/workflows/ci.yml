@@ -30,6 +30,13 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 2
         run: cargo +1.98.0 run --locked -p agentswapper-core --example windows_supervision_probe
+      - name: Windows pre-assignment crash containment
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: |
+          cargo +1.98.0 test --locked -p agentswapper-core --lib supervision::windows_job::tests::process_root_retires_child_if_supervisor_dies_before_per_run_assignment -- --exact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output '::notice title=Windows root Job::suspended child retired after supervisor death before per-run assignment'
       - name: Linux admission transport probe
         if: runner.os == 'Linux'
         timeout-minutes: 2

@@ -90,7 +90,8 @@ now explicit. A review is supporting evidence, not runtime qualification.
 Without a process-lifetime root Job, the supervisor-crash window before first
 Job assignment can leak a suspended process. The CLI now installs such a root
 for the experimental option; the new gap-specific fixture and integrated CLI
-change await hosted Windows execution. Embedded callers must opt in separately.
+change await hosted Windows execution. Embedded callers must opt in separately;
+the launch path refuses a per-run Job until that root is installed.
 Dependency failure cleanup may wait without a timeout. Membership-list
 overflow was source-audited as an error path, not stress-tested with thousands of
 processes. Same-user malicious interference, external services, filesystem and

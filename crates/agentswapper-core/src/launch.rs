@@ -433,9 +433,15 @@ impl LaunchPlan {
         store: &mut Store,
         lease: &crate::store::ProfileLease,
     ) -> Result<i32> {
-        use crate::{store::LocalScope, supervision::windows_job::WindowsJob};
+        use crate::{
+            store::LocalScope,
+            supervision::windows_job::{WindowsJob, process_root_installed},
+        };
         if self.profile.harness == Harness::Gents {
             return Err(Error::UnsupportedContainment);
+        }
+        if !process_root_installed() {
+            return Err(Error::WindowsRootRequired);
         }
         let scope = WindowsJob::create()?;
         let id = store.begin_run_with_scope(
@@ -805,7 +811,61 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_launch_refuses_missing_process_root_before_intent() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let plan = LaunchPlan::build(
+            &store,
+            profile,
+            Some(&std::env::current_exe().unwrap()),
+            temp.path(),
+            Vec::new(),
+            false,
+        )
+        .unwrap()
+        .with_containment(Some(Containment::WindowsJob))
+        .unwrap();
+        assert!(matches!(
+            plan.execute_prepared(&mut store),
+            Err(Error::WindowsRootRequired)
+        ));
+        assert!(store.runs(1).unwrap().is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn supervised_spawn_error_preserves_intent_without_inventing_empty_evidence() {
+        use wait_timeout::ChildExt;
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "launch::tests::supervised_spawn_error_fixture",
+                "--ignored",
+            ])
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let status = child
+            .wait_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        if status.is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "supervised spawn fixture failed or timed out"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "fixture runs in a separate process because its root Job is process-wide"]
+    fn supervised_spawn_error_fixture() {
+        crate::supervision::windows_job::install_process_root().unwrap();
         let temp = tempfile::tempdir().unwrap();
         let mut store = Store::open(&temp.path().join("state")).unwrap();
         let profile = store

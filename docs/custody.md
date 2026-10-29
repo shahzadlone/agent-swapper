@@ -168,8 +168,8 @@ exit, so a newly created suspended child inherits the root before per-run Job
 assignment. Installing the root affects the entire CLI process and all children
 it creates, and is refused when the existing Job hierarchy cannot accept it.
 Embedded core callers must explicitly install this process-wide root themselves;
-without it a supervisor crash before per-run assignment can leave a suspended
-process behind. The exact crash window is covered by a Windows fixture with an
+the launch path refuses to start or record an intent until they do. The lower-level
+Job API does not enforce that precondition by itself. The exact crash window is covered by a Windows fixture with an
 independent outer Job observer; the new integration still requires hosted CI
 evidence. Dependency cleanup after a nested-wrapper failure can use an unbounded
 wait. The backend does not constrain work requested through WMI, COM, Task
