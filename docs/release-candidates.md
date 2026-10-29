@@ -42,6 +42,9 @@ Build markers check that each cached tool binary matches the recorded build, but
 are unsigned and cannot authenticate either binary against an attacker who can
 replace it and its marker. They do not establish independent build provenance.
 
+The candidate build sets `SOURCE_DATE_EPOCH` to the source commit's timestamp
+for both the original and separate-runner rebuild; this is one reproducibility
+input, not proof that every compiler and dependency honors it.
 The ZIP contains `BUILD-INFO.json` with the revision, dirty state, Rust host,
 toolchain, lockfile hash, and hashes of its other contents. The build remaps
 workspace and home paths, and packaging refuses binaries containing those local

@@ -15,6 +15,9 @@ def main():
         return subprocess.run(args, cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
     revision = output("git", "rev-parse", "--verify", "HEAD")
     status = output("git", "status", "--porcelain", "--untracked-files=all")
+    source_epoch = output("git", "show", "-s", "--format=%ct", revision)
+    if not source_epoch.isascii() or not source_epoch.isdecimal() or len(source_epoch) > 16:
+        raise SystemExit("commit timestamp is invalid for SOURCE_DATE_EPOCH")
     env = os.environ.copy()
     if env.get("RUSTFLAGS") or env.get("CARGO_ENCODED_RUSTFLAGS") or env.get("CARGO_TARGET_DIR"):
         raise SystemExit("unset RUSTFLAGS, CARGO_ENCODED_RUSTFLAGS and CARGO_TARGET_DIR for a candidate build")
@@ -25,6 +28,9 @@ def main():
         "--remap-path-prefix", f"{Path.home()}=/build-home",
         "--remap-path-prefix", f"{ROOT}=/src/agentswapper",
     ])
+    # Independent builders use the same source timestamp, regardless of the
+    # host clock or a caller-provided SOURCE_DATE_EPOCH.
+    env["SOURCE_DATE_EPOCH"] = source_epoch
     subprocess.run(["cargo", "+1.98.0", "build", "--locked", "--release", "-p", "agentswapper-cli", "--bins"],
                    cwd=ROOT, env=env, check=True)
     if revision != output("git", "rev-parse", "--verify", "HEAD") or status != output("git", "status", "--porcelain", "--untracked-files=all"):
