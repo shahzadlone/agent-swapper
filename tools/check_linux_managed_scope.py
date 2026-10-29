@@ -174,6 +174,8 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                     and opened.st_uid == 0, "opened scope identity does not match")
             before = (directory / 'outside-heartbeat').read_text()
             if client_loss:
+                client_name = Path(f'/proc/{manager.pid}/comm').read_text().strip()
+                require(client_name == 'systemd-run', "owned launcher has not execed the systemd-run client")
                 manager.kill()
                 result = manager.wait(timeout=3)
                 # Losing the owned client is not evidence that the target

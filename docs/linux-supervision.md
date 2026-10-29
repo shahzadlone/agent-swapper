@@ -405,6 +405,10 @@ client after readiness, checks that the populated workload remains owned by the
 manager, then permits main-process exit and requires descendant cleanup. A
 client's death is never classified as target exit; the measured client exit was
 `-9`, while original scope removal and worker cessation were checked separately.
+The next revision also requires the owned launcher's kernel command name to be
+`systemd-run` immediately before failure injection, so losing a surviving sudo
+wrapper cannot be confused with killing the actual client. Earlier trials did
+not include that explicit command-name observation.
 The next revision additionally retains the original directory descriptor and
 requires its events file to disappear after cleanup; all three trials passed
 with that observation at `3fc45f4` in
