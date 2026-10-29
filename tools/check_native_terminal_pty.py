@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check native-launch terminal restoration with an isolated fixture agent."""
 import fcntl
+import errno
 import json
 import os
 from pathlib import Path
@@ -47,13 +48,28 @@ def check(binary, mode):
             while process.poll() is None:
                 assert time.monotonic() < deadline, "fixture did not exit"
                 if select.select([master], [], [], 0.05)[0]:
-                    output.extend(os.read(master, 65536))
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError as error:
+                        if error.errno != errno.EIO:
+                            raise
+                        data = b""
+                    if data:
+                        output.extend(data)
                 if mode == "interrupt" and b"fixture-ready" in output and not sent_interrupt:
                     # The supervisor is our owned, unreaped process-group leader.
                     os.killpg(process.pid, signal.SIGINT)
                     sent_interrupt = True
             while select.select([master], [], [], 0)[0]:
-                output.extend(os.read(master, 65536))
+                try:
+                    data = os.read(master, 65536)
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        raise
+                    break
+                if not data:
+                    break
+                output.extend(data)
             expected = 130 if mode == "interrupt" else (125 if mode == "foreground-change" else 42)
             assert process.returncode == expected, f"unexpected exit: {process.returncode}: {bytes(output)!r}"
             assert b"fixture-ready" in output
@@ -83,7 +99,9 @@ def main():
         raise SystemExit("Usage on POSIX: check_native_terminal_pty.py PATH_TO_ASWP")
     binary = Path(sys.argv[1]).resolve(strict=True)
     for mode in ("exit", "interrupt", "detached", "foreground-change"):
+        print(f"::notice title=Native terminal fixture::starting {mode}", flush=True)
         check(binary, mode)
+        print(f"::notice title=Native terminal fixture::completed {mode}", flush=True)
 
 
 if __name__ == "__main__":
