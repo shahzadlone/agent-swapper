@@ -507,6 +507,41 @@ mod tests {
     }
 
     #[test]
+    fn slow_progress_does_not_restart_the_deadline() -> io::Result<()> {
+        let (writer, mut reader) = UnixStream::pair()?;
+        let worker = std::thread::spawn(move || {
+            for _ in 0..30 {
+                if rustix::net::send(&writer, b"x", rustix::net::SendFlags::NOSIGNAL).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let result = read_exact_until(
+            &mut reader,
+            &mut [0; 128],
+            Instant::now() + Duration::from_millis(80),
+        );
+        drop(reader);
+        worker
+            .join()
+            .map_err(|_| io::Error::other("writer thread failed"))?;
+        let error = match result {
+            Err(error) => error,
+            Ok(()) => {
+                return Err(io::Error::other(
+                    "incomplete slow transfer unexpectedly succeeded",
+                ));
+            }
+        };
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn roundtrip_exec_preserves_binary_arguments_environment_and_directory() -> io::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = dunce::canonicalize(temp.path())?;
