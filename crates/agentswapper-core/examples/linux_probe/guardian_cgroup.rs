@@ -1,55 +1,17 @@
 //! Combined cooperating-fixture experiment. No production journal or stop receipt.
 use super::*;
-use crate::cgroup::validate_directory;
-use rustix::fs::{Mode, ResolveFlags, openat2};
+use crate::cgroup;
 use rustix::{
     net::{RecvFlags, recv},
     process::{Signal, getpid, kill_process_group},
 };
-use std::os::unix::fs::MetadataExt;
 use std::{fs::TryLockError, os::unix::process::ExitStatusExt};
-use uuid::Uuid;
-
-fn scope(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
-    validate_directory(parent)?;
-    validate_directory(leaf)?;
-    require(
-        contains(parent, std::process::id())?,
-        "scope parent is not guardian's current cgroup",
-    )?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| {
-            name.strip_prefix("aswp-probe-")
-                .and_then(|id| Uuid::parse_str(id).ok())
-                .is_some()
-        })
-        .ok_or_else(|| io::Error::other("invalid fixture scope name"))?;
-    let expected = File::from(openat2(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
-    )?);
-    let actual = leaf.metadata()?;
-    let expected = expected.metadata()?;
-    require(
-        actual.dev() == expected.dev() && actual.ino() == expected.ino(),
-        "scope descriptor does not identify the parent's named child",
-    )?;
-    require(
-        !contains(leaf, std::process::id())?,
-        "guardian cannot contain itself",
-    )
-}
 
 pub(super) fn fixture(role: &str, directory: &Path, path: &Path) -> io::Result<()> {
     let parent = File::from(admission_transport::receive(io::stdin())?);
     let leaf = File::from(admission_transport::receive(io::stdin())?);
     let lease = File::from(admission_transport::receive(io::stdin())?);
-    scope(&parent, &leaf, path)?;
+    cgroup::validate_scope(&parent, &leaf, path)?;
     if role == "guardian-parent" {
         require(
             getpgrp() == getpid(),
@@ -203,11 +165,11 @@ fn run_once(domain: &Domain, guardian_loss: bool) -> io::Result<()> {
     let mut group = domain.create()?;
     // Test the capability boundary before starting any fixture work.
     require(
-        scope(group.parent(), group.parent(), group.path()).is_err(),
+        cgroup::validate_scope(group.parent(), group.parent(), group.path()).is_err(),
         "guardian accepted its delegated parent as a kill scope",
     )?;
     require(
-        scope(group.parent(), group.directory(), Path::new("..")).is_err(),
+        cgroup::validate_scope(group.parent(), group.directory(), Path::new("..")).is_err(),
         "guardian accepted a traversal scope name",
     )?;
     let _release = Release(directory.path().to_owned());

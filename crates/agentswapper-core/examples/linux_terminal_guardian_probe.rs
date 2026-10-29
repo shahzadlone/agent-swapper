@@ -42,7 +42,7 @@ mod fixture {
         fs::{self, File},
         io::{self, BufRead, IsTerminal, Write},
         os::unix::{
-            ffi::OsStrExt,
+            ffi::{OsStrExt, OsStringExt},
             process::{CommandExt, ExitStatusExt},
         },
         path::{Path, PathBuf},
@@ -112,6 +112,32 @@ mod fixture {
         }
     }
 
+    struct FallbackScope {
+        parent: File,
+        leaf: File,
+        path: PathBuf,
+        _lease: File,
+        retired: bool,
+    }
+
+    impl Drop for FallbackScope {
+        fn drop(&mut self) {
+            if self.retired || cgroup::validate_scope(&self.parent, &self.leaf, &self.path).is_err()
+            {
+                return;
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let _ = (|| -> io::Result<()> {
+                cgroup::control(&self.leaf, "cgroup.kill", rustix::fs::OFlags::WRONLY)?
+                    .write_all(b"1\n")?;
+                cgroup::until(deadline, || {
+                    Ok((!cgroup::populated(&self.leaf)?).then_some(()))
+                })?;
+                cgroup::retire_transferred(&self.parent, &self.leaf, &self.path, deadline)
+            })();
+        }
+    }
+
     fn parent(dir: &Path, delegated: Option<&Path>) -> io::Result<()> {
         require(
             getpgrp() == getpid(),
@@ -156,8 +182,36 @@ mod fixture {
         // Only the guardian's transferred open-file description retains this
         // lock. The observer checks it independently while the parent is alive
         // and after a parent-only kill.
-        drop(lease);
+        let guardian_loss = dir.join("with-guardian-loss").exists();
+        let fallback = if guardian_loss {
+            require(
+                delegated.is_some(),
+                "guardian-loss fixture requires delegation",
+            )?;
+            rustix::net::sockopt::set_socket_timeout(
+                &channel,
+                rustix::net::sockopt::Timeout::Recv,
+                Some(Duration::from_secs(5)),
+            )?;
+            let parent = File::from(receive(&channel)?);
+            let leaf = File::from(receive(&channel)?);
+            let record: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("scope"))?)?;
+            let bytes: Vec<u8> = serde_json::from_value(record["pathBytes"].clone())?;
+            let path = PathBuf::from(OsString::from_vec(bytes));
+            cgroup::validate_scope(&parent, &leaf, &path)?;
+            Some(FallbackScope {
+                parent,
+                leaf,
+                path,
+                _lease: lease,
+                retired: false,
+            })
+        } else {
+            drop(lease);
+            None
+        };
         let deadline = Instant::now() + BUDGET;
+        let mut injected = false;
         let status = loop {
             if dir.join("kill-parent").exists() {
                 // Kill only this fixture. The guardian must stop its still-live
@@ -165,12 +219,46 @@ mod fixture {
                 kill_process(getpid(), Signal::KILL)?;
                 return Err(io::Error::other("fixture self-kill returned"));
             }
+            if fallback.is_some() && dir.join("kill-guardian").exists() && !injected {
+                helper.kill()?;
+                injected = true;
+            }
             if let Some(status) = helper.try_wait()? {
                 break status;
             }
             require(Instant::now() < deadline, "guardian did not finish")?;
             std::thread::sleep(Duration::from_millis(10));
         };
+        if let Some(mut fallback) = fallback {
+            require(
+                injected && status.signal() == Some(9),
+                "guardian loss was not observed",
+            )?;
+            cgroup::validate_scope(&fallback.parent, &fallback.leaf, &fallback.path)?;
+            cgroup::control(&fallback.leaf, "cgroup.kill", rustix::fs::OFlags::WRONLY)?
+                .write_all(b"1\n")?;
+            cgroup::until(Instant::now() + Duration::from_secs(10), || {
+                Ok((!cgroup::populated(&fallback.leaf)?).then_some(()))
+            })?;
+            publish(dir, "parent-empty", json!({"guardianSignal":9}))?;
+            cgroup::until(Instant::now() + Duration::from_secs(10), || {
+                Ok(dir.join("retire-scope").exists().then_some(()))
+            })?;
+            cgroup::retire_transferred(
+                &fallback.parent,
+                &fallback.leaf,
+                &fallback.path,
+                Instant::now() + Duration::from_secs(10),
+            )?;
+            fallback.retired = true;
+            publish(dir, "scope-finished", json!({"retired":true}))?;
+            publish(dir, "cleanup-ready", json!({"leaseHeld":true}))?;
+            cgroup::until(Instant::now() + Duration::from_secs(10), || {
+                Ok(dir.join("release-lease").exists().then_some(()))
+            })?;
+            drop(fallback);
+            return publish(dir, "finished", json!({"guardianSignal":9}));
+        }
         drop(channel);
         require(status.success(), "guardian failed")
     }
@@ -217,6 +305,11 @@ mod fixture {
                 "scope",
                 json!({"parentBytes":domain.path().as_os_str().as_bytes(),"pathBytes":scope.path().as_os_str().as_bytes()}),
             )?;
+            if dir.join("with-guardian-loss").exists() {
+                let channel = rustix::io::dup(io::stdin())?;
+                send(&channel, GO, &[scope.parent().as_fd()])?;
+                send(&channel, GO, &[scope.directory().as_fd()])?;
+            }
         }
         let (grant, gate) = pair()?;
         let mut shim = command("shim", dir)?;

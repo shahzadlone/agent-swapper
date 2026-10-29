@@ -176,6 +176,19 @@ the observer then confirms it can acquire the lock. This is fixture evidence,
 not integration with the production profile lease or journal. The delegated
 cases require CI at the change's exact commit.
 
+A further delegated-only case injects guardian SIGKILL through the parent's
+owned child handle. Before the target starts, the guardian transfers the parent
+and leaf directory descriptors to the foreground supervisor, which validates
+their filesystem, ownership, membership, direct-child name and inode identity.
+The surviving parent retains the lease, kills the leaf and waits for kernel
+population zero. An independent observer checks empty state and lock exclusion
+before permitting retirement, then verifies removal and only permits lease
+release afterwards. The guardian's death leaves no owned target status in the
+parent; the fixture records guardian loss rather than inventing a target exit
+status or a production custody receipt. A bounded drop cleanup is a fixture
+backstop, not a guarantee after simultaneous supervisor loss. This case requires
+delegated CI at its own commit before claiming runtime evidence.
+
 The parent-loss case passed the delegated Linux CI job at `3f541db`, including
 the explicit kernel-empty, lock-exclusion and outside-writer observations.
 The reverse case requests failure injection through the surviving parent's
@@ -189,8 +202,8 @@ journal reconciliation remain open gates.
 
 ## Remaining gates
 
-Qualify the combined terminal/cgroup mode with its transferred lease, then
-exercise guardian loss through that same terminal topology.
+Qualify the combined terminal/cgroup mode with its transferred lease and
+guardian-loss case in delegated CI, then integrate it with the actual journal.
 Replace fixture lifetime limits with phase-specific startup/cleanup deadlines
 before production use; normal live sessions and suspension must not expire.
 Spawn trusted helpers before changing inherited interrupt dispositions in the

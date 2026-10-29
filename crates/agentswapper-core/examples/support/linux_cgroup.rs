@@ -99,6 +99,66 @@ pub(crate) fn populated(directory: &File) -> io::Result<bool> {
     }
 }
 
+/// Validate a transferred direct-child capability before either supervisor
+/// uses it for cleanup. This is fixture-only and does not issue a receipt.
+pub(crate) fn validate_scope(parent: &File, leaf: &File, path: &Path) -> io::Result<()> {
+    validate_directory(parent)?;
+    validate_directory(leaf)?;
+    require(
+        contains(parent, std::process::id())?,
+        "supervisor is outside scope parent",
+    )?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| {
+            s.strip_prefix("aswp-probe-")
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .is_some()
+        })
+        .ok_or_else(|| io::Error::other("invalid fixture scope name"))?;
+    let expected = File::from(openat2(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+    )?);
+    let actual = leaf.metadata()?;
+    let expected = expected.metadata()?;
+    require(
+        actual.dev() == expected.dev() && actual.ino() == expected.ino(),
+        "scope descriptor does not identify the parent's named child",
+    )?;
+    require(
+        !contains(leaf, std::process::id())?,
+        "supervisor cannot contain itself",
+    )
+}
+
+// Shared by two example binaries; only the terminal fixture adopts a scope.
+#[allow(dead_code)]
+pub(crate) fn retire_transferred(
+    parent: &File,
+    leaf: &File,
+    path: &Path,
+    deadline: Instant,
+) -> io::Result<()> {
+    validate_scope(parent, leaf, path)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::other("missing scope name"))?;
+    until(deadline, || {
+        validate_scope(parent, leaf, path)?;
+        require(!populated(leaf)?, "transferred scope became populated")?;
+        match unlinkat(parent, name, AtFlags::REMOVEDIR) {
+            Ok(()) => Ok(Some(())),
+            Err(rustix::io::Errno::BUSY | rustix::io::Errno::NOTEMPTY) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    })
+}
+
 pub(crate) struct Domain {
     directory: File,
     path: PathBuf,

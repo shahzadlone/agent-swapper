@@ -112,10 +112,12 @@ def run_case(binary, mode, delegated=None):
         root = Path(directory)
         shell = Shell(root)
         try:
-            detached = mode in ("detached-writer", "detached-parent-kill")
+            detached = mode in ("detached-writer", "detached-parent-kill", "detached-guardian-kill")
             if detached:
                 assert delegated is not None, "detached fixture requires an explicit scope"
                 (root / "with-writer").touch()
+            if mode == "detached-guardian-kill":
+                (root / "with-guardian-loss").touch()
             command = f"{shlex.quote(str(binary))} parent {shlex.quote(str(root))}"
             if delegated is not None:
                 command += f" {shlex.quote(str(delegated))}"
@@ -183,6 +185,13 @@ def run_case(binary, mode, delegated=None):
                 shell.hangup()
             elif mode in ("parent-kill", "detached-parent-kill"):
                 (root / "kill-parent").touch()
+            elif mode == "detached-guardian-kill":
+                (root / "kill-guardian").touch()
+                assert marker(shell, root, "parent-empty") == {"guardianSignal": 9}
+                assert not lease_available(root), "surviving parent lost its lease"
+                assert "populated 0" in (scope_path / "cgroup.events").read_text().splitlines()
+                assert not (root / "writer-exited").exists()
+                (root / "retire-scope").touch()
             elif mode in ("redirected-stderr", "detached-writer"):
                 shell.send(b"exit\n")
             else:
@@ -193,13 +202,15 @@ def run_case(binary, mode, delegated=None):
             if scope_path is not None:
                 assert marker(shell, root, "scope-finished") == {"retired": True}
                 assert not scope_path.exists(), "terminal scope was not retired"
-                if detached:
+                if detached and mode != "detached-guardian-kill":
                     assert marker(shell, root, "writer-stopped") == {"signal": 9}
                     assert not (root / "writer-exited").exists()
             (root / "release-lease").touch()
             finished = marker(shell, root, "finished")
             shell.wait_for(lambda: lease_available(root))
-            if mode == "interrupt":
+            if mode == "detached-guardian-kill":
+                assert finished == {"guardianSignal": 9}
+            elif mode == "interrupt":
                 # The guardian may observe channel EOF before target SIGINT;
                 # a targeted kill on that path is still a fixture cleanup.
                 assert finished["signal"] in (signal.SIGINT, signal.SIGKILL)
@@ -233,6 +244,7 @@ def run_case(binary, mode, delegated=None):
                 shell.wait_for(lambda: f"__ASWP_RC={expected}__".encode() in shell.output)
             print(f"{mode}: pass", flush=True)
         finally:
+            (root / "retire-scope").touch()
             (root / "release-lease").touch()
             shell.close()
 
@@ -248,11 +260,11 @@ def main():
     delegated = args.cgroup_root.absolute() if args.cgroup_root is not None else None
     modes = ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr"]
     if delegated is not None:
-        modes += ["detached-writer", "detached-parent-kill"]
+        modes += ["detached-writer", "detached-parent-kill", "detached-guardian-kill"]
     for mode in modes:
         run_case(binary, mode, delegated)
     if delegated is not None:
-        print("::notice title=Linux terminal cgroup::nine terminal cases: admission and retirement, redirected stderr, detached writer SIGKILL after normal root exit and parent loss", flush=True)
+        print("::notice title=Linux terminal cgroup::ten terminal cases: detached writer cleanup after root exit, parent loss, and guardian loss with retained lease", flush=True)
 
 
 if __name__ == "__main__":
