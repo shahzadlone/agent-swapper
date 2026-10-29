@@ -67,8 +67,10 @@ scope, and records its PID before acknowledging admission. The shim validates
 the parent/leaf identity and its own membership before accepting the envelope
 and again after GO, then execs the target with the transferred streams. Its
 receives share one deadline. A local subprocess test supplies ordinary
-directories and confirms that a fully queued command cannot run; positive
-cgroup and crash results require delegated CI at this change's commit. Both
+directories and confirms that a fully queued command cannot run. The shimmed
+journal and supervisor-loss cases passed the delegated Linux step in
+[CI run 40829689354](https://github.com/shahzadlone/agent-swapper/actions/runs/40829689354/job/123300777995)
+at `ed1e2aa`, using the test-harness shim. Both
 CLI executables now include an internal shim entry, which refuses launch without
 the private admission protocol and a validated scope. Ordinary launches do not
 call it, and it does not issue a stop receipt. The delegated journal fixture
