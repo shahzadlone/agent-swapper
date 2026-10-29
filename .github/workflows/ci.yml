@@ -216,9 +216,36 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  reproduce-candidate:
+    needs: [candidate]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Test rebuilt candidate comparison
+        run: python -m unittest discover -s tools -p test_verify_rebuilt_candidate.py -v
+      - name: Rebuild on a separate runner
+        run: python tools/build_candidate_binaries.py
+      - name: Download platform candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: unsigned-candidate-${{ runner.os }}-${{ runner.arch }}
+          path: target/compare-candidate
+      - name: Verify and compare rebuilt executables
+        run: python tools/verify_rebuilt_candidate.py target/compare-candidate
+
   attest-preview:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, dependencies, candidate]
+    needs: [test, dependencies, candidate, reproduce-candidate]
     runs-on: ubuntu-latest
     permissions:
       contents: read

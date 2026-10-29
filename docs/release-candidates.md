@@ -70,7 +70,11 @@ The tool refuses to replace an existing archive or checksum. CI keeps unsigned
 candidates as short-lived workflow artifacts. For a push to `main`, a separate
 job downloads the three candidates from that same run, verifies the target set,
 checksums, source revision, lockfile hash and archive inventory, and signs a
-provenance attestation. It also compares the workspace version and project
+provenance attestation. Before signing, a separate fresh hosted runner per
+platform rebuilds both executables with the candidate build script, validates
+the matching candidate, and compares each executable's SHA-256. This detects
+differences across those runners but does not establish independent control of
+the runner images, toolchain or dependency sources. It also compares the workspace version and project
 license and notices with the checked-out source. It verifies the Sigstore bundle against the repository,
 workflow, ref, commit and GitHub-hosted runner before storing the bundle as a
 short-lived artifact. Build jobs do not receive attestation or OIDC write
@@ -91,3 +95,16 @@ successfully built the three preview archives and completed the separate
 candidate verification, signing, Sigstore verification and bundle upload steps.
 This evidence applies to that commit and the verifier in that run; subsequent
 changes require their own successful run.
+
+As a local reproducibility experiment, commit `ee229d5` was exported twice
+with `git archive` to distinct source directories on one WSL2 Linux host
+(`x86_64`, kernel `6.18.54.1-microsoft-standard-WSL2`, GCC `14.2.1`, Rust
+`1.98.0`). Each clean tree was built offline with a separate target directory,
+the same home and source path remaps, and `SOURCE_DATE_EPOCH=0`. Byte comparison
+matched both binaries: `aswp` SHA-256
+`c42683b314a8e925dc2d7e6e997c583509bb58a885217a9490e0b635789de397`, and
+`agentswapper` SHA-256
+`bf6a9e9e22e79685bbbc2b6a9de6a5b887efceb0d7a809728f5d0ce744ba29e6`.
+Both builds shared a host, toolchain and dependency cache, and were not compared
+to a candidate archive. This is not independent reproduction or cross-platform
+evidence; the release gate remains open.
