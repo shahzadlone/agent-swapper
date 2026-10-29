@@ -55,6 +55,33 @@ def check_controls(scope):
             raise RuntimeError("unprivileged target can open a migration control for writing")
 
 
+def parse_identity(output, unit, expected, uid, main_pid):
+    require(len(output) <= 4096, "manager identity output exceeds bounds")
+    fields = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition('=')
+        require(separator and key not in fields, "invalid or duplicate manager identity field")
+        fields[key] = value
+    require(set(fields) == {'Id', 'ControlGroup', 'MainPID', 'InvocationID', 'Transient', 'User', 'ActiveState'},
+            "manager identity inventory does not match")
+    require(fields['Id'] == unit + '.service' and fields['ControlGroup'] == expected
+            and fields['User'] == str(uid) and fields['Transient'] == 'yes'
+            and fields['ActiveState'] == 'active', "manager identity binding does not match")
+    require(fields['MainPID'] == str(main_pid) and main_pid > 0, "manager main process does not match")
+    invocation = fields['InvocationID']
+    require(re.fullmatch(r'[0-9a-f]{32}', invocation) and invocation != '0' * 32,
+            "invalid manager invocation identity")
+    return invocation
+
+
+def inspect_identity(unit, expected, uid, main_pid):
+    result = subprocess.run(['systemctl', 'show', unit + '.service', '--no-pager',
+                             '--property=Id,ControlGroup,MainPID,InvocationID,Transient,User,ActiveState'],
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                            check=True, timeout=5)
+    return parse_identity(result.stdout, unit, expected, uid, main_pid)
+
+
 def tick(directory, name, seconds, stop_name=None):
     deadline = time.monotonic() + seconds
     counter = 0
@@ -90,6 +117,7 @@ def role(name, directory, expected, forced):
         return
     require(name == 'service', "unknown fixture role")
     (directory / 'controls-checked').write_text('checked')
+    (directory / 'service-main-pid').write_text(str(os.getpid()))
     # Deliberately let this bounded child outlive the service's main process.
     subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'writer',
                       str(directory), expected, str(int(forced))],
@@ -128,6 +156,12 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             wait_for(lambda: (directory / 'service-ready').exists() or manager.poll() is not None)
             require((directory / 'service-ready').exists(), "managed service failed before readiness")
             require((directory / 'controls-checked').exists(), "control permissions were not checked")
+            main_pid_text = (directory / 'service-main-pid').read_text()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}', main_pid_text), "invalid main process observation")
+            main_pid = int(main_pid_text)
+            invocation = inspect_identity(unit, expected, os.getuid(), main_pid)
+            require(main_pid_text in (scope / 'cgroup.procs').read_text().splitlines(),
+                    "manager main process is outside its reported scope")
             subprocess.run([sys.executable, executable, 'peer', str(directory), expected, str(int(forced))],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, check=True, timeout=5)
@@ -146,6 +180,8 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                 # stopped. The root manager still owns its populated scope.
                 require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
                         "client-loss scope state was not observed")
+                require(inspect_identity(unit, expected, os.getuid(), main_pid) == invocation,
+                        "manager invocation changed after client loss")
             (directory / 'allow-main-exit').write_text('exit')
             if not client_loss:
                 result = manager.wait(timeout=15)

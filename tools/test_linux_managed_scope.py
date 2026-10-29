@@ -8,6 +8,21 @@ import check_linux_managed_scope as probe
 
 
 class ManagedScopeTests(unittest.TestCase):
+    def test_manager_identity_binds_unit_scope_user_and_invocation(self):
+        unit, scope = 'aswp-managed-12-1-graceful', '/system.slice/aswp-managed-12-1-graceful.service'
+        fields = {'Id': unit + '.service', 'ControlGroup': scope, 'MainPID': '42',
+                  'InvocationID': 'a' * 32, 'Transient': 'yes', 'User': '1000', 'ActiveState': 'active'}
+        encode = lambda values: ''.join(f'{key}={value}\n' for key, value in values.items())
+        self.assertEqual(probe.parse_identity(encode(fields), unit, scope, 1000, 42), 'a' * 32)
+        for key, value in [('Id', 'other.service'), ('ControlGroup', '/other'), ('MainPID', '43'),
+                           ('User', '0'), ('Transient', 'no'), ('ActiveState', 'inactive'),
+                           ('InvocationID', '0' * 32), ('InvocationID', 'secret\nInjected=value')]:
+            with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
+                probe.parse_identity(encode({**fields, key: value}), unit, scope, 1000, 42)
+        for output in (encode(fields) + 'MainPID=42\n', encode(fields) + 'Unexpected=value\n', 'x' * 4097):
+            with self.assertRaises(RuntimeError):
+                probe.parse_identity(output, unit, scope, 1000, 42)
+
     def test_local_or_invalid_run_never_starts_a_manager(self):
         for environment in ({}, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
                                  'GITHUB_RUN_ID': 'bad/identity', 'GITHUB_RUN_ATTEMPT': '1'}):

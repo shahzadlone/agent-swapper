@@ -409,6 +409,13 @@ The next revision additionally retains the original directory descriptor and
 requires its events file to disappear after cleanup; all three trials passed
 with that observation at `3fc45f4` in
 [CI run 40905278683](https://github.com/shahzadlone/agent-swapper/actions/runs/40905278683/job/123558223756).
+The next fixture revision also queries the system manager for the exact unit,
+current user, active transient state, main process, cgroup and nonzero invocation
+ID. The main process is checked against live scope membership, and the invocation
+must remain unchanged after client loss. Local parser tests reject mismatches,
+duplicate properties and malformed invocation IDs. Hosted validation of this
+identity binding is pending; a trusted production manager connection and journal
+binding are still required before using it for recovery.
 The experiment does not
 qualify interactive terminal behavior, manager authentication, receipt binding,
 administrator adversaries, external delegated work or production integration.
