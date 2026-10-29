@@ -17,6 +17,19 @@ import termios
 import time
 
 
+def same_terminal_configuration(before, after):
+    before = list(before)
+    after = list(after)
+    if sys.platform == "darwin":
+        # XNU sets PENDIN while switching back to canonical input. It is a
+        # transient kernel input state, not a terminal configuration setting.
+        # See xnu/bsd/sys/termios.h; every other bit and field remains exact.
+        pendin = getattr(termios, "PENDIN", 0x20000000)
+        before[3] &= ~pendin
+        after[3] &= ~pendin
+    return before == after
+
+
 def check(binary, mode):
     with tempfile.TemporaryDirectory(prefix="aswp-native-terminal-") as directory:
         root = Path(directory)
@@ -95,7 +108,7 @@ def check(binary, mode):
             assert b"fixture-ready" in output
             if mode not in ("detached", "foreground-change"):
                 after = termios.tcgetattr(slave)
-                assert after == before, f"native agent left terminal attributes changed; before={before!r}; after={after!r}"
+                assert same_terminal_configuration(before, after), f"native agent left terminal configuration changed; before={before!r}; after={after!r}"
             if mode == "foreground-change":
                 assert b"terminal settings could not be restored" in output
             result = subprocess.run(command + ["runs", "--json"], cwd=root, env=env,
