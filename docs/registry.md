@@ -46,6 +46,8 @@ Private lock and registry-file opens reject multiple hardlinks. On Windows the
 opened handle is also checked for a reparse point; on Unix the final component
 is opened without following symlinks and without blocking on a FIFO. Parent-path
 replacement races and Windows ACL privacy are not eliminated by these checks.
+The [Windows ACL qualification notes](windows-acl.md) describe the remaining
+privacy work and the evaluated libraries.
 
 Schema 2 made the journal envelope timestamp authoritative for each run's
 start. Schema 3 adds optional PID and spawn-time observations. Schema 4 adds validated
