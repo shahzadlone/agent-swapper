@@ -13,6 +13,12 @@ interrupt, termination and hangup signals; actual PTY checks cover those paths.
 Unix event input uses the TTY polling backend with bounded raw reads, so closed
 terminals and incomplete Unicode/escape sequences cannot indefinitely defer
 the next application signal check. See [dependency decisions](dependencies.md#bounded-terminal-input).
+Signal restoration fixtures now keep a controlling-session owner alive while
+they inspect the dashboard child's actual signal status, restored attributes
+and alternate-screen exit bytes. A repeated macOS run had missed that final byte
+sequence when inspecting an exited standalone PTY child. EOF races remain a
+separate direct-child fixture: signal delivery and peer closure must happen in
+the same actor. The strengthened session fixture is awaiting native macOS evidence.
 
 ## Implemented foreground transition
 

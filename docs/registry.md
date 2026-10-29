@@ -42,6 +42,20 @@ files keep their existing open rules. A targeted Windows regression exercises
 that interval and checks hardlink refusal. The Windows tests and all 25
 initialization stress iterations passed at `958c2b4` in
 [CI run 40956272717](https://github.com/shahzadlone/agent-swapper/actions/runs/40956272717/job/123737077303).
+A later repeated run at `5f33d6c` still found `UnsafePath` during concurrent
+Windows open in
+[CI run 40961991750](https://github.com/shahzadlone/agent-swapper/actions/runs/40961991750/job/123756882841).
+Optional sidecar validation now also accepts an owned read snapshot with zero
+links after a peer unlinks it; reparse points and multiple links remain refused.
+Required registry/lock handles still require one link. A separate Windows
+regression unlinks an already-open sidecar and reports the observed link count;
+the initialization stress gate now runs 100 iterations without retries.
+The first native result for that change is pending.
+
+Migration backups use a distinct required read-only open and a second fingerprint
+check of the published snapshot. Absence cannot create a new empty backup or be
+accepted as an optional sidecar. Local tests check missing-file refusal, read-only
+access and hardlink rejection; the migration/property suite remains required.
 
 Explicit verification, doctor, and run-history reads always perform full
 verification. This optimization relies on SQLite writes and working local

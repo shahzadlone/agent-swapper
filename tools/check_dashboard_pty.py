@@ -144,37 +144,67 @@ def wait_for_consumed_input(slave, master, process, output):
         time.sleep(0.005)
 
 
-def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_diagnostics=False):
-    with tempfile.TemporaryDirectory(prefix="aswp-dashboard-signal-") as directory:
+def signal_host(binary, root, capture_diagnostics):
+    """Own the actual dashboard child while its controlling session stays alive."""
+    for watched in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
+        signal.signal(watched, lambda *_: None)
+    (root / "ready").touch()
+    deadline = time.monotonic() + 20
+    while not (root / "start").exists():
+        if (root / "stop").exists():
+            return
+        assert time.monotonic() < deadline, "signal fixture did not start"
+        time.sleep(0.005)
+    diagnostics = (root / "stderr.txt").open("wb") if capture_diagnostics else None
+    child = None
+    try:
+        child = subprocess.Popen([str(binary), "--state-dir", str(root / "state")],
+                                 stderr=diagnostics)
+        sent = False
+        while child.poll() is None:
+            if (root / "stop").exists() or time.monotonic() >= deadline:
+                child.kill()
+                break
+            request = root / "signal"
+            if not sent and request.exists():
+                watched = int(request.read_text())
+                assert watched in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]
+                child.send_signal(watched)  # Owned, unreaped child; no journal PID.
+                sent = True
+            time.sleep(0.005)
+        status = child.wait(timeout=3)
+        (root / "result").write_text(str(status))
+        while not (root / "stop").exists() and time.monotonic() < deadline:
+            time.sleep(0.005)
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+        if diagnostics is not None:
+            diagnostics.close()
+
+
+def check_eof_signal(binary, quit_signal, capture_diagnostics=False):
+    # Keep signal delivery and peer closure in the same actor, so EOF can race
+    # the actual pending signal rather than a not-yet-processed IPC request.
+    with tempfile.TemporaryDirectory(prefix="aswp-dashboard-eof-") as directory:
         root = Path(directory)
         env = {"HOME": str(root), "TERM": "xterm-256color", "LANG": "C.UTF-8"}
         master, slave = pty.openpty()
-        before = termios.tcgetattr(slave)
-        process = None
         diagnostics = (root / "stderr.txt").open("wb") if capture_diagnostics else None
+        process = None
         try:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             process = subprocess.Popen([str(binary), "--state-dir", str(root / "state")],
                                        stdin=slave, stdout=slave, stderr=diagnostics or slave, env=env)
             output = bytearray()
             drain(master, process, output, b"Profiles")
-            assert not termios.tcgetattr(slave)[3] & termios.ICANON
-            if partial is not None:
-                os.write(master, partial)
-                wait_for_consumed_input(slave, master, process, output)
             process.send_signal(quit_signal)
-            if close_peer:
-                os.close(master)
-                master = None
-            else:
-                drain(master, process, output)
-            status = process.wait(timeout=2)
-            details = (root / "stderr.txt").read_bytes()[-5000:] if diagnostics is not None else b""
-            assert status == -quit_signal, f"signal termination was replaced: expected {-quit_signal}, got {status}; stderr={details!r}"
-            if not close_peer:
-                after = termios.tcgetattr(slave)
-                assert same_terminal_configuration(before, after), f"signal exit left terminal settings modified: before={before!r}; after={after!r}"
-                assert b"\x1b[?1049l" in output, "signal exit did not leave alternate screen"
+            os.close(master)
+            master = None
+            status = process.wait(timeout=3)
+            details = (root / "stderr.txt").read_bytes()[-5000:] if capture_diagnostics else b""
+            assert status == -quit_signal, f"EOF signal termination was replaced: expected {-quit_signal}, got {status}; stderr={details!r}"
         finally:
             if process is not None and process.poll() is None:
                 process.kill()
@@ -184,6 +214,69 @@ def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_di
             os.close(slave)
             if diagnostics is not None:
                 diagnostics.close()
+
+
+def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_diagnostics=False):
+    if close_peer:
+        return check_eof_signal(binary, quit_signal, capture_diagnostics)
+    with tempfile.TemporaryDirectory(prefix="aswp-dashboard-signal-") as directory:
+        root = Path(directory)
+        env = {"HOME": str(root), "TERM": "xterm-256color", "LANG": "C.UTF-8"}
+        master, slave = pty.openpty()
+        before = termios.tcgetattr(slave)
+        process = None
+        try:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+
+            def controlling_terminal():
+                os.setsid()
+                fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+            process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "__signal_host",
+                                        str(binary), str(root), str(int(capture_diagnostics))],
+                                       stdin=slave, stdout=slave, stderr=slave, env=env,
+                                       preexec_fn=controlling_terminal)
+            deadline = time.monotonic() + 10
+            while not (root / "ready").exists():
+                assert process.poll() is None and time.monotonic() < deadline, "signal fixture owner did not start"
+                time.sleep(0.005)
+            # Acquiring a controlling terminal can itself adjust driver state.
+            before = termios.tcgetattr(slave)
+            (root / "start").touch()
+            output = bytearray()
+            drain(master, process, output, b"Profiles")
+            assert not termios.tcgetattr(slave)[3] & termios.ICANON
+            if partial is not None:
+                os.write(master, partial)
+                wait_for_consumed_input(slave, master, process, output)
+            (root / "signal").write_text(str(int(quit_signal)))
+            deadline = time.monotonic() + 5
+            status = None
+            while status is None:
+                read_available(master, output)
+                try:
+                    status = int((root / "result").read_text())
+                except (OSError, ValueError):
+                    assert process.poll() is None and time.monotonic() < deadline, "dashboard did not finish its signal exit"
+                    time.sleep(0.005)
+            details = (root / "stderr.txt").read_bytes()[-5000:] if capture_diagnostics else b""
+            assert status == -quit_signal, f"signal termination was replaced: expected {-quit_signal}, got {status}; stderr={details!r}"
+            # Inspect bytes before the controlling session's owner exits;
+            # revoking a macOS PTY can discard its final output queue.
+            drain(master, process, output, b"\x1b[?1049l")
+            after = termios.tcgetattr(slave)
+            assert same_terminal_configuration(before, after), f"signal exit left terminal settings modified: before={before!r}; after={after!r}"
+        finally:
+            (root / "stop").touch()
+            if process is not None and process.poll() is None:
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            if master is not None:
+                os.close(master)
+            os.close(slave)
 
 
 def check_setup(binary):
@@ -342,7 +435,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        if os.name == "posix" and len(sys.argv) == 5 and sys.argv[1] == "__signal_host":
+            signal_host(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4] == "1")
+        else:
+            main()
     except Exception as error:
         message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"::error title=Dashboard PTY check::{message}")

@@ -110,7 +110,11 @@ jobs:
       - name: Windows registry initialization concurrency stress
         if: runner.os == 'Windows'
         timeout-minutes: 6
-        run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(concurrent_first_open_and_duplicate_registration_are_serialized)' --stress-count 25 --fail-fast
+        run: cargo +1.98.0 nextest run --locked -p agentswapper-core --profile ci -E 'test(concurrent_first_open_and_duplicate_registration_are_serialized)' --stress-count 100 --fail-fast
+      - name: Windows optional SQLite sidecar retirement
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: cargo +1.98.0 test --locked -p agentswapper-core --lib private_fs::tests::optional_sidecar_snapshot_survives_unlink_after_handle_open -- --exact --nocapture
       - name: Report failing tests
         if: failure()
         run: python tools/report_test_failures.py target/nextest/ci/junit.xml

@@ -342,7 +342,7 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
             // Retrying an unchanged failing migration reuses its exact snapshot.
             // Never overwrite a previous backup, even if its name is correct.
-            let existing = private_fs::file(&published)?;
+            let existing = private_fs::read_required_file(&published)?;
             if fingerprint(&existing)? != digest {
                 return Err(Error::OutputExists);
             }
@@ -351,7 +351,10 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
     }
     #[cfg(unix)]
     File::open(&directory)?.sync_all()?;
-    private_fs::validate_file(&published)?;
+    let snapshot = private_fs::read_required_file(&published)?;
+    if fingerprint(&snapshot)? != digest {
+        return Err(Error::OutputExists);
+    }
     if from == 6 {
         let unsupported: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM main.event_log WHERE json_extract(payload,'$.type')='run_planned' AND json_extract(payload,'$.local_scope.backend')='linux_cgroup')",

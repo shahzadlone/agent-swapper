@@ -114,9 +114,23 @@ pub(crate) fn directory(path: &Path, create: bool) -> Result<()> {
 }
 
 pub(crate) fn file(path: &Path) -> Result<File> {
+    open_private_file(path, true)
+}
+
+/// Open an already-published private file without creating it or granting write
+/// access. Unlike optional SQLite sidecar checks, absence is an error.
+pub(crate) fn read_required_file(path: &Path) -> Result<File> {
+    open_private_file(path, false)
+}
+
+fn open_private_file(path: &Path, writable: bool) -> Result<File> {
     reject_links(path)?;
     let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
+    options
+        .read(true)
+        .write(writable)
+        .create(writable)
+        .truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -172,8 +186,17 @@ fn validate_optional_windows_handle(path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    validate_file_metadata(&file.metadata()?)?;
-    if winapi_util::file::information(&file)?.number_of_links() != 1 {
+    validate_optional_windows_snapshot(&file)
+}
+
+#[cfg(windows)]
+fn validate_optional_windows_snapshot(file: &File) -> Result<()> {
+    validate_snapshot_metadata(&file.metadata()?)?;
+    // A peer may unlink a SQLite sidecar after we opened it. Its owned read
+    // snapshot can then have zero links, just as an absent sidecar is allowed.
+    // Multiple links and reparse points still fail; required files/locks keep
+    // their separate exactly-one-link validation in file().
+    if winapi_util::file::information(file)?.number_of_links() > 1 {
         return Err(Error::UnsafePath);
     }
     Ok(())
@@ -225,6 +248,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn required_read_snapshot_never_creates_or_writes_and_refuses_multiple_links() {
+        use std::io::{Read, Write};
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let path = root.join("snapshot.sqlite3");
+        assert!(
+            matches!(read_required_file(&path), Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+        );
+        assert!(!path.exists());
+        file(&path).unwrap().write_all(b"fixture snapshot").unwrap();
+        let mut snapshot = read_required_file(&path).unwrap();
+        let mut bytes = String::new();
+        snapshot.read_to_string(&mut bytes).unwrap();
+        assert_eq!(bytes, "fixture snapshot");
+        assert!(snapshot.write_all(b"changed").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"fixture snapshot");
+        fs::hard_link(&path, root.join("alias")).unwrap();
+        assert!(matches!(read_required_file(&path), Err(Error::UnsafePath)));
+    }
+
+    #[test]
     fn opened_private_file_rejects_multiple_hardlinks() {
         let directory = tempfile::tempdir().unwrap();
         // macOS temporary directories commonly use the /var -> /private/var
@@ -261,5 +305,32 @@ mod tests {
             validate_optional_windows_handle(&path),
             Err(Error::UnsafePath)
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn optional_sidecar_snapshot_survives_unlink_after_handle_open() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("registry.sqlite3-shm");
+        drop(file(&path).unwrap());
+        let snapshot = OpenOptions::new()
+            .read(true)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&path)
+            .unwrap();
+        fs::remove_file(&path).unwrap();
+        let links = winapi_util::file::information(&snapshot)
+            .unwrap()
+            .number_of_links();
+        assert!(links <= 1);
+        validate_optional_windows_snapshot(&snapshot).unwrap();
+        assert!(
+            !path.exists(),
+            "snapshot validation must not recreate a sidecar"
+        );
+        println!(
+            "\n::notice title=Windows optional sidecar snapshot::owned handle link count after unlink: {links}"
+        );
     }
 }
