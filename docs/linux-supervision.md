@@ -93,8 +93,11 @@ envelope and three streams through its private channel. It starts the CLI shim
 in the supervisor's process group, admits it to the cgroup, reports its PID,
 and waits for GO before supplying the target launch. It requests scope cleanup
 when the channel closes or the target exits, retaining the lease through that
-attempt. Its completion message is not a journal stop receipt. Dedicated
-normal-exit and channel-loss tests use the actual CLI guardian and the real
+attempt. On normal exit it reports an empty scope, waits for the supervisor's
+retirement authorization, then reports retirement. The supervisor fixture
+independently checks emptiness and lease exclusion before authorizing removal;
+loss of the channel at that point triggers guardian cleanup. These messages
+are not a journal stop receipt. Dedicated normal-exit and channel-loss tests use the actual CLI guardian and the real
 journal; they require a successful delegated CI run at this change before they
 provide evidence. Ordinary launches still do not invoke this guardian.
 `linux_custody_probe` combines

@@ -485,7 +485,7 @@ fn guardian_exit_target() {
     std::process::exit(7);
 }
 
-fn internal_guardian_case(parent_loss: bool) {
+fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
     use crate::supervision::linux_guardian;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
     let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
@@ -576,15 +576,22 @@ fn internal_guardian_case(parent_loss: bool) {
         drop(channel);
     } else {
         assert_eq!(
-            linux_guardian::receive_exit(&channel, Instant::now() + BUDGET).unwrap(),
+            linux_guardian::receive_empty(&channel, Instant::now() + BUDGET).unwrap(),
             7
         );
+        assert!(!cgroup::populated(scope.directory()).unwrap());
+        assert!(scope.path().exists());
+        assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
+        if !loss_after_empty {
+            transport::send(&channel, linux_guardian::RETIRE, &[]).unwrap();
+            linux_guardian::receive_retired(&channel, Instant::now() + BUDGET).unwrap();
+        }
         drop(channel);
     }
     let Some(status) = guardian.0.wait_timeout(BUDGET).unwrap() else {
         panic!("guardian timed out");
     };
-    assert!(status.success());
+    assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
     assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
     assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
@@ -596,7 +603,7 @@ fn internal_guardian_case(parent_loss: bool) {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_reports_exit_after_cleanup() {
-    internal_guardian_case(false);
+    internal_guardian_case(false, false);
     println!(
         "::notice title=Linux internal guardian exit::actual CLI guardian observed exit and retired the scope; journal remains pending"
     );
@@ -605,8 +612,17 @@ fn internal_guardian_reports_exit_after_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
-    internal_guardian_case(true);
+    internal_guardian_case(true, false);
     println!(
         "::notice title=Linux internal guardian EOF::actual CLI guardian retired target scope on channel loss; journal remains pending"
+    );
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
+    internal_guardian_case(false, true);
+    println!(
+        "::notice title=Linux internal guardian pre-retirement EOF::actual CLI guardian retained lease through empty-scope cleanup after channel loss"
     );
 }

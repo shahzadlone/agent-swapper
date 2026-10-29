@@ -48,6 +48,7 @@ def main():
         ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),
         ("internal_guardian_reports_exit_after_cleanup", "Linux internal guardian exit"),
         ("internal_guardian_cleans_up_on_supervisor_channel_loss", "Linux internal guardian EOF"),
+        ("internal_guardian_cleans_up_if_parent_disappears_before_retirement", "Linux internal guardian pre-retirement EOF"),
     ]:
         result = subprocess.run([str(core_test), "--ignored", "--exact",
                                  f"store::linux_journal_guardian_tests::{name}",

@@ -24,7 +24,9 @@ use super::{
 const STARTUP: Duration = Duration::from_secs(30);
 const CLEANUP: Duration = Duration::from_secs(10);
 const PID_PREFIX: &[u8] = b"ASWP-PID-1";
-const DONE_PREFIX: &[u8] = b"ASWP-DONE-1";
+const EMPTY_PREFIX: &[u8] = b"ASWP-EMPTY-1";
+pub(crate) const RETIRE: &[u8] = b"ASWP-RETIRE-1";
+const RETIRED: &[u8] = b"ASWP-RETIRED-1";
 
 /// Internal CLI role selector; scope and process group are not secret.
 #[doc(hidden)]
@@ -42,16 +44,21 @@ pub(crate) fn receive_pid(channel: impl AsFd, deadline: Instant) -> io::Result<u
 }
 
 #[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
-pub(crate) fn receive_exit(channel: impl AsFd, deadline: Instant) -> io::Result<i32> {
+pub(crate) fn receive_empty(channel: impl AsFd, deadline: Instant) -> io::Result<i32> {
     let code = i32::from_be_bytes(transport::receive_number_until(
         channel,
-        DONE_PREFIX,
+        EMPTY_PREFIX,
         deadline,
     )?);
     if !(0..=255).contains(&code) {
         return Err(io::Error::other("invalid guardian exit status"));
     }
     Ok(code)
+}
+
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn receive_retired(channel: impl AsFd, deadline: Instant) -> io::Result<()> {
+    transport::receive_control_until(channel, RETIRED, deadline)
 }
 
 struct Target(Child);
@@ -70,15 +77,21 @@ struct Scope {
     retired: bool,
 }
 impl Scope {
-    fn stop_and_retire(&mut self, deadline: Instant) -> io::Result<()> {
+    fn stop(&self, deadline: Instant) -> io::Result<()> {
         cgroup::validate_scope(&self.parent, &self.leaf, &self.path)?;
         cgroup::control(&self.leaf, "cgroup.kill", OFlags::WRONLY)?.write_all(b"1\n")?;
         cgroup::until(deadline, || {
             Ok((!cgroup::populated(&self.leaf)?).then_some(()))
-        })?;
+        })
+    }
+    fn retire_empty(&mut self, deadline: Instant) -> io::Result<()> {
         cgroup::retire_transferred(&self.parent, &self.leaf, &self.path, deadline)?;
         self.retired = true;
         Ok(())
+    }
+    fn stop_and_retire(&mut self, deadline: Instant) -> io::Result<()> {
+        self.stop(deadline)?;
+        self.retire_empty(deadline)
     }
 }
 impl Drop for Scope {
@@ -175,10 +188,14 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
         (None, Some(signal)) => 128 + signal,
         _ => return Err(io::Error::other("target exit status unavailable")),
     };
-    scope.stop_and_retire(Instant::now() + CLEANUP)?;
-    let mut done = DONE_PREFIX.to_vec();
-    done.extend_from_slice(&code.to_be_bytes());
-    transport::send_until(&channel, &done, &[], Instant::now() + CLEANUP)?;
+    let deadline = Instant::now() + CLEANUP;
+    scope.stop(deadline)?;
+    let mut empty = EMPTY_PREFIX.to_vec();
+    empty.extend_from_slice(&code.to_be_bytes());
+    transport::send_until(&channel, &empty, &[], deadline)?;
+    transport::receive_control_until(&channel, RETIRE, deadline)?;
+    scope.retire_empty(deadline)?;
+    transport::send_until(&channel, RETIRED, &[], deadline)?;
     Ok(())
 }
 
@@ -192,8 +209,8 @@ mod tests {
             (PID_PREFIX, 42_u32, false, true),
             (PID_PREFIX, 0_u32, false, false),
             (PID_PREFIX, 42_u32, true, false),
-            (DONE_PREFIX, 7_u32, false, true),
-            (DONE_PREFIX, 256_u32, false, false),
+            (EMPTY_PREFIX, 7_u32, false, true),
+            (EMPTY_PREFIX, 256_u32, false, false),
         ] {
             let (sender, receiver) = transport::pair()?;
             let file = tempfile::tempfile()?;
@@ -205,13 +222,20 @@ mod tests {
             let accepted = if prefix == PID_PREFIX {
                 receive_pid(&receiver, deadline).is_ok()
             } else {
-                receive_exit(&receiver, deadline).is_ok()
+                receive_empty(&receiver, deadline).is_ok()
             };
             assert_eq!(accepted, valid);
         }
         let (sender, receiver) = transport::pair()?;
         transport::send(&sender, b"ASWP-PID-1-too-long", &[])?;
         assert!(receive_pid(&receiver, Instant::now() + Duration::from_secs(1)).is_err());
+        let (sender, receiver) = transport::pair()?;
+        transport::send(&sender, RETIRED, &[])?;
+        receive_retired(&receiver, Instant::now() + Duration::from_secs(1))?;
+        let (sender, receiver) = transport::pair()?;
+        let file = tempfile::tempfile()?;
+        transport::send(&sender, RETIRED, &[file.as_fd()])?;
+        assert!(receive_retired(&receiver, Instant::now() + Duration::from_secs(1)).is_err());
         Ok(())
     }
 }

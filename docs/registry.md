@@ -83,6 +83,9 @@ not yet accept an automated Linux stop receipt: a pending Linux scope remains
 unresolved until operator attestation. The schema-6 upgrade rejects Linux scope
 events that could not have been produced by schema-6 software, checks the old
 DDL and retains the pre-upgrade snapshot.
+The schema-7 Linux journal and delegated scope fixture passed the Linux job in
+[CI run 40831029312](https://github.com/shahzadlone/agent-swapper/actions/runs/40831029312/job/123305041304)
+at `63ac746`; this is not cross-platform or production-launch qualification.
 In a local Linux compatibility check, a previously built schema-6 preview
 `aswp` created a registry, the schema-7 executable upgraded it, and the older
 executable refused the upgraded registry with exit 125. The older binary had a
