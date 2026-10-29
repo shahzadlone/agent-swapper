@@ -14,6 +14,7 @@ import tempfile
 import tomllib
 import zipfile
 from build_audited_deny import verify_installed
+from build_audited_about import verify_installed as verify_about
 
 ROOT = Path(__file__).resolve().parents[1]
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.+\-]+$")
@@ -148,9 +149,7 @@ def candidate(output, allow_dirty):
     for name in ("LICENSE", "NOTICE"):
         add(files, name, ROOT / name)
     add(files, "assets/brand/THIRD_PARTY_NOTICES.txt", ROOT / "assets/brand/THIRD_PARTY_NOTICES.txt")
-    about_version = run(["cargo", "about", "--version"], text=True).strip()
-    if about_version != "cargo-about 0.9.3":
-        raise ValueError("cargo-about 0.9.3 is required")
+    verify_about()
     licenses = run(["cargo", "about", "generate", "--locked", "--workspace", "--fail", "tools/licenses.hbs"])
     if not licenses.strip() or b"option-ext" not in licenses:
         raise ValueError("dependency attribution is incomplete")

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import audit_attribution_tool
 import build_audited_deny
+import build_audited_about
 from release_candidate import add_locked_source, digest, reject_build_paths, safe_path, verify_build_marker, write_candidate
 
 
@@ -28,6 +29,27 @@ def crate(entries):
 
 
 class CandidateSafety(unittest.TestCase):
+    def test_attribution_build_marker_detects_binary_and_lock_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "cargo-about"
+            binary.write_bytes(b"reviewed attribution tool")
+            marker = binary.parent / "cargo-about-build.json"
+            data = {"schema": 1, "source_sha256": audit_attribution_tool.PINS["cargo-about-0.9.3"],
+                    "lock_sha256": audit_attribution_tool.AUDITED["cargo-about-0.9.3/Cargo.lock"],
+                    "binary_sha256": digest(binary.read_bytes())}
+            marker.write_text(json.dumps(data), encoding="utf-8")
+            with patch.object(build_audited_about.subprocess, "run") as run:
+                run.return_value.stdout = "cargo-about 0.9.3\n"
+                build_audited_about.verify_installed(binary)
+                binary.write_bytes(b"altered attribution tool")
+                with self.assertRaisesRegex(ValueError, "marker does not match"):
+                    build_audited_about.verify_installed(binary)
+                binary.write_bytes(b"reviewed attribution tool")
+                data["source_sha256"] = "0" * 64
+                marker.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "marker does not match"):
+                    build_audited_about.verify_installed(binary)
+
     def test_build_marker_refuses_stale_or_changed_binaries(self):
         marker = {"schema": 1, "revision": "revision-a", "dirty": False,
                   "lock_sha256": "lock-a", "binaries": {"aswp": digest(b"built")}}

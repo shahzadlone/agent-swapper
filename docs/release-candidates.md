@@ -25,9 +25,9 @@ dependency policy. Re-audit the pinned source and remove the exceptions when
 the tools can use corrected dependencies. The checker is rebuilt with the
 reviewed lockfile after a stock checker bootstraps its audit; development-only
 dependencies are excluded from that tool audit because they are not installed.
-The build marker checks that the cached binary matches the recorded build, but
-is unsigned and cannot authenticate it against an attacker who can replace both.
-The cached attribution tool is also not separately signed or attested.
+Build markers check that each cached tool binary matches the recorded build, but
+are unsigned and cannot authenticate either binary against an attacker who can
+replace it and its marker. They do not establish independent build provenance.
 
 The ZIP contains `BUILD-INFO.json` with the revision, dirty state, Rust host,
 toolchain, lockfile hash, and hashes of its other contents. The build remaps
@@ -52,7 +52,8 @@ cargo install cargo-deny --version 0.20.2 --locked
 python tools/build_audited_deny.py
 python tools/build_audited_deny.py --verify-only
 python tools/audit_attribution_tool.py
-cargo install cargo-about --version 0.9.3 --locked --features cli
+python tools/build_audited_about.py
+python tools/build_audited_about.py --verify-only
 python tools/build_candidate_binaries.py
 python -m unittest discover -s tools -p test_release_candidate.py
 python tools/release_candidate.py --output target/release-candidate
