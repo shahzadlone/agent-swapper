@@ -238,6 +238,11 @@ original streams to the admitted shim. A delayed-guardian case verifies that a
 parent timeout prevents target execution and that the guardian holds the lease
 through cleanup. That handshake has no journal commit and is not a production
 receipt: failure or simultaneous supervisor loss still needs reconciliation.
+The guardian also bounds its wait for the parent's GO after READY. A local PTY
+fixture holds the parent alive without sending GO and checks that the target
+never executes and the lease becomes available after guardian cleanup. This
+tests that phase without a delegated cgroup; it does not prove a total startup
+deadline or production cleanup behavior.
 Spawn trusted helpers before changing inherited interrupt dispositions in the
 frontend. The fixture's inherited-signal results do not qualify the current
 native-launch interrupt wrapper.

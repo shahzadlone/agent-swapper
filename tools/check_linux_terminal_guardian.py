@@ -145,6 +145,30 @@ def startup_timeout(binary):
             shell.close()
 
 
+def startup_go_timeout(binary):
+    with tempfile.TemporaryDirectory(prefix="aswp-terminal-go-timeout-") as directory:
+        root = Path(directory)
+        shell = Shell(root)
+        try:
+            (root / "delay-before-go").touch()
+            offset = len(shell.output)
+            shell.send(f"{shlex.quote(str(binary))} parent {shlex.quote(str(root))}\n".encode())
+            assert marker(shell, root, "parent-ready") == {"ready": True}
+            assert not lease_available(root), "guardian did not retain lease during startup"
+            shell.wait_for(lambda: (root / "failure-guardian").exists(), seconds=9)
+            failure = json.loads((root / "failure-guardian").read_text())
+            assert failure["errno"] == errno.EAGAIN, failure
+            shell.wait_for(lambda: lease_available(root), seconds=4)
+            assert not (root / "target").exists(), "target started without GO"
+            (root / "release-go").touch()
+            shell.prompt(offset)
+            assert not (root / "target").exists(), "target started after guardian timeout"
+            print("startup-go-timeout: pass", flush=True)
+        finally:
+            (root / "release-go").touch()
+            shell.close()
+
+
 def run_case(binary, mode, delegated=None):
     with tempfile.TemporaryDirectory(prefix="aswp-terminal-guardian-") as directory:
         root = Path(directory)
@@ -326,6 +350,7 @@ def main():
         run_case(binary, mode, delegated)
     if delegated is None:
         startup_timeout(binary)
+        startup_go_timeout(binary)
     if delegated is not None:
         print("::notice title=Linux terminal cgroup::twelve terminal cases: normal raw-mode restoration, crash restoration observation, and detached-writer cleanup with retained lease", flush=True)
 

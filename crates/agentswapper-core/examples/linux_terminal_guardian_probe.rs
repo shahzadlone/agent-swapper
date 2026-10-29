@@ -250,6 +250,12 @@ mod fixture {
         // the guardian reached its prepared state. A lost or timed-out parent
         // closes this channel and leaves the guardian responsible for cleanup.
         receive_control(&channel, READY)?;
+        if dir.join("delay-before-go").exists() {
+            publish(dir, "parent-ready", json!({"ready":true}))?;
+            cgroup::until(Instant::now() + Duration::from_secs(10), || {
+                Ok(dir.join("release-go").exists().then_some(()))
+            })?;
+        }
         send(&channel, GO, &[])?;
         let mut injected = false;
         let status = loop {
@@ -389,8 +395,18 @@ mod fixture {
             })?;
         }
         let channel = rustix::io::dup(io::stdin())?;
+        rustix::net::sockopt::set_socket_timeout(
+            &channel,
+            rustix::net::sockopt::Timeout::Recv,
+            Some(Duration::from_secs(5)),
+        )?;
         send(&channel, READY, &[])?;
         receive_control(&channel, GO)?;
+        rustix::net::sockopt::set_socket_timeout(
+            &channel,
+            rustix::net::sockopt::Timeout::Recv,
+            None,
+        )?;
         drop(channel);
         for fd in [input.as_fd(), output.as_fd(), diagnostic.as_fd()] {
             send(&grant, GO, &[fd])?;
