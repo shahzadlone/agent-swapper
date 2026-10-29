@@ -11,8 +11,8 @@ import sys
 def main():
     if sys.platform != "linux" or os.geteuid() == 0:
         raise SystemExit("The fixture requires an unprivileged Linux process")
-    if len(sys.argv) not in (2, 3):
-        raise SystemExit("Usage: run_delegated_custody_probe.py PATH_TO_PROBE [PATH_TO_TERMINAL_FIXTURE]")
+    if len(sys.argv) not in (2, 3, 4):
+        raise SystemExit("Usage: run_delegated_custody_probe.py PATH_TO_PROBE [PATH_TO_TERMINAL_FIXTURE [PATH_TO_CORE_TEST]]")
     binary = Path(sys.argv[1]).resolve(strict=True)
     entries = [
         line.removeprefix("0::")
@@ -34,8 +34,24 @@ def main():
         return result
     terminal = Path(sys.argv[2]).resolve(strict=True)
     check = Path(__file__).with_name("check_linux_terminal_guardian.py")
-    return subprocess.run([sys.executable, str(check), str(terminal), "--cgroup-root", str(parent)],
-                          check=False, timeout=90).returncode
+    result = subprocess.run([sys.executable, str(check), str(terminal), "--cgroup-root", str(parent)],
+                            check=False, timeout=90).returncode
+    if result or len(sys.argv) == 3:
+        return result
+    core_test = Path(sys.argv[3]).resolve(strict=True)
+    env = os.environ.copy()
+    env["ASWP_DELEGATED_CGROUP"] = str(parent)
+    result = subprocess.run([str(core_test), "--ignored", "--exact",
+                             "store::linux_journal_guardian_tests::real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup",
+                             "--nocapture"], env=env, check=False, timeout=90,
+                            capture_output=True, text=True)
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    if result.returncode:
+        return result.returncode
+    if "::notice title=Linux journal guardian::" not in result.stdout or "1 passed; 0 failed" not in result.stdout:
+        raise SystemExit("delegated journal guardian test did not actually run and pass")
+    return 0
 
 
 if __name__ == "__main__":

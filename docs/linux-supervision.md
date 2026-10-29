@@ -194,6 +194,15 @@ is released. This validates the lease/journal boundary only: that fixture does
 not start an agent, manage a cgroup, or issue a cleanup receipt, and production
 launches do not yet transfer their lease to a guardian.
 
+An additional delegated CI fixture combines those pieces: it records an actual
+run intent, transfers the actual profile lease, admits a gated fixture target
+to a dedicated cgroup, records its PID before acknowledging the launch, kills
+the supervisor, and independently checks the empty scope and held lease before
+retirement and release. The target changes session after admission; a separate
+outside-scope heartbeat must continue through cleanup. The pending journal intent remains unresolved until
+manual attestation. This is still fixture-only and requires a successful CI
+run at the commit containing it; no production stop receipt is implied.
+
 A further delegated-only case injects guardian SIGKILL through the parent's
 owned child handle. Before the target starts, the guardian transfers the parent
 and leaf directory descriptors to the foreground supervisor, which validates
