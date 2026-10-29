@@ -27,8 +27,34 @@ def main():
     if not relative.is_absolute() or ".." in relative.parts or relative == PurePosixPath("/"):
         raise SystemExit("Refusing an ambiguous or root cgroup")
     parent = Path("/sys/fs/cgroup").joinpath(*relative.parts[1:])
-    # The Rust probe validates filesystem type, links, owner, permissions,
-    # membership and writable control files before creating unique child groups.
+    # Run the journal cases first so their notices remain visible if the CI
+    # annotation limit truncates later notices from the same step.
+    if len(sys.argv) == 4:
+        core_test = Path(sys.argv[3]).resolve(strict=True)
+        env = os.environ.copy()
+        env["ASWP_DELEGATED_CGROUP"] = str(parent)
+        shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
+        env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
+        for name, notice in [
+            ("internal_guardian_reports_exit_after_cleanup", "Linux internal guardian exit"),
+            ("internal_guardian_cleans_up_on_supervisor_channel_loss", "Linux internal guardian EOF"),
+            ("internal_guardian_cleans_up_if_parent_disappears_before_retirement", "Linux internal guardian pre-retirement EOF"),
+            ("real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup", "Linux journal guardian"),
+            ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),
+        ]:
+            result = subprocess.run([str(core_test), "--ignored", "--exact",
+                                     f"store::linux_journal_guardian_tests::{name}",
+                                     "--nocapture"], env=env, check=False, timeout=90,
+                                    capture_output=True, text=True)
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            if result.returncode:
+                return result.returncode
+            if f"::notice title={notice}::" not in result.stdout or "1 passed; 0 failed" not in result.stdout:
+                raise SystemExit(f"delegated journal guardian test {name} did not actually run and pass")
+    # Each Rust probe validates its delegated capabilities before any writes.
     result = subprocess.run([str(binary), str(parent)], check=False, timeout=90).returncode
     if result or len(sys.argv) == 2:
         return result
@@ -36,30 +62,8 @@ def main():
     check = Path(__file__).with_name("check_linux_terminal_guardian.py")
     result = subprocess.run([sys.executable, str(check), str(terminal), "--cgroup-root", str(parent)],
                             check=False, timeout=90).returncode
-    if result or len(sys.argv) == 3:
+    if result:
         return result
-    core_test = Path(sys.argv[3]).resolve(strict=True)
-    env = os.environ.copy()
-    env["ASWP_DELEGATED_CGROUP"] = str(parent)
-    shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
-    env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
-    for name, notice in [
-        ("real_journal_lease_survives_supervisor_loss_through_cgroup_cleanup", "Linux journal guardian"),
-        ("supervisor_loss_before_go_keeps_journal_unresolved", "Linux pre-GO guardian"),
-        ("internal_guardian_reports_exit_after_cleanup", "Linux internal guardian exit"),
-        ("internal_guardian_cleans_up_on_supervisor_channel_loss", "Linux internal guardian EOF"),
-        ("internal_guardian_cleans_up_if_parent_disappears_before_retirement", "Linux internal guardian pre-retirement EOF"),
-    ]:
-        result = subprocess.run([str(core_test), "--ignored", "--exact",
-                                 f"store::linux_journal_guardian_tests::{name}",
-                                 "--nocapture"], env=env, check=False, timeout=90,
-                                capture_output=True, text=True)
-        sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        if result.returncode:
-            return result.returncode
-        if f"::notice title={notice}::" not in result.stdout or "1 passed; 0 failed" not in result.stdout:
-            raise SystemExit(f"delegated journal guardian test {name} did not actually run and pass")
     return 0
 
 

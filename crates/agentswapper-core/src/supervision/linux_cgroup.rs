@@ -99,6 +99,21 @@ pub(crate) fn populated(directory: &File) -> io::Result<bool> {
     }
 }
 
+/// Observe whether the opened cgroup's mandatory events file has disappeared.
+/// This alone is not a stop receipt; callers must bind the descriptor and
+/// separately qualify kernel behavior and the threat model.
+#[allow(dead_code, reason = "retirement observation is still being qualified")]
+pub(crate) fn events_missing(directory: &File) -> io::Result<bool> {
+    validate_directory(directory)?;
+    match control(directory, "cgroup.events", OFlags::RDONLY) {
+        Ok(_) => Ok(false),
+        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::NOENT.raw_os_error()) => {
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn validate_named_child(parent: &File, leaf: &File, name: &std::ffi::OsStr) -> io::Result<()> {
     let named = File::from(openat2(
         parent,
@@ -375,6 +390,7 @@ mod tests {
             "cgroup capability is not a directory"
         );
         assert_eq!(fs::read(&path).unwrap(), b"unchanged");
+        assert!(events_missing(&File::open(directory.path()).unwrap()).is_err());
         // When cgroup v2 is mounted, also exercise a real control-file handle;
         // this requires no delegation and performs no writes.
         if let Ok(control) = File::open("/sys/fs/cgroup/cgroup.controllers") {

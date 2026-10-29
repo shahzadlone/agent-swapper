@@ -580,6 +580,7 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
             7
         );
         assert!(!cgroup::populated(scope.directory()).unwrap());
+        assert!(!cgroup::events_missing(scope.directory()).unwrap());
         assert!(scope.path().exists());
         assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
         if !loss_after_empty {
@@ -593,6 +594,20 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
     };
     assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
+    assert!(cgroup::events_missing(scope.directory()).unwrap());
+    if !parent_loss && !loss_after_empty {
+        fs::create_dir(scope.path()).unwrap();
+        let replacement = cgroup::checked_directory(scope.path()).unwrap();
+        assert!(!cgroup::events_missing(&replacement).unwrap());
+        assert!(cgroup::events_missing(scope.directory()).unwrap());
+        cgroup::retire_transferred(
+            scope.parent(),
+            &replacement,
+            scope.path(),
+            Instant::now() + BUDGET,
+        )
+        .unwrap();
+    }
     assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
     assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
     assert!(matches!(store.lease(profile.id), Err(Error::Busy)));

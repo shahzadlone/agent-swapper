@@ -100,6 +100,12 @@ loss of the channel at that point triggers guardian cleanup. These messages
 are not a journal stop receipt. Dedicated normal-exit and channel-loss tests use the actual CLI guardian and the real
 journal; they require a successful delegated CI run at this change before they
 provide evidence. Ordinary launches still do not invoke this guardian.
+The earlier single-step guardian protocol passed its normal-exit and
+channel-loss delegated tests in
+[CI run 40831703990](https://github.com/shahzadlone/agent-swapper/actions/runs/40831703990/job/123307176584)
+at `50992ba`: the driver requires both test result markers and a successful
+exit. That run predates the two-step retirement handshake, which remains to be
+validated separately.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).
@@ -132,6 +138,24 @@ against the same cgroup code, not a production backend.
 Received capabilities now explicitly require directory descriptors before
 filesystem and ownership validation. A provider-free regression rejects both
 ordinary files and, when available, a real cgroup control-file descriptor.
+
+An open cgroup directory's link count cannot yet be used as portable proof
+that the original scope was removed. For example, Linux
+[`v6.8`](https://github.com/torvalds/linux/blob/v6.8/fs/kernfs/inode.c) and
+[`v7.0`](https://github.com/torvalds/linux/blob/v7.0/fs/kernfs/inode.c)
+recompute a kernfs directory's link count in their inode refresh path. This
+source review rules out assuming that a removed directory always reports zero;
+it does not establish the behavior of every supported distribution kernel.
+The race between checking a named child and removing it remains a stop-receipt
+gate, even when the supervisor observed the scope empty beforehand.
+The fixture now also probes `cgroup.events` relative to the original open leaf
+descriptor before and after retirement, and compares it with a newly created
+same-name cgroup. This is an observation under evaluation, not yet a receipt.
+In Linux [`v7.0` cgroup destruction](https://github.com/torvalds/linux/blob/v7.0/kernel/cgroup/cgroup.c),
+the kernel checks population, disables migration and removes the cgroup's
+visible files during destruction; those implementation details need qualification
+on supported kernels and against the complete failure model before relying on
+the missing file as proof.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;
