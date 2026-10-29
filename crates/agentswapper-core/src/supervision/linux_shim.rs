@@ -1,4 +1,5 @@
 //! Internal pre-exec entry for the experimental Linux guardian under development.
+use rustix::fs::fstatfs;
 use std::{
     fs::File,
     io,
@@ -16,6 +17,19 @@ use super::{
 /// Private protocol selector shared by the CLI and the guardian.
 #[doc(hidden)]
 pub const INTERNAL_ARG: &str = "__agentswapper_internal_linux_shim_v1";
+
+fn validate_stream(stream: &File) -> io::Result<()> {
+    // A cgroup control file opened outside a future namespace can retain the
+    // opening namespace's migration authority when passed as a standard fd.
+    // Refuse both cgroup filesystem types, without assuming this is a sandbox.
+    let kind = fstatfs(stream)?.f_type;
+    if kind == 0x6367_7270 || kind == 0x0027_e0eb {
+        return Err(io::Error::other(
+            "cgroup control files cannot be standard streams",
+        ));
+    }
+    Ok(())
+}
 
 /// Internal CLI entry. The standard input must be the guardian's private
 /// admission socket; invalid capabilities or a missing GO refuse execution.
@@ -37,6 +51,9 @@ pub(crate) fn exec_until(channel: impl AsFd, scope: &Path, deadline: Instant) ->
     let output = File::from(transport::receive_until(&channel, deadline)?);
     let diagnostic = File::from(transport::receive_until(&channel, deadline)?);
     transport::receive_control_until(&channel, transport::GO, deadline)?;
+    for stream in [&input, &output, &diagnostic] {
+        validate_stream(stream)?;
+    }
     linux_cgroup::validate_admitted(&parent, &leaf, scope)?;
     if Instant::now() >= deadline {
         return Err(io::Error::new(
@@ -58,6 +75,18 @@ mod tests {
     use super::*;
     use std::{ffi::OsString, fs, os::fd::AsFd, process::Command, time::Duration};
     use wait_timeout::ChildExt;
+
+    #[test]
+    fn standard_stream_validation_refuses_cgroup_files() -> io::Result<()> {
+        validate_stream(&tempfile::tempfile()?)?;
+        let (first, second) = transport::pair()?;
+        validate_stream(&File::from(first))?;
+        validate_stream(&File::from(second))?;
+        if let Ok(cgroup_file) = File::open("/sys/fs/cgroup/cgroup.controllers") {
+            assert!(validate_stream(&cgroup_file).is_err());
+        }
+        Ok(())
+    }
 
     fn receiver_role() -> String {
         let path = module_path!()

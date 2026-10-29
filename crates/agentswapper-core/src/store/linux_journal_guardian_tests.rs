@@ -636,7 +636,9 @@ fn internal_guardian_case(
     };
     let test_executable = std::env::current_exe().unwrap();
     let mut arguments = Vec::new();
-    let program = if namespace_probe {
+    // The shim should reject inherited cgroup streams before executing even
+    // the namespace setup command, so that case does not require unshare.
+    let program = if namespace_probe && !inherited_probe {
         arguments.extend([
             "--user".into(),
             "--map-current-user".into(),
@@ -724,7 +726,7 @@ fn internal_guardian_case(
     } else {
         assert_eq!(
             linux_guardian::wait_for_empty(&channel, &mut guardian.0).unwrap(),
-            7
+            if inherited_probe { 125 } else { 7 }
         );
         assert!(!cgroup::populated(scope.directory()).unwrap());
         assert!(!cgroup::events_missing(scope.directory()).unwrap());
@@ -748,7 +750,13 @@ fn internal_guardian_case(
     assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
     assert!(cgroup::events_missing(scope.directory()).unwrap());
-    if escape_probe {
+    if inherited_probe {
+        assert!(!temp.path().join("escape-result").exists());
+        assert!(!temp.path().join("escaped-heartbeat").exists());
+        println!(
+            "::notice title=Linux inherited cgroup capability::shim refused the cgroup-backed standard stream before target execution"
+        );
+    } else if escape_probe {
         let result = fs::read_to_string(temp.path().join("escape-result")).unwrap();
         match result.as_str() {
             "escaped" => {
@@ -926,7 +934,7 @@ fn internal_guardian_checks_namespaced_cgroup_migration() {
 }
 
 #[test]
-#[ignore = "requires delegated cgroup, unprivileged namespaces and the actual CLI guardian"]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_checks_inherited_cgroup_capability() {
     internal_guardian_case(false, false, false, MigrationProbe::InheritedFd);
 }

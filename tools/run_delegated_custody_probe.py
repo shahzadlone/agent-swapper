@@ -52,6 +52,7 @@ def main():
         shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
         env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
         cases = [
+            ("internal_guardian_checks_inherited_cgroup_capability", "Linux inherited cgroup capability"),
             ("internal_guardian_checks_same_user_cgroup_migration", "Linux cgroup migration"),
             ("internal_guardian_loss_preserves_unresolved_run_through_cleanup", "Linux internal guardian loss"),
             ("internal_guardian_cleans_up_on_incomplete_startup", "Linux internal guardian incomplete startup"),
@@ -75,7 +76,6 @@ def main():
         if usable:
             env["ASWP_TEST_UNSHARE"] = unshare
             cases.insert(0, ("internal_guardian_checks_namespaced_cgroup_migration", "Linux cgroup namespace migration"))
-            cases.insert(0, ("internal_guardian_checks_inherited_cgroup_capability", "Linux inherited cgroup capability"))
         else:
             print("::notice title=Linux cgroup namespace migration::not run; unprivileged namespace setup unavailable", flush=True)
         for name, notice in cases:

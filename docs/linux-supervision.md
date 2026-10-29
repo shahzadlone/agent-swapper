@@ -406,7 +406,9 @@ establish protection against this scenario.
 An additional fixture attempts the same migration after entering new user and
 cgroup namespaces rooted at the admitted leaf. It runs only when the hosted
 environment permits unprivileged namespace creation; a skipped fixture is not
-evidence of containment. The [kernel's `nsdelegate` mount option](https://docs.kernel.org/admin-guide/cgroup-v2.html#mounting)
+evidence of containment. The namespace fixture was skipped because setup was
+unavailable in [CI run 40834671590](https://github.com/shahzadlone/agent-swapper/actions/runs/40834671590/job/123316548293)
+at `6a2d21b`. The [kernel's `nsdelegate` mount option](https://docs.kernel.org/admin-guide/cgroup-v2.html#mounting)
 is system-wide, and namespace setup may affect user identity, filesystem access,
 and agent behavior. The test does not yet qualify those effects, alternative
 escape paths, or this approach for production.
@@ -419,10 +421,19 @@ namespace and the opening credentials during migration checks. A process that
 receives a parent `cgroup.procs` file opened outside its namespace could
 therefore have a different migration authority from one that opens it after
 entering the namespace. A further fixture transfers such an already-open file
-as stderr and attempts migration through it. This deliberately models a
-dangerous inherited capability; its hosted result is pending. A namespace
-boundary cannot be qualified without accounting for inherited descriptors and
-other ways to obtain a file opened outside that boundary.
+as stderr to model a dangerous inherited capability. The shim now refuses
+standard streams backed by either cgroup filesystem before executing the target;
+the revised fixture requires refusal, and its hosted result is pending. A local
+test also checks a real cgroup control file when one is available. This check
+does not cover other inherited descriptors, capabilities received later, or
+access through another process. A namespace boundary cannot be qualified
+without accounting for those paths.
+The internal shim currently reports startup failures by exiting with status
+125, which is also a possible exit status of an executed target. The guardian
+cannot distinguish those cases from the status alone. The fixture verifies the
+stream refusal using a separate no-execution marker; production must not infer
+successful exec or a target exit solely from that status. A distinct,
+crash-aware exec confirmation remains an integration gate.
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.
