@@ -226,6 +226,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn supervisor_preparation_preserves_order_and_waits_for_explicit_go() -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let (sender, receiver) = transport::pair()?;
+        let files = (0..6)
+            .map(|_| tempfile::tempfile())
+            .collect::<io::Result<Vec<_>>>()?;
+        let inodes = files
+            .iter()
+            .map(|file| file.metadata().map(|metadata| metadata.ino()))
+            .collect::<io::Result<Vec<_>>>()?;
+        let launch = LaunchEnvelope::capture("/bin/true".as_ref(), Path::new("/"), [], [], [])?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let receiver_thread = thread::spawn(move || -> io::Result<()> {
+            for expected in &inodes[..3] {
+                let file = File::from(transport::receive_until(&receiver, deadline)?);
+                assert_eq!(file.metadata()?.ino(), *expected);
+            }
+            let received = LaunchEnvelope::receive_from_until(&receiver, deadline)?;
+            assert_eq!(received.command().get_program(), "/bin/true");
+            for expected in &inodes[3..] {
+                let file = File::from(transport::receive_until(&receiver, deadline)?);
+                assert_eq!(file.metadata()?.ino(), *expected);
+            }
+            let mut packet = PID_PREFIX.to_vec();
+            packet.extend_from_slice(&42_u32.to_be_bytes());
+            transport::send_until(&receiver, &packet, &[], deadline)?;
+            transport::receive_control_until(&receiver, transport::GO, deadline)
+        });
+        let pid = prepare(
+            &sender,
+            [files[0].as_fd(), files[1].as_fd(), files[2].as_fd()],
+            &launch,
+            [files[3].as_fd(), files[4].as_fd(), files[5].as_fd()],
+            deadline,
+        )?;
+        assert_eq!(pid, 42);
+        assert!(!receiver_thread.is_finished());
+        transport::send_until(&sender, transport::GO, &[], deadline)?;
+        receiver_thread
+            .join()
+            .map_err(|_| io::Error::other("receiver panicked"))??;
+        Ok(())
+    }
+
+    #[test]
     fn expired_supervisor_startup_never_transfers_a_capability() -> io::Result<()> {
         let (sender, receiver) = transport::pair()?;
         let file = tempfile::tempfile()?;
