@@ -11,6 +11,8 @@ use crate::{Error, ExecutionEngine, Harness, Profile, Result, Store, store::RunC
 use uuid::Uuid;
 
 mod executable;
+#[cfg(unix)]
+mod terminal;
 
 /// The executable and environment used by execute(). Arguments are deliberately
 /// excluded from Debug and serialization: user-supplied arguments may be secrets.
@@ -278,6 +280,8 @@ impl LaunchPlan {
         if self.containment == Some(Containment::WindowsJob) {
             return self.execute_windows_job(store, &lease);
         }
+        #[cfg(unix)]
+        let terminal = terminal::ForegroundTerminal::capture()?;
         let id = store.begin_run_with_session(
             &lease,
             if self.login { "login" } else { "run" },
@@ -295,12 +299,22 @@ impl LaunchPlan {
             // The durable intent remains unresolved. Only signal the owned,
             // unreaped direct child; descendant custody is still unknown.
             let _ = child.kill();
-            let _ = child.wait();
+            let stopped = child.wait().is_ok();
+            #[cfg(unix)]
+            if stopped && let Some(terminal) = terminal {
+                let _ = terminal.restore();
+            }
+            #[cfg(not(unix))]
+            let _ = stopped;
             return Err(error);
         }
         // No transaction is held while a native interactive CLI owns the terminal.
         // A wait error or supervisor crash leaves an unfinished intent, blocking reuse.
         let status = child.wait()?;
+        #[cfg(unix)]
+        let terminal_result = terminal
+            .map(terminal::ForegroundTerminal::restore)
+            .transpose();
         let code = exit_code(status);
         let completion = if self.profile.harness == Harness::Gents {
             RunCompletion::ExternalClientExited(code)
@@ -308,6 +322,8 @@ impl LaunchPlan {
             RunCompletion::ChildExited(code)
         };
         store.finish_run(id, completion)?;
+        #[cfg(unix)]
+        terminal_result.map_err(|_| Error::TerminalRestore)?;
         drop(lease);
         Ok(code)
     }

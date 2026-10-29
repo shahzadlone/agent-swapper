@@ -186,6 +186,10 @@ pub enum Error {
     Database(#[from] rusqlite::Error),
     #[error("filesystem or process operation failed")]
     Io(#[from] std::io::Error),
+    #[error(
+        "the agent exited, but terminal settings could not be restored; inspect run history and restore your terminal"
+    )]
+    TerminalRestore,
     #[error("serialization failed")]
     Json(#[from] serde_json::Error),
 }
@@ -194,6 +198,7 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnknownConfigKey => "unknown_config_key",
+            Self::TerminalRestore => "terminal_restore_failed",
             Self::InvalidConfigValue => "invalid_config_value",
             Self::InvalidConfig => "invalid_config",
             Self::ConfigTooLarge => "config_too_large",

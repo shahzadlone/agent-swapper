@@ -1,5 +1,10 @@
 # Dependency decisions
 
+The Unix native-launch path enables the existing `rustix` termios feature to
+save and restore foreground terminal attributes after an observed child exit.
+This uses an already locked dependency and adds no new package. It does not
+restore a terminal after supervisor termination or establish descendant custody.
+
 The workspace and all dependency versions are locked. Own code is Apache-2.0;
 dependencies retain their original licenses. `cargo deny --locked check` checks
 advisories, licenses, dependency versions, and sources. Never globally disable

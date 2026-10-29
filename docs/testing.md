@@ -5,6 +5,12 @@ routes, duplicate aliases, cancellation, masked fields and narrow-screen review.
 The POSIX PTY check exercises both setup paths with fictional values and checks
 that cancellation and terminal restoration work through the real entrypoint.
 
+`tools/check_native_terminal_pty.py` launches a fake native agent under a real
+controlling PTY and checks exact terminal attributes and run history after
+normal exit and SIGINT. It also exercises a non-controlling PTY and refuses to
+overwrite terminal settings after a fixture changes the foreground group. CI
+runs these checks on Linux and macOS; they do not establish crash recovery.
+
 Launcher-path CI passed at `7909957` ([run 40695586176](https://github.com/shahzadlone/agent-swapper/actions/runs/40695586176)); Kimi routing checks passed at `83a6311` ([run 40696109744](https://github.com/shahzadlone/agent-swapper/actions/runs/40696109744)). A focused Opus 5.5 launcher review timed out without a response; it is not review evidence.
 
 The workspace uses Rust's built-in test harness plus nextest, proptest,

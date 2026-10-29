@@ -104,6 +104,13 @@ Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout
 belongs to the child, so actual launches cannot use `--json`.
 
+On Unix, a launch whose stdin is its foreground controlling terminal saves its attributes and
+restores them after the child is observed to exit. If the foreground changes or
+restoration fails, the command reports `terminal_restore_failed`; run history
+still records the child's actual exit. A non-controlling PTY is left to its
+owner. Supervisor crashes and uncontained descendants remain separate custody
+limitations.
+
 A profile lease, stored outside the native home, prevents simultaneous launches by cooperating AgentSwapper
 processes. A durable intent is written before spawn. An interrupted supervisor
 leaves an unfinished run and blocks reuse even after its OS lease disappears.
