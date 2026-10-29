@@ -130,3 +130,7 @@ reproduce both candidate executables: the Linux `agentswapper` and Windows
 and [Windows job](https://github.com/shahzadlone/agent-swapper/actions/runs/40829068872/job/123301885194).
 The tool stopped at the first mismatch, so those results do not determine
 whether the `aswp` binaries matched. The cause has not been established.
+After switching to the `windows-2025` label and setting the source timestamp,
+the Windows comparison still reported a different `agentswapper.exe` hash in
+[CI run 40831029312](https://github.com/shahzadlone/agent-swapper/actions/runs/40831029312/job/123308140920)
+at `63ac746`. Those controls alone did not resolve that Windows mismatch.
