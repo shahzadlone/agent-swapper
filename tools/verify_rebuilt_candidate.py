@@ -22,7 +22,7 @@ def verify_rebuild(directory, target, revision, lock, version, source_files, bin
     marker = binaries / "agentswapper-build.json"
     if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 65536:
         raise ValueError("rebuilt candidate marker is missing or invalid")
-    verify_build_marker(json.loads(read_bounded(marker, 65536)), revision, False, lock, local)
+    verify_build_marker(json.loads(read_bounded(marker, 65536).decode("utf-8")), revision, False, lock, local)
     binary_hashes = {name: hashlib.sha256(data).hexdigest() for name, data in local.items()}
     verify_one(directory, target, revision, lock, version, source_files, binary_hashes)
     for name, value in binary_hashes.items():

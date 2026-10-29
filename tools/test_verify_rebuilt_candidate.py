@@ -12,7 +12,7 @@ from verify_rebuilt_candidate import verify_rebuild
 class RebuiltCandidateTests(unittest.TestCase):
     def test_candidate_integrity_and_source_binding_precede_comparison(self):
         cases = ((name, target, mode) for name, target in TARGETS.items()
-                 for mode in ("valid", "tamper", "wrong_revision", "dirty_marker", "stale_marker", "missing_marker"))
+                 for mode in ("valid", "tamper", "wrong_revision", "dirty_marker", "stale_marker", "missing_marker", "invalid_marker_encoding"))
         for name, target, mode in cases:
             with self.subTest(target=target, mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
@@ -26,7 +26,11 @@ class RebuiltCandidateTests(unittest.TestCase):
                           "lock_sha256": LOCK, "binaries": {"aswp" + suffix: digest(b"binary a"),
                           "agentswapper" + suffix: digest(b"old" if mode == "stale_marker" else b"binary b")}}
                 if mode != "missing_marker":
-                    (binaries / "agentswapper-build.json").write_text(json.dumps(marker), encoding="utf-8")
+                    marker_path = binaries / "agentswapper-build.json"
+                    if mode == "invalid_marker_encoding":
+                        marker_path.write_bytes(b"\xff")
+                    else:
+                        marker_path.write_text(json.dumps(marker), encoding="utf-8")
                 revision = "c" * 40 if mode == "wrong_revision" else REVISION
                 if mode == "valid":
                     verify_rebuild(root / name, target, revision, LOCK, VERSION, SOURCE_FILES, binaries)
