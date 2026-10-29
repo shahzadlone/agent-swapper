@@ -11,6 +11,7 @@ from unittest.mock import patch
 import audit_attribution_tool
 import build_audited_deny
 import build_audited_about
+import build_candidate_binaries
 import release_candidate
 from release_candidate import add_locked_source, digest, reject_build_paths, safe_path, verify_build_marker, write_candidate
 from portable_archive import ensure_portable_names
@@ -32,6 +33,12 @@ def crate(entries):
 
 
 class CandidateSafety(unittest.TestCase):
+    def test_candidate_msvc_linker_uses_reproducible_mode_only_for_msvc(self):
+        for host in ("x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-gnu", "x86_64-pc-windows-msvc"):
+            flags = build_candidate_binaries.candidate_rustflags(Path("/home/example"), Path("/source tree"), host).split("\x1f")
+            self.assertEqual(flags[:4], ["--remap-path-prefix", f"{Path('/home/example')}=/build-home", "--remap-path-prefix", f"{Path('/source tree')}=/src/agentswapper"])
+            self.assertEqual(flags[4:], ["-C", "link-arg=/Brepro"] if host.endswith("-windows-msvc") else [])
+
     def test_attribution_diagnostic_exposes_only_fixed_labels_and_locked_names(self):
         lock = '[[package]]\nname = "example-crate"\nversion = "1.0.0"\n'
         result = release_candidate.attribution_diagnostic(

@@ -46,6 +46,11 @@ replace it and its marker. They do not establish independent build provenance.
 The candidate build sets `SOURCE_DATE_EPOCH` to the source commit's timestamp
 for both the original and separate-runner rebuild; this is one reproducibility
 input, not proof that every compiler and dependency honors it.
+For an MSVC host, the build also passes the linker `/Brepro` option. Rust's
+[bootstrap source](https://doc.rust-lang.org/beta/nightly-rustc/src/bootstrap/core/build_steps/compile.rs.html)
+uses this option to remove nondeterministic PE timestamp data when building
+the compiler. Its effect on AgentSwapper's separate-runner builds remains to
+be measured; the byte comparison and signing gate are unchanged.
 The ZIP contains `BUILD-INFO.json` with the revision, dirty state, Rust host,
 toolchain, lockfile hash, and hashes of its other contents. The build remaps
 workspace and home paths, and packaging refuses binaries containing those local

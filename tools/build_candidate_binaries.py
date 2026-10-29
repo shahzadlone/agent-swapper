@@ -10,6 +10,16 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def candidate_rustflags(home, root, host):
+    flags = ["--remap-path-prefix", f"{home}=/build-home",
+             "--remap-path-prefix", f"{root}=/src/agentswapper"]
+    if host.endswith("-windows-msvc"):
+        # Rust's own bootstrap uses this linker option to avoid a wall-clock
+        # PE timestamp. The separate rebuild comparison remains mandatory.
+        flags.extend(["-C", "link-arg=/Brepro"])
+    return "\x1f".join(flags)
+
+
 def main():
     def output(*args):
         return subprocess.run(args, cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
@@ -24,10 +34,11 @@ def main():
     if any("=" in str(path) or "\x1f" in str(path) for path in (Path.home(), ROOT)):
         raise SystemExit("home and workspace paths must not contain '=' or the unit-separator character")
     # The encoded form preserves spaces in paths on all supported hosts.
-    env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join([
-        "--remap-path-prefix", f"{Path.home()}=/build-home",
-        "--remap-path-prefix", f"{ROOT}=/src/agentswapper",
-    ])
+    rust = output("rustc", "+1.98.0", "-vV")
+    hosts = [line.removeprefix("host: ") for line in rust.splitlines() if line.startswith("host: ")]
+    if len(hosts) != 1:
+        raise SystemExit("could not determine the pinned Rust host")
+    env["CARGO_ENCODED_RUSTFLAGS"] = candidate_rustflags(Path.home(), ROOT, hosts[0])
     # Independent builders use the same source timestamp, regardless of the
     # host clock or a caller-provided SOURCE_DATE_EPOCH.
     env["SOURCE_DATE_EPOCH"] = source_epoch
