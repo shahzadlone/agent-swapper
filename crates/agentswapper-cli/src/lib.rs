@@ -2,6 +2,7 @@
 mod config_cli;
 mod engines;
 mod handover_cli;
+mod terminal_input;
 #[cfg(unix)]
 mod terminal_signals;
 mod tui;

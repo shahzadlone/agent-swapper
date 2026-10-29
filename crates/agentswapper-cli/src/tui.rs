@@ -5,8 +5,7 @@ use agentswapper_core::{
 };
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    Frame, Terminal,
-    backend::CrosstermBackend,
+    Frame,
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -17,6 +16,7 @@ mod launch;
 #[cfg(test)]
 mod preview;
 mod setup;
+mod terminal;
 
 const TEAL: Color = Color::Rgb(44, 204, 195);
 const YELLOW: Color = Color::Rgb(250, 205, 61);
@@ -237,9 +237,9 @@ fn run_terminal(
     interrupted: impl Fn() -> bool,
 ) -> Result<TerminalOutcome> {
     let mut restore = Restore { active: true };
-    crossterm::terminal::enable_raw_mode()?;
+    crate::terminal_input::enable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let mut terminal = terminal::DashboardTerminal::new()?;
     loop {
         if interrupted() {
             break;
@@ -653,7 +653,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use agentswapper_core::Harness;
-    use ratatui::backend::TestBackend;
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn wrapped_rows_keep_words_styles_and_graphemes_intact() {

@@ -10,6 +10,9 @@ recorded gents session selection, and local previews from the actual renderer.
 Live usage, cross-agent context transfer and the full action set remain open.
 POSIX dashboard exits now restore the terminal before re-raising external
 interrupt, termination and hangup signals; actual PTY checks cover those paths.
+Unix event input uses the TTY polling backend with bounded raw reads, so closed
+terminals and incomplete Unicode/escape sequences cannot indefinitely defer
+the next application signal check. See [dependency decisions](dependencies.md#bounded-terminal-input).
 
 ## Implemented foreground transition
 

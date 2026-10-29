@@ -17,17 +17,7 @@ import termios
 import time
 
 
-def same_terminal_configuration(before, after):
-    before = list(before)
-    after = list(after)
-    if sys.platform == "darwin":
-        # XNU sets PENDIN while switching back to canonical input. It is a
-        # transient kernel input state, not a terminal configuration setting.
-        # See xnu/bsd/sys/termios.h; every other bit and field remains exact.
-        pendin = getattr(termios, "PENDIN", 0x20000000)
-        before[3] &= ~pendin
-        after[3] &= ~pendin
-    return before == after
+from terminal_fixture import same_terminal_configuration
 
 
 def check(binary, mode):

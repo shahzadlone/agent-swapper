@@ -16,7 +16,8 @@ import termios
 import time
 import tty
 
-from check_dashboard_pty import drain, read_available
+from check_dashboard_pty import drain, read_available, wait_for_consumed_input
+from terminal_fixture import same_terminal_configuration
 
 
 PASSPHRASE = b"fixture-only-passphrase-canary"
@@ -36,7 +37,7 @@ class Sandbox:
         subprocess.run(self.base + ["profile", "add", "claude", "--alias", "fixture"],
                        env=self.env, check=True, capture_output=True, timeout=10)
 
-    def check(self, name, action, confirmation=False):
+    def check(self, name, action, confirmation=False, passphrase=PASSPHRASE):
         output_path = self.root / f"{name}.age"
         command = self.base + ["handover", "pack", "--from", "fixture", "--input", str(self.note),
                                "--output", str(output_path), "--workspace", str(self.workspace)]
@@ -51,13 +52,18 @@ class Sandbox:
             drain(master, process, output, b"Handover passphrase:")
             assert not termios.tcgetattr(slave)[3] & (termios.ICANON | termios.ECHO)
             if confirmation:
-                os.write(master, PASSPHRASE + b"\r")
+                os.write(master, passphrase + b"\r")
                 drain(master, process, output, b"Confirm passphrase:")
             expected_signal = None
             if isinstance(action, int):
                 os.write(master, PARTIAL)
                 process.send_signal(action)
                 expected_signal = action
+            elif action in ("partial-utf8", "partial-csi"):
+                os.write(master, PARTIAL + (b"\xc3" if action == "partial-utf8" else b"\x1b["))
+                wait_for_consumed_input(slave, master, process, output)
+                process.send_signal(signal.SIGTERM)
+                expected_signal = signal.SIGTERM
             elif action == "spill":
                 process.send_signal(signal.SIGSTOP)
                 await_stopped(process)
@@ -77,10 +83,18 @@ class Sandbox:
                 os.write(master, PARTIAL + b"\x03")
             elif action == "mismatch":
                 os.write(master, b"different-fixture-passphrase\r")
-            elif action in ("success", "crypto-signal"):
-                os.write(master, PASSPHRASE + b"\r")
+            elif action in ("success", "slow-unicode", "crypto-signal"):
+                if action == "slow-unicode":
+                    # Split a multibyte character across multiple poll/read
+                    # deadlines. It must survive rather than being discarded.
+                    os.write(master, passphrase[:-1])
+                    wait_for_consumed_input(slave, master, process, output)
+                    time.sleep(0.3)
+                    os.write(master, passphrase[-1:] + b"\r")
+                else:
+                    os.write(master, passphrase + b"\r")
                 drain(master, process, output, b"Confirm passphrase:")
-                os.write(master, PASSPHRASE + b"\r")
+                os.write(master, passphrase + b"\r")
                 if action == "crypto-signal":
                     # Observe the real boundary after hidden entry has restored
                     # the terminal, while the fixed-cost KDF is still running.
@@ -101,12 +115,13 @@ class Sandbox:
             result = process.wait(timeout=2)
             if expected_signal is not None:
                 assert result == -expected_signal, "original signal termination was lost"
-            elif action == "success":
+            elif action in ("success", "slow-unicode"):
                 assert result == 0, f"interactive pack failed: {bytes(output[-800:])!r}"
             else:
                 assert result != 0
                 assert (b"did not match" if action == "mismatch" else b"cancelled") in output
-            assert termios.tcgetattr(slave) == before, "hidden entry left terminal settings modified"
+            after = termios.tcgetattr(slave)
+            assert same_terminal_configuration(before, after), f"hidden entry left terminal settings modified: before={before!r}; after={after!r}"
             assert PASSPHRASE not in output and PARTIAL not in output, "hidden entry echoed secret input"
             if action == "spill":
                 tty.setraw(slave)
@@ -114,11 +129,11 @@ class Sandbox:
                     assert not select.select([slave], [], [], 0)[0], "unread secret bytes remained for the shell"
                 finally:
                     termios.tcsetattr(slave, termios.TCSANOW, before)
-            if action == "success":
+            if action in ("success", "slow-unicode"):
                 assert output_path.is_file()
                 inspected = subprocess.run(self.base + ["handover", "inspect", str(output_path),
                                                         "--passphrase-stdin", "--json"],
-                                           input=PASSPHRASE + b"\n", env=self.env, capture_output=True,
+                                           input=passphrase + b"\n", env=self.env, capture_output=True,
                                            check=True, timeout=30)
                 assert PASSPHRASE not in inspected.stdout + inspected.stderr
                 assert json.loads(inspected.stdout)["data"]["documentBytes"] == len(self.note.read_bytes())
@@ -160,10 +175,13 @@ def main():
             for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
                 sandbox.check(f"{phase}-{quit_signal.name}", quit_signal, confirmation)
             sandbox.check(f"{phase}-keyboard-cancel", "cancel", confirmation)
+            sandbox.check(f"{phase}-partial-utf8-SIGTERM", "partial-utf8", confirmation)
+            sandbox.check(f"{phase}-partial-csi-SIGTERM", "partial-csi", confirmation)
         sandbox.check("queued-secret-spill", "spill")
         sandbox.check("mismatch", "mismatch", confirmation=True)
         sandbox.check("post-prompt-crypto-SIGTERM", "crypto-signal")
         sandbox.check("pack-and-inspect", "success")
+        sandbox.check("slow-unicode-pack-and-inspect", "slow-unicode", passphrase=PASSPHRASE + b"-\xc3\xa9")
 
 
 if __name__ == "__main__":

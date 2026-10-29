@@ -22,7 +22,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 serde.workspace = true
 serde_json.workspace = true
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
-crossterm = "0.29"
+crossterm = "=0.29.0"
 ctrlc = "3"
 zeroize.workspace = true
 uuid = "1"
@@ -34,6 +34,7 @@ predicates = "3"
 insta = "1"
 
 [target.'cfg(unix)'.dependencies]
+crossterm = { version = "=0.29.0", features = ["use-dev-tty"] }
 signal-hook = { version = "=0.3.18", default-features = false }
 rustix = { version = "1", features = ["termios"] }
 

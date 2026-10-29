@@ -13,7 +13,7 @@ import tempfile
 import termios
 
 from check_dashboard_pty import drain
-from check_native_terminal_pty import same_terminal_configuration
+from terminal_fixture import same_terminal_configuration
 
 
 AGENT = r'''

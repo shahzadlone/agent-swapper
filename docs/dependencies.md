@@ -78,8 +78,44 @@ re-raises the original signal. Source review covered that API's default-handler
 reset, unblocking and re-raise path, including its abort fallback if delivery
 fails. No other workflow thread installs handlers for these signals. Registration
 guards remove their actions on startup failure and exit. I/O does not run in
-the signal callback, and native-launch interrupt handling remains a separate
-command path. This adds no package or advisory exception.
+the signal callback. Dashboard handlers are removed before native launch;
+foreground launch and login share their own interrupt handler with the shell
+commands. This adds no package or advisory exception.
+
+### Bounded terminal input
+
+The CLI pins crossterm 0.29.0 and selects its `use-dev-tty` event backend on
+Unix. The default Mio backend's inner TTY read loop ignores zero-byte reads
+and non-retryable read errors; it can remain inside `poll` after terminal loss
+without returning to our signal check. Repeated provider-free PTY shutdown
+tests reproduced that hang locally. The selected backend breaks its inner
+loop on a zero-byte read and retains the outer poll deadline.
+
+Raw dashboard and hidden-passphrase input also use `VMIN=0, VTIME=1`, so an
+incomplete UTF-8 or escape sequence reaches that deadline without needing a
+second byte. Crossterm caches the original terminal settings before this
+adjustment and restores them before shell/agent input resumes. This is not
+a timeout on a user's thinking time or a completed key sequence: later bytes
+still complete pending input. PTY tests exercise partial-input interruption,
+repeated terminal loss and a successful encrypted pack whose Unicode password
+character arrives across several read deadlines.
+
+This feature adds locked `filedescriptor 0.8.3` (MIT) on Unix. Its published
+manifest has no build script and depends on already-locked libc, thiserror 1,
+and Windows bindings. Source review covered the Unix poll conversion and the
+macOS select implementation's descriptor bounds; only short application poll
+timeouts reach this path. It adds no network, cryptography or credential logic.
+The locked advisory/license/source audit passes locally with existing duplicate
+version warnings and no new exception. Hosted Linux/macOS terminal checks and
+the rebuilt candidate gates remain required.
+
+The dashboard also wraps its terminal writer during destruction. Active writes
+retain their original errors; only the terminal destructor's final cursor
+output is best-effort. Ratatui 0.30.2 otherwise reports a failed cursor write
+with `eprintln!`, which can panic when stderr is disconnected too. Repeated
+both-stream PTY loss reproduced that exit-101 path locally. Independent raw-mode
+and alternate-screen restoration still run; this does not suppress launch errors
+or let a failed render continue.
 
 Interactive handover retains the handlers through cryptography and publication;
 unregistering immediately after a prompt would remove the actions while that

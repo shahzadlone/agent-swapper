@@ -87,7 +87,7 @@ impl PassphraseInput {
             return Err(Error::PassphraseInput);
         }
         let _restore = RestoreEcho;
-        crossterm::terminal::enable_raw_mode()?;
+        crate::terminal_input::enable_raw_mode()?;
         let first = hidden_passphrase("Handover passphrase: ", interrupted)?;
         if confirm {
             handover::validate_new_passphrase(&first)?;

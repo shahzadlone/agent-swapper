@@ -39,7 +39,9 @@ Optional sidecar validation now treats disappearance between its metadata check
 and Windows handle open like absence at the first check; existing sidecars still
 require handle-based hardlink and reparse validation. Required registry and lock
 files keep their existing open rules. A targeted Windows regression exercises
-that interval and checks hardlink refusal; native revalidation is pending.
+that interval and checks hardlink refusal. The Windows tests and all 25
+initialization stress iterations passed at `958c2b4` in
+[CI run 40956272717](https://github.com/shahzadlone/agent-swapper/actions/runs/40956272717/job/123737077303).
 
 Explicit verification, doctor, and run-history reads always perform full
 verification. This optimization relies on SQLite writes and working local

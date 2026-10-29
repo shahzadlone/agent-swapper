@@ -16,6 +16,8 @@ import tempfile
 import termios
 import time
 
+from terminal_fixture import same_terminal_configuration
+
 
 def read_available(master, output):
     if select.select([master], [], [], 0)[0]:
@@ -101,7 +103,8 @@ def check(binary, quit_key):
             drain(master, process, output)
             assert process.wait(timeout=2) == 0
             assert b"\x1b[?1049l" in output, "alternate screen was not restored"
-            assert termios.tcgetattr(slave) == before, "terminal attributes were not restored"
+            after = termios.tcgetattr(slave)
+            assert same_terminal_configuration(before, after), f"terminal attributes were not restored: before={before!r}; after={after!r}"
         finally:
             if process is not None and process.poll() is None:
                 process.kill()
@@ -130,29 +133,47 @@ def check(binary, quit_key):
         assert not json_state.exists()
 
 
-def check_signal(binary, quit_signal, close_peer=False):
+def wait_for_consumed_input(slave, master, process, output):
+    deadline = time.monotonic() + 2
+    while True:
+        read_available(master, output)
+        pending = struct.unpack("i", fcntl.ioctl(slave, termios.FIONREAD, struct.pack("i", 0)))[0]
+        if pending == 0:
+            return
+        assert process.poll() is None and time.monotonic() < deadline, "partial terminal input was not consumed"
+        time.sleep(0.005)
+
+
+def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_diagnostics=False):
     with tempfile.TemporaryDirectory(prefix="aswp-dashboard-signal-") as directory:
         root = Path(directory)
         env = {"HOME": str(root), "TERM": "xterm-256color", "LANG": "C.UTF-8"}
         master, slave = pty.openpty()
         before = termios.tcgetattr(slave)
         process = None
+        diagnostics = (root / "stderr.txt").open("wb") if capture_diagnostics else None
         try:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             process = subprocess.Popen([str(binary), "--state-dir", str(root / "state")],
-                                       stdin=slave, stdout=slave, stderr=slave, env=env)
+                                       stdin=slave, stdout=slave, stderr=diagnostics or slave, env=env)
             output = bytearray()
             drain(master, process, output, b"Profiles")
             assert not termios.tcgetattr(slave)[3] & termios.ICANON
+            if partial is not None:
+                os.write(master, partial)
+                wait_for_consumed_input(slave, master, process, output)
             process.send_signal(quit_signal)
             if close_peer:
                 os.close(master)
                 master = None
             else:
                 drain(master, process, output)
-            assert process.wait(timeout=2) == -quit_signal, "signal termination was replaced with an ordinary exit"
+            status = process.wait(timeout=2)
+            details = (root / "stderr.txt").read_bytes()[-5000:] if diagnostics is not None else b""
+            assert status == -quit_signal, f"signal termination was replaced: expected {-quit_signal}, got {status}; stderr={details!r}"
             if not close_peer:
-                assert termios.tcgetattr(slave) == before, "signal exit left terminal settings modified"
+                after = termios.tcgetattr(slave)
+                assert same_terminal_configuration(before, after), f"signal exit left terminal settings modified: before={before!r}; after={after!r}"
                 assert b"\x1b[?1049l" in output, "signal exit did not leave alternate screen"
         finally:
             if process is not None and process.poll() is None:
@@ -161,6 +182,8 @@ def check_signal(binary, quit_signal, close_peer=False):
             if master is not None:
                 os.close(master)
             os.close(slave)
+            if diagnostics is not None:
+                diagnostics.close()
 
 
 def check_setup(binary):
@@ -217,7 +240,8 @@ def check_setup(binary):
             assert result.returncode != 0, "cancelled draft was registered"
             for canary in [b"quiet-canary", b"relay-canary", b"agent-canary", b"do-not-register", b"127.0.0.1:9191"]:
                 assert canary not in output, "masked setup leaked a fixture field"
-            assert termios.tcgetattr(slave) == before, "setup exit left terminal settings modified"
+            after = termios.tcgetattr(slave)
+            assert same_terminal_configuration(before, after), f"setup exit left terminal settings modified: before={before!r}; after={after!r}"
             assert b"\x1b[?1049l" in output
         finally:
             if process is not None and process.poll() is None:
@@ -235,8 +259,15 @@ def main():
     for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
         check_signal(Path(sys.argv[1]).resolve(strict=True), quit_signal)
     check_signal(Path(sys.argv[1]).resolve(strict=True), signal.SIGHUP, close_peer=True)
+    # The old Mio event reader could spin forever on EOF before returning to
+    # the application's signal check. Repeat this previously intermittent race.
+    for _ in range(25):
+        check_signal(Path(sys.argv[1]).resolve(strict=True), signal.SIGHUP, close_peer=True)
+    for partial in [b"\xc3", b"\x1b["]:
+        for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
+            check_signal(Path(sys.argv[1]).resolve(strict=True), quit_signal, partial=partial)
     check_setup(Path(sys.argv[1]).resolve(strict=True))
-    print("Bare dashboard, privacy, availability, native/gents setup, cancellation, resize, keyboard/signal exits and terminal restoration: pass")
+    print("Bare dashboard, privacy, availability, native/gents setup, cancellation, resize, keyboard/signal exits, repeated EOF and partial-input restoration: pass")
 
 
 if __name__ == "__main__":
