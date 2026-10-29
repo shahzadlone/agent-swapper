@@ -107,6 +107,19 @@ def lease_available(root):
         return True
 
 
+def hold_live_session(shell, root):
+    # Exceed the old 30-second total lifetime limit; continually check that
+    # neither the guardian nor target has finished and the lease remains held.
+    deadline = time.monotonic() + 31
+    while time.monotonic() < deadline:
+        shell.pump()
+        assert not (root / "failure").exists(), "fixture failed during live session"
+        assert not (root / "cleanup-ready").exists(), "cleanup began during live session"
+        assert not (root / "finished").exists(), "fixture ended during live session"
+        assert not lease_available(root), "lease lost during live session"
+        time.sleep(0.05)
+
+
 def run_case(binary, mode, delegated=None):
     with tempfile.TemporaryDirectory(prefix="aswp-terminal-guardian-") as directory:
         root = Path(directory)
@@ -160,12 +173,16 @@ def run_case(binary, mode, delegated=None):
             active_settings = termios.tcgetattr(shell.master)
             prompt_offset = len(shell.output)
 
-            if mode in ("suspend-resize", "group-kill"):
+            if mode in ("suspend-resize", "group-kill", "long-session"):
+                if mode == "long-session":
+                    hold_live_session(shell, root)
                 offset = len(shell.output)
                 shell.send(b"\x1a")
                 shell.prompt(offset)
                 assert os.tcgetpgrp(shell.master) != parent["group"]
                 assert b"Stopped" in shell.output[offset:]
+                if mode == "long-session":
+                    hold_live_session(shell, root)
                 if mode == "group-kill":
                     # bash resolves its own job, rather than this controller
                     # signalling a possibly stale group number from metadata.
@@ -278,6 +295,8 @@ def main():
     modes = ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr", "raw-exit", "raw-parent-kill"]
     if delegated is not None:
         modes += ["detached-writer", "detached-parent-kill", "detached-guardian-kill"]
+    else:
+        modes.append("long-session")
     for mode in modes:
         run_case(binary, mode, delegated)
     if delegated is not None:

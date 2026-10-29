@@ -215,8 +215,14 @@ in CI for its platform-specific evidence.
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.
-Replace fixture lifetime limits with phase-specific startup/cleanup deadlines
-before production use; normal live sessions and suspension must not expire.
+The terminal guardian fixture no longer imposes a total deadline on a live or
+suspended session. Its admission transport retains bounded receive operations,
+and its cleanup phases retain explicit deadlines. A long-session PTY case
+without cgroup delegation exercises an active session and suspension beyond
+the old 30-second limit;
+this fixture behavior does not establish production deadline handling. A
+complete startup-phase deadline and failure reconciliation are still needed;
+per-operation transport bounds alone do not establish that guarantee.
 Spawn trusted helpers before changing inherited interrupt dispositions in the
 frontend. The fixture's inherited-signal results do not qualify the current
 native-launch interrupt wrapper.

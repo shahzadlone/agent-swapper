@@ -215,7 +215,6 @@ mod fixture {
             drop(lease);
             None
         };
-        let deadline = Instant::now() + BUDGET;
         let mut injected = false;
         let status = loop {
             if dir.join("kill-parent").exists() {
@@ -231,7 +230,8 @@ mod fixture {
             if let Some(status) = helper.try_wait()? {
                 break status;
             }
-            require(Instant::now() < deadline, "guardian did not finish")?;
+            // A live interactive session (including a stopped foreground job)
+            // has no lifetime deadline. Startup and cleanup have separate bounds.
             std::thread::sleep(Duration::from_millis(10));
         };
         if let Some(mut fallback) = fallback {
@@ -357,7 +357,6 @@ mod fixture {
             "guardian",
             json!({"pid":getpid().as_raw_pid(),"group":getpgrp().as_raw_pid()}),
         )?;
-        let deadline = Instant::now() + BUDGET;
         let mut parent_eof = false;
         let mut retired = false;
         let status = loop {
@@ -385,7 +384,6 @@ mod fixture {
             if let Some(status) = target.0.try_wait()? {
                 break status;
             }
-            require(Instant::now() < deadline, "guardian deadline expired")?;
             std::thread::sleep(Duration::from_millis(10));
         };
         if let Some(scope) = &mut scope {
@@ -516,7 +514,6 @@ mod fixture {
             "target",
             json!({"pid":getpid().as_raw_pid(),"group":group.as_raw_pid(),"ignored":ignored,"terminals":actual}),
         )?;
-        let deadline = Instant::now() + BUDGET;
         loop {
             if resized.swap(false, Ordering::Relaxed) {
                 let size = tcgetwinsize(io::stdin())?;
@@ -543,7 +540,6 @@ mod fixture {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(error) => return Err(io::Error::other(error)),
             }
-            require(Instant::now() < deadline, "target deadline expired")?;
         }
     }
 
