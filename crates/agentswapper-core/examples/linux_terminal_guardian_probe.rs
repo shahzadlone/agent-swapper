@@ -649,11 +649,15 @@ mod fixture {
             _ => Err(io::Error::other("unknown fixture role")),
         };
         if let Err(error) = &result {
-            let _ = publish(
-                &dir,
-                &format!("failure-{}", role.to_string_lossy()),
-                json!({"role":role.to_string_lossy(),"error":error.to_string(),"errno":error.raw_os_error()}),
-            );
+            if let Some(name @ ("parent" | "guardian" | "shim" | "target" | "writer")) =
+                role.to_str()
+            {
+                let _ = publish(
+                    &dir,
+                    &format!("failure-{name}"),
+                    json!({"role":name,"error":error.to_string(),"errno":error.raw_os_error()}),
+                );
+            }
             let _ = publish(
                 &dir,
                 "failure",
