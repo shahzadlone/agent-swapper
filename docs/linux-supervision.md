@@ -150,7 +150,11 @@ The race between checking a named child and removing it remains a stop-receipt
 gate, even when the supervisor observed the scope empty beforehand.
 The fixture now also probes `cgroup.events` relative to the original open leaf
 descriptor before and after retirement, and compares it with a newly created
-same-name cgroup. This is an observation under evaluation, not yet a receipt.
+same-name cgroup. These observations passed the delegated Linux job at `e527350`
+in [CI run 40832463049](https://github.com/shahzadlone/agent-swapper/actions/runs/40832463049/job/123309571171).
+They remain observations under evaluation, not a receipt. A further fixture
+now attempts retirement using the original descriptor after replacement and
+requires the replacement to survive; that added check awaits hosted CI.
 In Linux [`v7.0` cgroup destruction](https://github.com/torvalds/linux/blob/v7.0/kernel/cgroup/cgroup.c),
 the kernel checks population, disables migration and removes the cgroup's
 visible files during destruction; those implementation details need qualification

@@ -600,6 +600,17 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
         let replacement = cgroup::checked_directory(scope.path()).unwrap();
         assert!(!cgroup::events_missing(&replacement).unwrap());
         assert!(cgroup::events_missing(scope.directory()).unwrap());
+        assert!(
+            cgroup::retire_transferred(
+                scope.parent(),
+                scope.directory(),
+                scope.path(),
+                Instant::now() + BUDGET,
+            )
+            .is_err()
+        );
+        assert!(scope.path().exists());
+        assert!(!cgroup::events_missing(&replacement).unwrap());
         cgroup::retire_transferred(
             scope.parent(),
             &replacement,
