@@ -121,6 +121,10 @@ to match. The known unbracketed IPv6 form written by gents 0.21.0 is accepted
 only when it exactly matches the bound address; the launched URL is bracketed.
 Missing state appears in a setup preview and blocks launch. The check neither
 contacts the server nor proves it is alive or authenticates its identity.
+It checks the opened file's metadata, rejects links and multiple hardlinks, and
+on Unix opens without following a final symlink or blocking on a FIFO. An atomic
+replacement may leave the reader with the previous valid snapshot; this is not
+an isolation boundary against another process running as the same user.
 **The listener remains unverified: gents presents this home's authentication to
 the bound address.** Use a runtime/listener you control; a stale or hostile local
 listener can receive that authentication. This client adapter does not start,

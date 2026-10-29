@@ -485,12 +485,42 @@ impl LaunchPlan {
         };
         let path = self.home.join("runtime.json");
         crate::private_fs::reject_links(&path).map_err(|_| Error::GentsRuntimeMismatch)?;
-        crate::private_fs::validate_file(&path).map_err(|_| Error::GentsRuntimeMismatch)?;
-        let file = match std::fs::File::open(&path) {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
+        let file = match options.open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(_) => return Err(Error::GentsRuntimeMismatch),
         };
+        let metadata = file.metadata().map_err(|_| Error::GentsRuntimeMismatch)?;
+        crate::private_fs::validate_snapshot_metadata(&metadata)
+            .map_err(|_| Error::GentsRuntimeMismatch)?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0
+                || winapi_util::file::information(&file)
+                    .map_err(|_| Error::GentsRuntimeMismatch)?
+                    .number_of_links()
+                    > 1
+            {
+                return Err(Error::GentsRuntimeMismatch);
+            }
+        }
         let mut bytes = Vec::new();
         file.take(65537)
             .read_to_end(&mut bytes)

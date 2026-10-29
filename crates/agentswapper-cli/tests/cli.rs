@@ -1341,6 +1341,49 @@ fn runtime_record_is_checked_and_previews_disclose_listener_and_workspace_scope(
 }
 
 #[test]
+fn runtime_record_refuses_multiple_hardlinks() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    runtime_state(&home, "127.0.0.1:9191");
+    std::fs::hard_link(home.join("runtime.json"), home.join("runtime-copy.json")).unwrap();
+    gents_run(&s)
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("runtime.json"));
+    assert!(!home.join("fixture-owned.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_record_refuses_symbolic_links() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    runtime_state(&home, "127.0.0.1:9191");
+    std::fs::rename(home.join("runtime.json"), home.join("runtime-real.json")).unwrap();
+    std::os::unix::fs::symlink("runtime-real.json", home.join("runtime.json")).unwrap();
+    gents_run(&s).assert().code(125);
+    assert!(!home.join("fixture-owned.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_record_refuses_fifo_without_blocking() {
+    let s = Sandbox::new();
+    let home = gents_profile(&s, "127.0.0.1:9191", "worker");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        home.join("runtime.json"),
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .unwrap();
+    gents_run(&s)
+        .timeout(std::time::Duration::from_secs(3))
+        .assert()
+        .code(125);
+    assert!(!home.join("fixture-owned.txt").exists());
+}
+
+#[test]
 fn engine_registration_refuses_ambiguous_or_nonlocal_bindings() {
     let s = Sandbox::new();
     for args in [
