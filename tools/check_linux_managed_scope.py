@@ -79,7 +79,15 @@ def inspect_identity(unit, expected, uid, main_pid):
                              '--property=Id,ControlGroup,MainPID,InvocationID,Transient,User,ActiveState'],
                             stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             check=True, timeout=5)
-    return parse_identity(result.stdout, unit, expected, uid, main_pid)
+    invocation = parse_identity(result.stdout, unit, expected, uid, main_pid)
+    validator = os.environ.get('ASWP_MANAGED_VALIDATOR')
+    require(validator is not None, "Rust manager validator is not configured")
+    checked = subprocess.run([validator, unit + '.service', str(uid), str(main_pid)],
+                             input=result.stdout, text=True, stdin=None,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             check=False, timeout=5)
+    require(checked.returncode == 0, "Rust core refused manager identity")
+    return invocation
 
 
 def tick(directory, name, seconds, stop_name=None):
@@ -276,6 +284,9 @@ def main():
     run_id, attempt = os.environ.get('GITHUB_RUN_ID', ''), os.environ.get('GITHUB_RUN_ATTEMPT', '')
     require(re.fullmatch(r'[0-9]{1,24}', run_id) and re.fullmatch(r'[0-9]{1,8}', attempt),
             "invalid hosted run identity")
+    validator = Path(os.environ.get('ASWP_MANAGED_VALIDATOR', ''))
+    require(validator.is_absolute() and validator.is_file() and not validator.is_symlink(),
+            "Rust manager validator is missing or invalid")
     with tempfile.TemporaryDirectory(prefix='aswp-managed-') as temporary:
         for forced in (False, True):
             trial(Path(temporary), forced, run_id, attempt)

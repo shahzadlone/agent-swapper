@@ -153,12 +153,18 @@ jobs:
 
   linux-manager-evidence:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Build Rust manager identity probe
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          cargo +1.98.0 build --locked -p agentswapper-core --example linux_manager_identity_probe
       - name: Qualify root-owned service cleanup
+        env:
+          ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe
         run: |
           python3 -m unittest discover -s tools -p test_linux_managed_scope.py -v
           python3 tools/check_linux_managed_scope.py

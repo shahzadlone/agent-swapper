@@ -36,3 +36,7 @@ pub mod linux_shim;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod linux_guardian;
+
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub mod linux_manager;

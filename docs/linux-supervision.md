@@ -423,6 +423,15 @@ administrator adversaries and external delegated work remain unqualified.
 A shipped system-manager backend would need an explicitly authorized
 installation and a narrowly reviewed control interface.
 
+The production core now contains a bounded managed-invocation parser in
+`supervision/linux_manager.rs`. It binds the exact service name, cgroup path,
+ordinary numeric user, main process and nonzero invocation ID, and rejects
+unknown or duplicate properties. The manager fixture sends each live snapshot
+through the compiled Rust probe as well as its fixture checks; that new hosted
+integration is pending. This is structural validation only: unauthenticated text
+can still be fabricated, so it issues no stop receipt and is not connected to
+normal launches or automatic switching.
+
 Same-user cgroup migration is a release-blocking containment concern. This
 prototype requires the delegated parent `cgroup.procs` to be writable, and the
 target currently runs with the same user identity as the supervisor. The
