@@ -10,18 +10,20 @@ from verify_rebuilt_candidate import compare, verify_rebuild
 
 class RebuiltCandidateTests(unittest.TestCase):
     def test_candidate_integrity_and_source_binding_precede_comparison(self):
-        name, target = next(iter(TARGETS.items()))
-        for mode in ("valid", "tamper", "wrong_revision", "dirty_marker", "stale_marker", "missing_marker"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+        cases = ((name, target, mode) for name, target in TARGETS.items()
+                 for mode in ("valid", "tamper", "wrong_revision", "dirty_marker", "stale_marker", "missing_marker"))
+        for name, target, mode in cases:
+            with self.subTest(target=target, mode=mode), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 make_candidate(root, name, target, tamper=mode == "tamper")
                 binaries = root / "binaries"
                 binaries.mkdir()
-                (binaries / "aswp").write_bytes(b"binary a")
-                (binaries / "agentswapper").write_bytes(b"binary b")
+                suffix = ".exe" if "windows" in target else ""
+                (binaries / ("aswp" + suffix)).write_bytes(b"binary a")
+                (binaries / ("agentswapper" + suffix)).write_bytes(b"binary b")
                 marker = {"schema": 1, "revision": REVISION, "dirty": mode == "dirty_marker",
-                          "lock_sha256": LOCK, "binaries": {"aswp": digest(b"binary a"),
-                          "agentswapper": digest(b"old" if mode == "stale_marker" else b"binary b")}}
+                          "lock_sha256": LOCK, "binaries": {"aswp" + suffix: digest(b"binary a"),
+                          "agentswapper" + suffix: digest(b"old" if mode == "stale_marker" else b"binary b")}}
                 if mode != "missing_marker":
                     (binaries / "agentswapper-build.json").write_text(json.dumps(marker), encoding="utf-8")
                 revision = "c" * 40 if mode == "wrong_revision" else REVISION
