@@ -485,12 +485,12 @@ fn guardian_exit_target() {
     std::process::exit(7);
 }
 
-fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
+fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool, guardian_loss: bool) {
     use crate::supervision::linux_guardian;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
     let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
     let domain = cgroup::Domain::open(&delegated).unwrap();
-    let scope = domain.create().unwrap();
+    let mut scope = domain.create().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
     let mut store = Store::open(&root).unwrap();
@@ -528,7 +528,7 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
             .spawn()
             .unwrap(),
     );
-    let target = if parent_loss {
+    let target = if parent_loss || guardian_loss {
         TARGET
     } else {
         GUARDIAN_EXIT_TARGET
@@ -569,6 +569,23 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
     )
     .unwrap();
     linux_guardian::record_and_go(&mut store, &run, pid, &channel, startup_deadline).unwrap();
+    if guardian_loss {
+        controller_wait(temp.path(), || temp.path().join("heartbeat").exists());
+        assert!(cgroup::populated(scope.directory()).unwrap());
+        guardian.0.kill().unwrap();
+        assert!(linux_guardian::wait_for_empty(&channel, &mut guardian.0).is_err());
+        assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
+        scope.retire(Instant::now() + BUDGET).unwrap();
+        assert!(cgroup::events_missing(scope.directory()).unwrap());
+        assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
+        drop(lease);
+        assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
+        assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
+        assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
+        store.attest_stopped(&run).unwrap();
+        assert!(store.verify().unwrap().consistent);
+        return;
+    }
     drop(lease);
     if parent_loss {
         controller_wait(temp.path(), || temp.path().join("heartbeat").exists());
@@ -576,7 +593,7 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
         drop(channel);
     } else {
         assert_eq!(
-            linux_guardian::receive_empty(&channel, Instant::now() + BUDGET).unwrap(),
+            linux_guardian::wait_for_empty(&channel, &mut guardian.0).unwrap(),
             7
         );
         assert!(!cgroup::populated(scope.directory()).unwrap());
@@ -698,7 +715,7 @@ fn internal_guardian_cleans_up_on_incomplete_startup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_reports_exit_after_cleanup() {
-    internal_guardian_case(false, false);
+    internal_guardian_case(false, false, false);
     println!(
         "::notice title=Linux internal guardian exit::actual CLI guardian observed exit and retired the scope; journal remains pending"
     );
@@ -707,7 +724,7 @@ fn internal_guardian_reports_exit_after_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
-    internal_guardian_case(true, false);
+    internal_guardian_case(true, false, false);
     println!(
         "::notice title=Linux internal guardian EOF::actual CLI guardian retired target scope on channel loss; journal remains pending"
     );
@@ -716,8 +733,17 @@ fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
-    internal_guardian_case(false, true);
+    internal_guardian_case(false, true, false);
     println!(
         "::notice title=Linux internal guardian pre-retirement EOF::actual CLI guardian retained lease through empty-scope cleanup after channel loss"
+    );
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_loss_preserves_unresolved_run_through_cleanup() {
+    internal_guardian_case(false, false, true);
+    println!(
+        "::notice title=Linux internal guardian loss::owned guardian loss leaves the run unresolved while the supervisor retains custody through cleanup"
     );
 }

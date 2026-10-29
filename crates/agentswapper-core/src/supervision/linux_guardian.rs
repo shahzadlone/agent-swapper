@@ -1,5 +1,6 @@
 //! Internal guardian for a delegated cgroup. Not yet wired to normal launches.
 use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
     fd::{BorrowedFd, OwnedFd},
     fs::OFlags,
     net::{RecvFlags, recv},
@@ -67,6 +68,34 @@ pub(crate) fn record_and_go(
     store.observe_spawn(run, pid)?;
     transport::send_until(channel, transport::GO, &[], deadline)?;
     Ok(())
+}
+
+/// Wait for the guardian's empty report without limiting a live session's
+/// duration. Only the owned child handle is used to detect guardian loss.
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn wait_for_empty(channel: &OwnedFd, guardian: &mut Child) -> io::Result<i32> {
+    let timeout = Timespec {
+        tv_sec: 0,
+        tv_nsec: 250_000_000,
+    };
+    loop {
+        let mut descriptors = [PollFd::new(channel, PollFlags::IN)];
+        match poll(&mut descriptors, Some(&timeout)) {
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(error) => return Err(error.into()),
+        }
+        let events = descriptors[0].revents();
+        if events.intersects(PollFlags::IN | PollFlags::HUP) {
+            return receive_empty(channel, Instant::now() + CLEANUP);
+        }
+        if !events.is_empty() {
+            return Err(io::Error::other("guardian control channel failed"));
+        }
+        if guardian.try_wait()?.is_some() {
+            return Err(io::Error::other("guardian exited before reporting empty"));
+        }
+    }
 }
 
 /// Independently inspect the held scope before and after asking the guardian
@@ -260,6 +289,36 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_session_waits_across_poll_intervals_and_guardian_loss_fails() -> io::Result<()> {
+        let (sender, receiver) = transport::pair()?;
+        let mut guardian = Target(Command::new("/bin/sleep").arg("10").spawn()?);
+        let sender_thread = thread::spawn(move || -> io::Result<()> {
+            thread::sleep(Duration::from_millis(700));
+            let mut packet = EMPTY_PREFIX.to_vec();
+            packet.extend_from_slice(&7_i32.to_be_bytes());
+            transport::send(&sender, &packet, &[])
+        });
+        let start = Instant::now();
+        assert_eq!(wait_for_empty(&receiver, &mut guardian.0)?, 7);
+        assert!(start.elapsed() >= Duration::from_millis(500));
+        sender_thread
+            .join()
+            .map_err(|_| io::Error::other("sender panicked"))??;
+
+        let (_sender, receiver) = transport::pair()?;
+        let mut exited = Target(Command::new("/bin/true").spawn()?);
+        let start = Instant::now();
+        assert!(wait_for_empty(&receiver, &mut exited.0).is_err());
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        let (sender, receiver) = transport::pair()?;
+        let mut guardian = Target(Command::new("/bin/sleep").arg("10").spawn()?);
+        transport::send(&sender, b"malformed", &[])?;
+        assert!(wait_for_empty(&receiver, &mut guardian.0).is_err());
+        Ok(())
+    }
 
     #[test]
     fn retirement_refuses_invalid_scope_without_sending_control() -> io::Result<()> {

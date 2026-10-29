@@ -179,12 +179,20 @@ the PID before sending GO under that same deadline. Local regressions check
 that an already-expired preparation transfers no capability, that the receiver
 waits for GO, and that a journal failure never sends GO. A failed GO after the
 journal commit leaves the run unresolved. These routines are not wired into
-normal launches; their delegated test results await hosted CI.
+normal launches. The shared preparation routine passed the actual-guardian
+delegated cases in [CI run 40833134396](https://github.com/shahzadlone/agent-swapper/actions/runs/40833134396/job/123311670467)
+at `001fc4c`; later journal-gating changes await their own hosted result.
 The fixture also uses a shared retirement routine that verifies the transferred
 scope and zero population before sending RETIRE, then checks the original
 descriptor for the missing events file after the guardian acknowledges removal.
 Invalid scope capabilities fail locally before the control message is sent;
 the combined routine still awaits its delegated CI run and issues no receipt.
+An experimental wait path now polls for the guardian's empty report without a
+total live-session deadline, while checking only the owned guardian child for
+unexpected exit. Local tests cover multiple polling intervals, guardian loss and
+invalid messages. A new delegated case kills the actual guardian while its
+target is running and requires the still-held supervisor lease to cover scope
+cleanup; its hosted result and terminal behavior remain to be established.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;

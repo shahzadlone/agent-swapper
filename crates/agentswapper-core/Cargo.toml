@@ -26,7 +26,7 @@ wait-timeout = "0.2"
 rustix = { version = "1", features = ["process", "fs", "termios"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1", features = ["net"] }
+rustix = { version = "1", features = ["event", "net"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1"
