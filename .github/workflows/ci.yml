@@ -201,3 +201,53 @@ jobs:
           path: target/release-candidate/
           if-no-files-found: error
           retention-days: 7
+
+  attest-preview:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, dependencies, candidate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - name: Test candidate-set verifier
+        run: python -m unittest discover -s tools -p test_verify_candidate_set.py -v
+      - name: Download this run's internal candidates
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: unsigned-candidate-*
+          path: target/provenance-candidates
+      - name: Verify candidate set and source binding
+        run: python tools/verify_candidate_set.py target/provenance-candidates "$GITHUB_SHA"
+      - name: Sign preview provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: target/provenance-candidates/*/*.zip
+          create-storage-record: false
+      - name: Verify signed provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          for archive in target/provenance-candidates/*/*.zip; do
+            gh attestation verify "$archive" --bundle "$BUNDLE_PATH" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+              --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" \
+              --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          done
+      - name: Store preview attestation bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-provenance-bundle
+          path: ${{ steps.provenance.outputs.bundle-path }}
+          if-no-files-found: error
+          retention-days: 7

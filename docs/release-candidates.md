@@ -60,6 +60,20 @@ python tools/release_candidate.py --output target/release-candidate
 ```
 
 The tool refuses to replace an existing archive or checksum. CI keeps unsigned
-candidates as short-lived workflow artifacts. Signed distribution, artifact
-attestation, reproducible-build verification, source and license review for the
-final dependency graph, and macOS notarization remain release gates.
+candidates as short-lived workflow artifacts. For a push to `main`, a separate
+job downloads the three candidates from that same run, verifies the target set,
+checksums, source revision, lockfile hash and archive inventory, and signs a
+provenance attestation. It verifies the Sigstore bundle against the repository,
+workflow, ref, commit and GitHub-hosted runner before storing the bundle as a
+short-lived artifact. Build jobs do not receive attestation or OIDC write
+permissions. Pull requests do not create attestations.
+
+The attestation signs a statement about archive digests and the workflow that
+attested them; it is not an operating-system code signature, independent proof
+that source produced the bytes, or evidence that a provider is isolated. The
+workflow and its actions remain part of the trust boundary. Do not select the
+expected ref or commit solely from an untrusted archive when verifying it.
+Signed distribution, independently reproducible builds, source and license
+review for the final dependency graph, and macOS notarization remain release
+gates. Attestation availability is subject to the repository's GitHub policy;
+an unsuccessful attestation job must not be described as verified.
