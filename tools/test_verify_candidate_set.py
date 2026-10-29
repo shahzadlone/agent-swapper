@@ -18,7 +18,7 @@ def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=Fals
     suffix = ".exe" if "windows" in target else ""
     files = {"aswp" + suffix: b"binary a", "agentswapper" + suffix: b"binary b",
              "LICENSE": b"license", "NOTICE": b"notice", "THIRD_PARTY_LICENSES.txt": b"licenses",
-             "PREVIEW.txt": b"preview"}
+             "PREVIEW.txt": b"Internal developer preview; not a signed or published release.\n"}
     if unsafe:
         files["../outside"] = b"bad"
     manifest = {"schema": 1, "version": "0.1.0-dev", "source_revision": REVISION,
@@ -31,13 +31,21 @@ def make_candidate(root, name, target, *, dirty=False, tamper=False, unsafe=Fals
         for path, data in {**files, "BUILD-INFO.json": json.dumps(manifest).encode()}.items():
             info = zipfile.ZipInfo(path)
             info.create_system = 3
-            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            executable = path in ("aswp" + suffix, "agentswapper" + suffix)
+            info.external_attr = (stat.S_IFREG | (0o755 if executable else 0o644)) << 16
             bundle.writestr(info, data)
     (directory / (archive.name + ".sha256")).write_text(f"{digest(archive.read_bytes())}  {archive.name}\n", encoding="utf-8", newline="\n")
     return archive
 
 
 class CandidateSetTests(unittest.TestCase):
+    def test_nonportable_paths_are_refused(self):
+        from verify_candidate_set import safe_archive_name
+        for name in ("../outside", "/absolute", "a//b", "a\\b", "a/CON.txt", "a/x:stream", "a/last.", "a/last ", "a/\x1b"):
+            with self.subTest(name=name):
+                self.assertFalse(safe_archive_name(name))
+        self.assertTrue(safe_archive_name("source/option-ext-0.2.0/LICENSE.txt"))
+
     def test_valid_platform_set_and_tampering_refusal(self):
         for mode in ("valid", "dirty", "tamper", "unsafe", "missing"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:

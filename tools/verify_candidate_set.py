@@ -19,6 +19,19 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def safe_archive_name(name):
+    path = PurePosixPath(name)
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+    if not name or path.is_absolute() or "\\" in name:
+        return False
+    for part in name.split("/"):
+        if (part in ("", ".", "..") or part.endswith((" ", "."))
+                or part.split(".", 1)[0].upper() in reserved
+                or any(c in '<>:"|?*' or ord(c) < 32 or ord(c) == 127 for c in part)):
+            return False
+    return True
+
+
 def verify_one(directory, target, revision, lock_hash):
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("candidate directory is missing or linked")
@@ -44,9 +57,8 @@ def verify_one(directory, target, revision, lock_hash):
             raise ValueError("candidate entries exceed bounds or are duplicated")
         for entry in entries:
             name = entry.filename
-            path = PurePosixPath(name)
             mode = entry.external_attr >> 16
-            if path.is_absolute() or "\\" in name or any(part in ("", ".", "..") for part in name.split("/")) or stat.S_IFMT(mode) != stat.S_IFREG:
+            if not safe_archive_name(name) or stat.S_IFMT(mode) != stat.S_IFREG:
                 raise ValueError("candidate contains an unsafe entry")
         info = bundle.getinfo("BUILD-INFO.json")
         if info.file_size > 1024 * 1024:
@@ -62,6 +74,11 @@ def verify_one(directory, target, revision, lock_hash):
         suffix = ".exe" if "windows" in target else ""
         if not {"aswp" + suffix, "agentswapper" + suffix, "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt", "PREVIEW.txt"}.issubset(names):
             raise ValueError("candidate is missing required files")
+        if any((bundle.getinfo(name + suffix).external_attr >> 16) & 0o777 != 0o755 for name in ("aswp", "agentswapper")):
+            raise ValueError("candidate executable modes do not match")
+        preview = bundle.getinfo("PREVIEW.txt")
+        if preview.file_size > 4096 or not bundle.read(preview).startswith(b"Internal developer preview; not a signed or published release.\n"):
+            raise ValueError("candidate preview label is missing")
         hashes = manifest.get("files")
         if not isinstance(hashes, dict) or set(hashes) != set(names) - {"BUILD-INFO.json"}:
             raise ValueError("candidate file inventory does not match")
