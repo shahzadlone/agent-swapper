@@ -617,6 +617,69 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
 
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_cleans_up_on_incomplete_startup() {
+    use crate::supervision::linux_guardian;
+    let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
+    let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
+    let scope = cgroup::Domain::open(&delegated).unwrap().create().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&temp.path().join("state")).unwrap();
+    let profile = store
+        .register(Harness::Claude, "work".parse().unwrap())
+        .unwrap();
+    let lease = store.lease(profile.id).unwrap();
+    let run = store
+        .begin_run_with_scope(
+            &lease,
+            "run",
+            None,
+            Some(LocalScope::LinuxCgroup {
+                id: scope_id(scope.path()),
+            }),
+        )
+        .unwrap();
+    let (channel, gate) = transport::pair().unwrap();
+    let mut guardian = OwnedChild(
+        Command::new(executable)
+            .arg(linux_guardian::INTERNAL_ARG)
+            .arg(scope.path())
+            .arg(rustix::process::getpgrp().as_raw_pid().to_string())
+            .env_clear()
+            .stdin(Stdio::from(gate))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
+    for fd in [
+        scope.parent().as_fd(),
+        scope.directory().as_fd(),
+        lease.as_fd(),
+    ] {
+        transport::send(&channel, transport::GO, &[fd]).unwrap();
+    }
+    drop(lease);
+    // Close after transferring custody, but before sending any launch data.
+    drop(channel);
+    let Some(status) = guardian.0.wait_timeout(BUDGET).unwrap() else {
+        panic!("guardian timed out");
+    };
+    assert_eq!(status.code(), Some(125));
+    assert!(!scope.path().exists());
+    assert!(cgroup::events_missing(scope.directory()).unwrap());
+    assert_eq!(store.run(&run).unwrap().observed_pid, None);
+    assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
+    assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
+    store.attest_stopped(&run).unwrap();
+    assert!(store.verify().unwrap().consistent);
+    println!(
+        "::notice title=Linux internal guardian incomplete startup::cleanup retained unresolved journal intent"
+    );
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_reports_exit_after_cleanup() {
     internal_guardian_case(false, false);
     println!(
