@@ -35,7 +35,7 @@ fn crash_child() {
         .find(|p| p.alias.to_string() == "work")
         .unwrap();
     let lease = match action.as_str() {
-        "register" => None,
+        "register" | "rename" | "disable" | "remove" => None,
         "plan" => Some(store.lease(profile.id).unwrap()),
         // These cases model the existing launcher's already-held lease after
         // a durable intent. `lease` intentionally refuses unfinished runs.
@@ -44,7 +44,12 @@ fn crash_child() {
     if stage != "committed" {
         let wanted = if stage == "event" {
             "event_log"
-        } else if action == "register" {
+        } else if stage == "mapping" {
+            "mappings"
+        } else if matches!(
+            action.as_str(),
+            "register" | "rename" | "disable" | "remove"
+        ) {
             "profiles"
         } else {
             "runs"
@@ -66,6 +71,17 @@ fn crash_child() {
             store
                 .register(Harness::Codex, "new".parse().unwrap())
                 .unwrap();
+        }
+        "rename" => {
+            store
+                .rename(&profile.alias, "renamed".parse().unwrap())
+                .unwrap();
+        }
+        "disable" => {
+            store.enable(&profile.alias, false).unwrap();
+        }
+        "remove" => {
+            store.remove(&profile.alias).unwrap();
         }
         "plan" => {
             store.begin_run(lease.as_ref().unwrap(), "run").unwrap();
@@ -93,14 +109,24 @@ fn crash_child() {
 #[ignore = "subprocess crash-recovery matrix; run explicitly"]
 fn crash_lifecycle_reopens_consistently() {
     let trials: usize = std::env::var("ASWP_JOURNAL_CRASH_TRIALS")
-        .unwrap_or_else(|_| "12".into())
+        .unwrap_or_else(|_| "22".into())
         .parse()
         .unwrap();
-    assert!((12..=1000).contains(&trials));
+    assert!((22..=1000).contains(&trials));
     let cases = [
         ("register", "event"),
         ("register", "projection"),
         ("register", "committed"),
+        ("rename", "event"),
+        ("rename", "projection"),
+        ("rename", "committed"),
+        ("disable", "event"),
+        ("disable", "projection"),
+        ("disable", "committed"),
+        ("remove", "event"),
+        ("remove", "projection"),
+        ("remove", "mapping"),
+        ("remove", "committed"),
         ("plan", "event"),
         ("plan", "projection"),
         ("plan", "committed"),
@@ -119,6 +145,9 @@ fn crash_lifecycle_reopens_consistently() {
         let profile = store
             .register(Harness::Claude, "work".parse().unwrap())
             .unwrap();
+        if action == "remove" {
+            store.map(&profile.alias, temp.path()).unwrap();
+        }
         let run = if matches!(action, "spawn" | "finish") {
             let lease = store.lease(profile.id).unwrap();
             let id = store.begin_run(&lease, "run").unwrap();
@@ -135,6 +164,7 @@ fn crash_lifecycle_reopens_consistently() {
             .unwrap();
         let before_profiles = serde_json::to_value(store.profiles().unwrap()).unwrap();
         let before_runs = serde_json::to_value(store.runs(200).unwrap()).unwrap();
+        let before_mappings = serde_json::to_value(store.mappings().unwrap()).unwrap();
         drop(store);
 
         let mut child = OwnedChild(
@@ -189,9 +219,22 @@ fn crash_lifecycle_reopens_consistently() {
                 serde_json::to_value(recovered.runs(200).unwrap()).unwrap(),
                 before_runs
             );
+            assert_eq!(
+                serde_json::to_value(recovered.mappings().unwrap()).unwrap(),
+                before_mappings
+            );
         } else {
             match action {
                 "register" => assert_eq!(recovered.profiles().unwrap().len(), 2),
+                "rename" => assert_eq!(
+                    recovered.profiles().unwrap()[0].alias.to_string(),
+                    "renamed"
+                ),
+                "disable" => assert!(!recovered.profiles().unwrap()[0].enabled),
+                "remove" => {
+                    assert!(recovered.profiles().unwrap().is_empty());
+                    assert!(recovered.mappings().unwrap().is_empty());
+                }
                 "plan" => assert_eq!(recovered.unfinished().unwrap().len(), 1),
                 "spawn" => assert_eq!(recovered.run(&run).unwrap().observed_pid, Some(42)),
                 "finish" => assert_eq!(recovered.run(&run).unwrap().exit_code, Some(7)),
