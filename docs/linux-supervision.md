@@ -431,12 +431,14 @@ test also checks a real cgroup control file when one is available. This check
 does not cover other inherited descriptors, capabilities received later, or
 access through another process. A namespace boundary cannot be qualified
 without accounting for those paths.
-The internal shim currently reports startup failures by exiting with status
-125, which is also a possible exit status of an executed target. The guardian
-cannot distinguish those cases from the status alone. The fixture verifies the
-stream refusal using a separate no-execution marker; production must not infer
-successful exec or a target exit solely from that status. A distinct,
-crash-aware exec confirmation remains an integration gate.
+The internal shim reports startup failures by exiting with status 125, which is
+also a possible exit status of an executed target. The guardian cannot
+distinguish those cases from the status alone, so it now treats either as an
+error and leaves the run unresolved after cleanup. The fixture verifies stream
+refusal using a separate no-execution marker. This conservative handling also
+leaves a real target exit 125 unresolved; other statuses alone still do not prove
+exec succeeded. Distinct, crash-aware exec confirmation remains an integration
+gate, and the changed guardian behavior awaits its hosted delegated test.
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.

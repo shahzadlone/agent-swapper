@@ -719,6 +719,27 @@ fn internal_guardian_case(
         return;
     }
     drop(lease);
+    if inherited_probe {
+        assert!(linux_guardian::wait_for_empty(&channel, &mut guardian.0).is_err());
+        drop(channel);
+        let Some(status) = guardian.0.wait_timeout(BUDGET).unwrap() else {
+            panic!("guardian timed out");
+        };
+        assert_eq!(status.code(), Some(125));
+        assert!(!scope.path().exists());
+        assert!(cgroup::events_missing(scope.directory()).unwrap());
+        assert!(!temp.path().join("escape-result").exists());
+        assert!(!temp.path().join("escaped-heartbeat").exists());
+        assert_eq!(store.run(&run).unwrap().observed_pid, Some(pid));
+        assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
+        assert!(matches!(store.lease(profile.id), Err(Error::Busy)));
+        store.attest_stopped(&run).unwrap();
+        assert!(store.verify().unwrap().consistent);
+        println!(
+            "::notice title=Linux inherited cgroup capability::shim refused the cgroup-backed standard stream and the ambiguous exit remained unresolved"
+        );
+        return;
+    }
     if parent_loss {
         controller_wait(temp.path(), || temp.path().join("heartbeat").exists());
         assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
@@ -726,7 +747,7 @@ fn internal_guardian_case(
     } else {
         assert_eq!(
             linux_guardian::wait_for_empty(&channel, &mut guardian.0).unwrap(),
-            if inherited_probe { 125 } else { 7 }
+            7
         );
         assert!(!cgroup::populated(scope.directory()).unwrap());
         assert!(!cgroup::events_missing(scope.directory()).unwrap());
@@ -750,13 +771,7 @@ fn internal_guardian_case(
     assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
     assert!(cgroup::events_missing(scope.directory()).unwrap());
-    if inherited_probe {
-        assert!(!temp.path().join("escape-result").exists());
-        assert!(!temp.path().join("escaped-heartbeat").exists());
-        println!(
-            "::notice title=Linux inherited cgroup capability::shim refused the cgroup-backed standard stream before target execution"
-        );
-    } else if escape_probe {
+    if escape_probe {
         let result = fs::read_to_string(temp.path().join("escape-result")).unwrap();
         match result.as_str() {
             "escaped" => {
@@ -769,9 +784,7 @@ fn internal_guardian_case(
                 );
                 fs::write(temp.path().join("escaped-stop"), b"stop").unwrap();
                 until(|| temp.path().join("escaped-done").exists());
-                let title = if inherited_probe {
-                    "Linux inherited cgroup capability"
-                } else if namespace_probe {
+                let title = if namespace_probe {
                     "Linux cgroup namespace migration"
                 } else {
                     "Linux cgroup migration"
@@ -779,9 +792,7 @@ fn internal_guardian_case(
                 println!("::notice title={title}::escaped writer survived retirement");
             }
             "denied" => {
-                let title = if inherited_probe {
-                    "Linux inherited cgroup capability"
-                } else if namespace_probe {
+                let title = if namespace_probe {
                     "Linux cgroup namespace migration"
                 } else {
                     "Linux cgroup migration"

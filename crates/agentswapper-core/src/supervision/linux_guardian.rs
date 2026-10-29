@@ -12,7 +12,7 @@ use std::{
     os::fd::AsFd,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -29,6 +29,22 @@ const PID_PREFIX: &[u8] = b"ASWP-PID-1";
 const EMPTY_PREFIX: &[u8] = b"ASWP-EMPTY-1";
 pub(crate) const RETIRE: &[u8] = b"ASWP-RETIRE-1";
 const RETIRED: &[u8] = b"ASWP-RETIRED-1";
+
+// Filtering this known collision does not prove that other statuses came from
+// an executed target; production still needs explicit exec confirmation.
+fn reportable_code(status: ExitStatus) -> io::Result<i32> {
+    let code = match (status.code(), status.signal()) {
+        (Some(code), _) => code,
+        (None, Some(signal)) => 128 + signal,
+        _ => return Err(io::Error::other("target exit status unavailable")),
+    };
+    if code == 125 {
+        return Err(io::Error::other(
+            "target or shim exited with ambiguous status",
+        ));
+    }
+    Ok(code)
+}
 
 /// Internal CLI role selector; scope and process group are not secret.
 #[doc(hidden)]
@@ -308,11 +324,7 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
         }
         thread::sleep(Duration::from_millis(10));
     };
-    let code = match (status.code(), status.signal()) {
-        (Some(code), _) => code,
-        (None, Some(signal)) => 128 + signal,
-        _ => return Err(io::Error::other("target exit status unavailable")),
-    };
+    let code = reportable_code(status)?;
     let deadline = Instant::now() + CLEANUP;
     scope.stop(deadline)?;
     let mut empty = EMPTY_PREFIX.to_vec();
@@ -327,6 +339,15 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shim_failure_status_is_not_reported_as_a_target_exit() -> io::Result<()> {
+        let normal = Command::new("/bin/sh").args(["-c", "exit 7"]).status()?;
+        let ambiguous = Command::new("/bin/sh").args(["-c", "exit 125"]).status()?;
+        assert_eq!(reportable_code(normal)?, 7);
+        assert!(reportable_code(ambiguous).is_err());
+        Ok(())
+    }
 
     #[test]
     fn guardian_spawn_rejects_relative_or_missing_executables() -> io::Result<()> {
