@@ -34,11 +34,12 @@ def check(binary, mode):
         agent.write_text("#!/bin/sh\nstty raw -echo || exit 90\nprintf fixture-ready\n" + suffix)
         agent.chmod(0o700)
         master, slave = pty.openpty()
-        before = termios.tcgetattr(slave)
         process = None
         output = bytearray()
         stop = root / "shell-stop"
+        start = root / "shell-start"
         env["ASWP_FIXTURE_STOP"] = str(stop)
+        env["ASWP_FIXTURE_START"] = str(start)
         try:
             def controlling_terminal():
                 try:
@@ -51,7 +52,7 @@ def check(binary, mode):
                 # Keep the session leader alive while observing terminal state.
                 # Some systems revoke a PTY when its session leader exits, even
                 # if the controller still holds the slave open.
-                shell = 'trap ":" INT; "$@"; status=$?; printf "\\n__ASWP_EXIT=%s__\\n" "$status"; while [ ! -f "$ASWP_FIXTURE_STOP" ]; do sleep 0.05; done; exit "$status"'
+                shell = 'trap ":" INT; printf "__ASWP_SHELL_READY__\\n"; while [ ! -f "$ASWP_FIXTURE_START" ]; do sleep 0.05; done; "$@"; status=$?; printf "\\n__ASWP_EXIT=%s__\\n" "$status"; while [ ! -f "$ASWP_FIXTURE_STOP" ]; do sleep 0.05; done; exit "$status"'
                 args = ["/bin/sh", "-c", shell, "fixture-shell"] + command + ["run", "fixture", "--experimental-native", "--executable", str(agent)]
                 process = subprocess.Popen(args,
                                            cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave,
@@ -60,6 +61,16 @@ def check(binary, mode):
                 detail = os.read(master, 4096) if select.select([master], [], [], 0.5)[0] else b""
                 raise RuntimeError(f"could not start PTY fixture: {error}; {detail!r}") from error
             deadline = time.monotonic() + 10
+            while b"__ASWP_SHELL_READY__" not in output:
+                assert time.monotonic() < deadline and process.poll() is None, "fixture shell did not become ready"
+                if select.select([master], [], [], 0.05)[0]:
+                    data = os.read(master, 65536)
+                    if data:
+                        output.extend(data)
+            # Acquisition of the controlling terminal can itself change driver
+            # settings on some systems; measure the launcher's actual baseline.
+            before = termios.tcgetattr(slave)
+            start.touch()
             sent_interrupt = False
             marker = None
             while marker is None:
@@ -83,7 +94,8 @@ def check(binary, mode):
             assert int(marker.group(1)) == expected, f"unexpected exit: {bytes(output)!r}"
             assert b"fixture-ready" in output
             if mode not in ("detached", "foreground-change"):
-                assert termios.tcgetattr(slave) == before, "native agent left terminal attributes changed"
+                after = termios.tcgetattr(slave)
+                assert after == before, f"native agent left terminal attributes changed; before={before!r}; after={after!r}"
             if mode == "foreground-change":
                 assert b"terminal settings could not be restored" in output
             result = subprocess.run(command + ["runs", "--json"], cwd=root, env=env,
