@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import stat
+import tomllib
 import zipfile
 from portable_archive import ensure_portable_names, safe_path
 
@@ -28,7 +29,7 @@ def safe_archive_name(name):
         return False
 
 
-def verify_one(directory, target, revision, lock_hash):
+def verify_one(directory, target, revision, lock_hash, version, source_files):
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("candidate directory is missing or linked")
     entries = list(directory.iterdir())
@@ -65,9 +66,8 @@ def verify_one(directory, target, revision, lock_hash):
                 or manifest.get("source_dirty") is not False or manifest.get("target") != target
                 or manifest.get("cargo_lock_sha256") != lock_hash):
             raise ValueError("candidate build information does not match this run")
-        version = manifest.get("version")
-        if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9_.+\-]+", version) or archive.name != f"agentswapper-{version}-{target}.zip":
-            raise ValueError("candidate version does not match its archive name")
+        if manifest.get("version") != version or archive.name != f"agentswapper-{version}-{target}.zip":
+            raise ValueError("candidate version does not match checked-out source and archive name")
         suffix = ".exe" if "windows" in target else ""
         if not {"aswp" + suffix, "agentswapper" + suffix, "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt", "PREVIEW.txt"}.issubset(names):
             raise ValueError("candidate is missing required files")
@@ -82,17 +82,22 @@ def verify_one(directory, target, revision, lock_hash):
         for name, expected in hashes.items():
             if not isinstance(expected, str) or digest(bundle.read(name)) != expected:
                 raise ValueError("candidate file hash mismatch")
+        for name, expected in source_files.items():
+            if name not in hashes or hashes[name] != digest(expected):
+                raise ValueError("candidate project notice does not match checked-out source")
     return archive
 
 
-def verify_set(root, revision, lock_hash):
+def verify_set(root, revision, lock_hash, version, source_files):
     if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision):
         raise ValueError("invalid source revision")
     if not re.fullmatch(r"[0-9a-f]{64}", lock_hash):
         raise ValueError("invalid lockfile hash")
+    if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9_.+\-]+", version):
+        raise ValueError("invalid checked-out workspace version")
     if root.is_symlink() or not root.is_dir() or {p.name for p in root.iterdir()} != set(TARGETS):
         raise ValueError("candidate platform set is incomplete or unexpected")
-    return [verify_one(root / name, target, revision, lock_hash) for name, target in TARGETS.items()]
+    return [verify_one(root / name, target, revision, lock_hash, version, source_files) for name, target in TARGETS.items()]
 
 
 def main():
@@ -101,7 +106,11 @@ def main():
     parser.add_argument("revision")
     parser.add_argument("--lockfile", type=Path, default=Path("Cargo.lock"))
     args = parser.parse_args()
-    archives = verify_set(args.root, args.revision, digest(args.lockfile.read_bytes()))
+    source = Path(__file__).resolve().parents[1]
+    version = tomllib.loads((source / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+    source_files = {name: (source / name).read_bytes() for name in
+                    ("LICENSE", "NOTICE", "assets/brand/THIRD_PARTY_NOTICES.txt")}
+    archives = verify_set(args.root, args.revision, digest(args.lockfile.read_bytes()), version, source_files)
     print(f"Verified {len(archives)} candidate archives for this source revision")
 
 

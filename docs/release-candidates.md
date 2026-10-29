@@ -70,7 +70,8 @@ The tool refuses to replace an existing archive or checksum. CI keeps unsigned
 candidates as short-lived workflow artifacts. For a push to `main`, a separate
 job downloads the three candidates from that same run, verifies the target set,
 checksums, source revision, lockfile hash and archive inventory, and signs a
-provenance attestation. It verifies the Sigstore bundle against the repository,
+provenance attestation. It also compares the workspace version and project
+license and notices with the checked-out source. It verifies the Sigstore bundle against the repository,
 workflow, ref, commit and GitHub-hosted runner before storing the bundle as a
 short-lived artifact. Build jobs do not receive attestation or OIDC write
 permissions. Pull requests do not create attestations.

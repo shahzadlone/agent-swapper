@@ -2,3 +2,7 @@
 tools/cargo-deny-tool.lock text eol=lf
 # Candidate manifests bind this lockfile hash across all build hosts.
 Cargo.lock text eol=lf
+# Candidate notices are compared byte-for-byte against the attestation checkout.
+LICENSE text eol=lf
+NOTICE text eol=lf
+assets/brand/THIRD_PARTY_NOTICES.txt text eol=lf
