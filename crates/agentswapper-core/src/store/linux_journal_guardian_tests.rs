@@ -135,10 +135,7 @@ fn guardian_fixture() {
         send(io::stdin(), pid.as_bytes(), SendFlags::NOSIGNAL).unwrap(),
         pid.len()
     );
-    let mut ack = [0_u8; 32];
-    let (count, length) = recv(io::stdin(), &mut ack, RecvFlags::TRUNC).unwrap();
-    assert_eq!(count, length);
-    if count == 0 {
+    if transport::receive_control(io::stdin(), ACK).is_err() {
         cgroup::control(&leaf, "cgroup.kill", OFlags::WRONLY)
             .unwrap()
             .write_all(b"1\n")
@@ -149,7 +146,6 @@ fn guardian_fixture() {
         fs::write(dir.join("guardian-pre-go-cleaned"), b"cleaned").unwrap();
         return;
     }
-    assert_eq!(&ack[..count], ACK);
     target.0.stdin.take().unwrap().write_all(b"GO\n").unwrap();
     until(|| dir.join("heartbeat").exists());
     fs::write(dir.join("guardian-ready"), b"ready").unwrap();
