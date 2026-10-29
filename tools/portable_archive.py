@@ -20,8 +20,16 @@ def safe_path(name):
 
 def ensure_portable_names(names):
     seen = set()
+    components = {}
     for name in names:
         safe_path(name)
+        parts = name.split("/")
+        for index in range(1, len(parts) + 1):
+            path = "/".join(parts[:index])
+            folded = path.casefold()
+            previous = components.setdefault(folded, path)
+            if previous != path:
+                raise ValueError("archive contains case-colliding path components")
         key = name.casefold()
         if key in seen:
             raise ValueError("archive contains case-colliding entries")

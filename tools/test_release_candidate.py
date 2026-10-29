@@ -152,7 +152,8 @@ class CandidateSafety(unittest.TestCase):
         self.assertEqual(safe_path("source/option-ext-0.2.0/LICENSE.txt"), "source/option-ext-0.2.0/LICENSE.txt")
 
     def test_archive_names_refuse_case_collisions_and_file_directory_conflicts(self):
-        for entries in (("a/Foo", "A/foo"), ("parent", "parent/child"), ("Parent", "parent/child")):
+        for entries in (("a/Foo", "A/foo"), ("a/one", "A/two"),
+                        ("parent", "parent/child"), ("Parent", "parent/child")):
             with self.subTest(entries=entries), self.assertRaises(ValueError):
                 ensure_portable_names(entries)
         ensure_portable_names(("source/a", "source/b", "NOTICE"))
