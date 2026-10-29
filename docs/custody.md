@@ -162,9 +162,16 @@ the backend fixture, before launch/journal integration; integrated launch/journa
 See the [validation record](supervision-validation.md) for measured platforms,
 review findings and remaining limits.
 
-The interval between process creation and first Job assignment is not atomic.
-A hard supervisor crash there may leak a suspended process (no target code has
-executed). Dependency cleanup after a nested-wrapper failure can use an unbounded
+The experimental CLI installs a process-lifetime root Job before spawning a
+per-run target. Its non-inherited handle remains with the CLI until process
+exit, so a newly created suspended child inherits the root before per-run Job
+assignment. Installing the root affects the entire CLI process and all children
+it creates, and is refused when the existing Job hierarchy cannot accept it.
+Embedded core callers must explicitly install this process-wide root themselves;
+without it a supervisor crash before per-run assignment can leave a suspended
+process behind. The exact crash window is covered by a Windows fixture with an
+independent outer Job observer; the new integration still requires hosted CI
+evidence. Dependency cleanup after a nested-wrapper failure can use an unbounded
 wait. The backend does not constrain work requested through WMI, COM, Task
 Scheduler, services or other outside processes, and does not defend against a
 malicious process with the same OS identity. Provider credential isolation,

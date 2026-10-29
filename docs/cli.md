@@ -162,13 +162,15 @@ Job assignment and PID record succeed. When the initial CLI exits, remaining
 local descendants are terminated and the Job is queried for emptiness. The
 initial CLI's exit code is preserved. This changes background-child behavior;
 preview the plan before choosing it. Gents and other platforms refuse this option.
+The CLI first joins a process-lifetime root Job, which also affects other
+children it creates after opting in. An incompatible existing Job hierarchy
+causes the launch to fail rather than fall back to uncontained execution.
 
 Any ambiguous admission, wait, cleanup or journal error leaves an unresolved
 intent. `supervision_incomplete` identifies that run and gives the history
 inspection command without printing native arguments or error-source contents.
 A crashed supervisor's Job may clean up its descendants, but that alone
-does not write an empty receipt or unblock reuse. A crash before first assignment
-can leak a suspended process. This option is not a credential/filesystem sandbox
+does not write an empty receipt or unblock reuse. This option is not a credential/filesystem sandbox
 and does not contain work delegated to services or external runtimes. See
 [measured custody results and limits](custody.md).
 

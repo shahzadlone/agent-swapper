@@ -59,6 +59,81 @@ fn fixture_entry() {
 }
 
 #[test]
+#[ignore = "fixture supervisor invoked by the root Job crash test"]
+fn root_gap_supervisor() {
+    let dir = std::path::PathBuf::from(std::env::var_os("ASWP_ROOT_GAP_DIR").unwrap());
+    fs::write(dir.join("ready"), b"ready").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !dir.join("go").exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(POLL);
+    }
+    install_process_root().unwrap();
+    let mut configured = CommandWrap::from(command(&dir.join("executed")));
+    configured.wrap(JobObject);
+    let _: io::Result<Box<dyn ChildWrapper>> = configured.spawn_with(|command| {
+        let child = command.spawn()?;
+        // This is the same suspended-create / per-run assignment interval as
+        // the backend. The controller kills this process while it holds Child.
+        fs::write(dir.join("suspended"), child.id().to_string())?;
+        loop {
+            thread::sleep(POLL);
+        }
+    });
+    panic!("suspended fixture unexpectedly returned");
+}
+
+#[test]
+fn process_root_retires_child_if_supervisor_dies_before_per_run_assignment() {
+    struct Supervisor(Child);
+    impl Drop for Supervisor {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut limits = ExtendedLimitInfo::new();
+    limits.limit_kill_on_job_close();
+    // The outer observer's independent handle lets the controller measure
+    // emptiness; its kill-on-close is only a failure-path cleanup backstop.
+    let observer = Job::create_with_limit_info(&limits).unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "supervision::windows_job::tests::root_gap_supervisor",
+            "--ignored",
+        ])
+        .env("ASWP_ROOT_GAP_DIR", dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut supervisor = Supervisor(command.spawn().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !dir.path().join("ready").exists() {
+        assert!(supervisor.0.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline, "supervisor did not become ready");
+        thread::sleep(POLL);
+    }
+    observer
+        .assign_process(supervisor.0.as_raw_handle() as isize)
+        .unwrap();
+    fs::write(dir.path().join("go"), b"go").unwrap();
+    while !dir.path().join("suspended").exists() {
+        assert!(supervisor.0.try_wait().unwrap().is_none());
+        assert!(Instant::now() < deadline, "suspended child was not created");
+        thread::sleep(POLL);
+    }
+    assert_eq!(observer.query_process_id_list().unwrap().len(), 2);
+    assert!(!dir.path().join("executed").exists());
+    supervisor.0.kill().unwrap();
+    supervisor.0.wait().unwrap();
+    empty(&observer);
+    assert!(!dir.path().join("executed").exists());
+}
+
+#[test]
 fn failure_after_admission_callback_cleans_suspended_target_without_execution() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("started");

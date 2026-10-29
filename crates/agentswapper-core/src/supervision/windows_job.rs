@@ -5,15 +5,17 @@
 //! owns crash cleanup and supplies independent kernel membership observations.
 //! Handles are never exposed; a scope admits exactly one initial process.
 //!
-//! A hard supervisor crash between CreateProcess and assignment can leak a
-//! suspended process. Kill-on-close applies only after assignment. This is not
-//! an isolation boundary against other processes acting as the same OS user.
+//! A caller that installs the optional process-lifetime root Job before spawn
+//! also contains the suspended child during initial assignment. Without that
+//! root, a crash in this interval can leak a suspended process. This is not an
+//! isolation boundary against other processes acting as the same OS user.
 
 use process_wrap::std::{ChildWrapper, CommandWrap, JobObject};
 use std::{
     io,
     os::windows::io::AsRawHandle,
     process::{Child, Command, ExitStatus},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -22,6 +24,29 @@ use win32job::{ExtendedLimitInfo, Job};
 
 const CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(10);
+
+/// Permanently place this process in a kill-on-close root Job. Every child
+/// created afterwards inherits the Job unless an existing external Job permits
+/// breakaway. This affects the whole process and its descendants, not just one
+/// invocation; embedded callers must opt in deliberately. Failure is sticky and
+/// must prevent a contained launch. The non-inherited handle stays open until
+/// process termination; closing it sooner would terminate the caller itself.
+pub fn install_process_root() -> io::Result<()> {
+    static ROOT: OnceLock<std::result::Result<Job, String>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let setup = || -> io::Result<Job> {
+            let mut limits = ExtendedLimitInfo::new();
+            limits.limit_kill_on_job_close();
+            let job = Job::create_with_limit_info(&limits).map_err(job_error)?;
+            job.assign_current_process().map_err(job_error)?;
+            Ok(job)
+        };
+        setup().map_err(|error| error.to_string())
+    })
+    .as_ref()
+    .map(|_| ())
+    .map_err(|error| io::Error::other(error.clone()))
+}
 
 /// An unused local scope. Dropping it closes its sole Job handle.
 pub struct WindowsJob {

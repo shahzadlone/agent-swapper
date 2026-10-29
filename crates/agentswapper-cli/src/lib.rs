@@ -832,6 +832,13 @@ fn launch_profile(
                 .map_or("none", |selection| selection.as_str()),
         )?;
     }
+    #[cfg(windows)]
+    if matches!(
+        launch.experimental_containment,
+        Some(Containment::WindowsJob)
+    ) {
+        agentswapper_core::supervision::windows_job::install_process_root()?;
+    }
     install_launch_interrupt_handler()?;
     match engine {
         ExecutionEngine::Native => plan.execute(store, true),
