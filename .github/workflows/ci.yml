@@ -79,6 +79,7 @@ jobs:
         run: |
           cargo +1.98.0 build --locked -p agentswapper-cli --bins
           python tools/check_dashboard_pty.py target/debug/aswp target/debug/agentswapper
+          python tools/check_dashboard_launch_pty.py target/debug/aswp
       - name: Hidden handover entry and signal restoration
         if: runner.os != 'Windows'
         timeout-minutes: 3

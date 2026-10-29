@@ -5,10 +5,42 @@ and operate than the reference supplied by the user. Visual polish and working
 flows are release requirements. The existing dashboard is a basic developer
 preview and does not meet the final bar yet. It now includes responsive profile
 details, keyboard availability changes, stable identity selection and privacy
-labels, in-interface profile registration, and local previews from the actual renderer. Live usage, in-interface
-launch/continuity flows and the full action set remain open.
+labels, in-interface profile registration, reviewed foreground launches/login,
+recorded gents session selection, and local previews from the actual renderer.
+Live usage, cross-agent context transfer and the full action set remain open.
 POSIX dashboard exits now restore the terminal before re-raising external
 interrupt, termination and hangup signals; actual PTY checks cover those paths.
+
+## Implemented foreground transition
+
+Enter prepares a fresh native conversation or gents session; `l` prepares native
+login; `c` prepares the latest eligible recorded gents session. The review
+shows destination, executable, profile home, workspace ownership and continuity.
+Readiness checks do not launch an agent or reserve a session. Native resume and
+gents login are refused. Existing routing, shared-auth and legacy-home checks
+apply; the dashboard offers no bypass for them.
+
+Every launch requires Space to accept its experimental status, then Enter.
+Masked reviews hide identifying fields and cannot start an agent; Ctrl-P
+unmasks and resets acceptance. Agent output has its own privacy settings.
+Page Up/Down and j/k scroll the review; shrinking below 40 x 14 disables launch
+while keeping cancellation available.
+
+The dashboard restores canonical terminal input and leaves its alternate screen
+before execution. It removes its own POSIX signal registrations and lets the
+agent receive foreground interrupts. When the direct agent or gents client
+returns normally, the same dashboard reopens with its selection preserved and
+the exit result shown. The core journal records the existing conservative custody
+state: this does not establish that background or runtime work stopped. A launch
+error exits to the shell; uncertain wait or terminal restoration errors must not
+redraw a dashboard over a possibly active agent.
+
+Provider-free POSIX PTY checks exercise all three native fixtures, login,
+cross-brand selection, Ctrl-C, gents new/resumed sessions and terminal restoration.
+Unit tests cover acceptance, masking, resize/scroll, unsupported actions, busy
+profiles and availability changed after review. Native macOS execution and Windows
+ConPTY transitions require their own recorded evidence. No real-provider support
+cell is promoted by these fixtures.
 
 ## Entry and visual direction
 

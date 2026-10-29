@@ -16,6 +16,6 @@ Selected: codex | enabled
 Account and isolation: unverified
 Quota: unknown / no auto switch
 
+ Enter review  l login  c gents resume
  a add  e enable/disable  / search
- j/k move  Enter preflight  m mask
- r refresh  ? help  Esc back  q quit
+ j/k move  m mask  r refresh  ? help  q quit

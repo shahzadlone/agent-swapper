@@ -200,29 +200,10 @@ impl Setup {
         [parts[0], parts[1], parts[2]]
     }
 
-    // Body copy is short; only unbroken identifiers/input need splitting. Wrap
-    // at grapheme boundaries so scroll bounds match the actual rendered rows
-    // without depending on Ratatui's unstable line-count API.
+    // Share word/grapheme wrapping with launch review so scroll bounds match
+    // the actual rows without Ratatui's unstable line-count API.
     fn rows(&self, masked: bool, width: u16) -> Vec<Line<'static>> {
-        let width = usize::from(width.max(1));
-        let mut rows = Vec::new();
-        for line in self.content(masked) {
-            let mut row = Line::default();
-            let mut used = 0;
-            for grapheme in line.styled_graphemes(Style::default()) {
-                let span = Span::styled(grapheme.symbol.to_owned(), grapheme.style);
-                let size = span.width();
-                if used + size > width && used > 0 {
-                    rows.push(row);
-                    row = Line::default();
-                    used = 0;
-                }
-                used += size;
-                row.spans.push(span);
-            }
-            rows.push(row);
-        }
-        rows
+        super::wrapped_rows(self.content(masked), width)
     }
 
     fn max_scroll(&self, area: Rect, masked: bool) -> u16 {

@@ -14,6 +14,17 @@ a native or gents profile through the dashboard. Setup reviews the details befor
 creation, supports `Esc` to go back and `Ctrl-G` to cancel, and uses Page Up/Down
 to scroll on small terminals. Registration does not log in or start an agent.
 
+Enter reviews a new launch, `l` reviews native login, and `c` reviews the latest
+eligible gents session. The review shows the destination, workspace ownership and
+continuity method; Space accepts its experimental status and Enter starts it.
+Unmask with Ctrl-P first: dashboard privacy does not cover an agent's output.
+The agent receives the normal terminal, and its exit returns you to the selected
+profile with the result recorded. A failed launch exits to the shell rather than
+assuming the terminal is safe to reuse. Native launches here start a new
+conversation; cross-agent context pickup remains the manual
+[handover workflow](handover.md). Check outgoing work and background jobs before
+starting another agent. Native resume and gents login are unavailable in this flow.
+
 ## Everyday commands
 
 ```sh

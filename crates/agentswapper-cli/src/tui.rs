@@ -1,6 +1,8 @@
 use std::{io, time::Duration};
 
-use agentswapper_core::{Error, Profile, ProfileId, Result, Store, launch::LaunchPlan};
+use agentswapper_core::{
+    Error, ExecutionEngine, Profile, ProfileId, Result, Store, launch::LaunchPlan,
+};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     Frame, Terminal,
@@ -11,6 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Padding, Paragraph, Row, Table, TableState, Wrap},
 };
 
+mod launch;
 #[cfg(test)]
 mod preview;
 mod setup;
@@ -33,6 +36,7 @@ struct Dashboard {
     blocked_aliases: Vec<String>,
     privacy_ids: Vec<ProfileId>,
     setup: Option<setup::Setup>,
+    launch: Option<launch::Review>,
 }
 
 impl Dashboard {
@@ -133,49 +137,106 @@ impl Dashboard {
             Err(error) => self.message = Some(self.error_message(&error)),
         }
     }
+
+    fn review_launch(&mut self, store: &Store, operation: launch::Operation) {
+        let Some(profile) = self.visible().get(self.selected).cloned().cloned() else {
+            return;
+        };
+        let review = std::env::current_dir()
+            .map_err(Error::from)
+            .and_then(|cwd| launch::Review::prepare(store, profile, &cwd, None, operation));
+        self.message = None;
+        match review {
+            Ok(review) => self.launch = Some(review),
+            Err(error) => self.message = Some(self.error_message(&error)),
+        }
+    }
 }
 
 // Declared before the terminal so it restores raw mode even if terminal setup fails.
-struct Restore;
+struct Restore {
+    active: bool,
+}
+impl Restore {
+    fn restore(&mut self) -> io::Result<()> {
+        if self.active {
+            let raw = crossterm::terminal::disable_raw_mode();
+            let screen = crossterm::execute!(
+                io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::cursor::Show
+            );
+            raw?;
+            screen?;
+            self.active = false;
+        }
+        Ok(())
+    }
+}
 impl Drop for Restore {
     fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::cursor::Show
-        );
+        let _ = self.restore();
     }
+}
+
+enum TerminalOutcome {
+    Quit,
+    Launch(Box<LaunchPlan>),
 }
 
 pub(crate) fn run(store: &mut Store, masked: bool) -> Result<()> {
     let mut app = Dashboard::new(masked);
     app.refresh(store)?;
-    #[cfg(unix)]
-    let signals = crate::terminal_signals::TerminalSignals::install()?;
-    let interrupted = || {
+    loop {
+        // Dashboard handlers are removed before a native agent owns the terminal.
+        // A foreground Ctrl-C must reach that agent, then allow the dashboard to return.
         #[cfg(unix)]
-        {
-            signals.requested()
-        }
-        #[cfg(not(unix))]
-        {
-            false
-        }
-    };
-    let result = run_terminal(store, &mut app, interrupted);
-    // run_terminal restores on errors as well as normal exits before re-raising.
-    #[cfg(unix)]
-    signals.finish()?;
-    result
+        let signals = crate::terminal_signals::TerminalSignals::install()?;
+        let interrupted = || {
+            #[cfg(unix)]
+            {
+                signals.requested()
+            }
+            #[cfg(not(unix))]
+            {
+                false
+            }
+        };
+        let result = run_terminal(store, &mut app, interrupted);
+        // run_terminal restores on errors as well as normal exits before re-raising.
+        #[cfg(unix)]
+        signals.finish()?;
+        let TerminalOutcome::Launch(plan) = result? else {
+            return Ok(());
+        };
+        let engine = plan.profile().harness.engine();
+        crate::install_launch_interrupt_handler()?;
+        // A launch error can include an uncertain wait or failed terminal
+        // restoration. Return to the shell instead of entering raw mode over
+        // an agent that may still own this terminal.
+        let code = match engine {
+            ExecutionEngine::Native => plan.execute(store, true),
+            ExecutionEngine::Gents => plan.execute_gents(store, true),
+        }?;
+        app.message = Some(match engine {
+            ExecutionEngine::Gents => format!(
+                "Gents client returned with exit {code}. External runtime work may still be running."
+            ),
+            ExecutionEngine::Native => format!(
+                "Agent returned with exit {code}. Background jobs may still be running. Enter reviews another launch; context is not transferred."
+            ),
+        });
+        // A failed refresh must not leave a stale list available for more launches.
+        app.refresh(store)?;
+    }
 }
 
 fn run_terminal(
     store: &mut Store,
     app: &mut Dashboard,
     interrupted: impl Fn() -> bool,
-) -> Result<()> {
-    let _restore = Restore;
+) -> Result<TerminalOutcome> {
+    let mut restore = Restore { active: true };
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
@@ -199,6 +260,34 @@ fn run_terminal(
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
             app.masked = !app.masked;
             app.message = None;
+            if let Some(review) = &mut app.launch {
+                review.reset_acceptance();
+            }
+            continue;
+        }
+        if let Some(review) = &mut app.launch {
+            let size = terminal.size()?;
+            let cancel = key.code == KeyCode::Esc
+                || (key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('g'));
+            if (size.width < 40 || size.height < 14) && !cancel {
+                continue;
+            }
+            let area = ratatui::layout::Rect::new(0, 3, size.width, size.height.saturating_sub(6));
+            match review.key(key, area, app.masked) {
+                launch::Outcome::Continue => {}
+                launch::Outcome::Cancel => {
+                    app.launch = None;
+                    app.message = Some("Launch cancelled. No agent was started.".to_owned());
+                }
+                launch::Outcome::Launch => {
+                    if let Some(review) = app.launch.take() {
+                        // Fail rather than hand a raw or alternate-screen terminal to an agent.
+                        restore.restore()?;
+                        return Ok(TerminalOutcome::Launch(Box::new(review.into_plan())));
+                    }
+                }
+            }
             continue;
         }
         if let Some(setup) = &mut app.setup {
@@ -223,14 +312,9 @@ fn run_terminal(
                         Ok(()) => {
                             app.preserve_selection(Some(profile.id));
                             if profile.harness == agentswapper_core::Harness::Gents {
-                                "Profile registered. Start its dedicated gents runtime before preflight. Login and permissions belong to that runtime.".to_owned()
-                            } else if app.masked {
-                                "Profile registered. Login comes next. Unmask to see the login command.".to_owned()
+                                "Profile registered. Start its dedicated gents runtime, then Enter reviews a launch. Login and permissions belong to that runtime.".to_owned()
                             } else {
-                                format!(
-                                    "Profile registered. Login comes next: aswp login {} --experimental-native",
-                                    profile.alias
-                                )
+                                "Profile registered. Press l to review native login.".to_owned()
                             }
                         }
                         Err(error) => format!(
@@ -302,38 +386,60 @@ fn run_terminal(
                     Err(error) => app.error_message(&error),
                 });
             }
-            KeyCode::Enter => {
-                if let Some(profile) = app.visible().get(app.selected) {
-                    let result = std::env::current_dir()
-                        .map_err(Error::from)
-                        .and_then(|cwd| {
-                            LaunchPlan::build(store, (*profile).clone(), None, &cwd, vec![], false)
-                        })
-                        .and_then(|plan| {
-                            if !plan.check_gents_runtime()? {
-                                return Err(Error::GentsRuntimeMismatch);
-                            }
-                            Ok(plan)
-                        });
-                    app.message = Some(match result {
-                        Ok(_) if profile.harness == agentswapper_core::Harness::Gents =>
-                            "Gents client preflight: local address matches; listener unverified. External runtime owns workspace and permissions. Inspect with aswp run PROFILE --dry-run.".to_owned(),
-                        Ok(_) if app.masked => format!(
-                            "Preflight: {} found. Isolation unverified. Unmask aliases to see the launch command.",
-                            profile.harness
-                        ),
-                        Ok(_) => format!(
-                            "Preflight: {} ({}) found. Isolation unverified. Leave the dashboard and inspect: aswp run {} --dry-run",
-                            profile.alias, profile.harness, profile.alias
-                        ),
-                        Err(error) => app.error_message(&error),
-                    });
-                }
-            }
+            KeyCode::Enter => app.review_launch(store, launch::Operation::Run),
+            KeyCode::Char('l') => app.review_launch(store, launch::Operation::Login),
+            KeyCode::Char('c') => app.review_launch(store, launch::Operation::Resume),
             _ => {}
         }
     }
-    Ok(())
+    restore.restore()?;
+    Ok(TerminalOutcome::Quit)
+}
+
+// Use the renderer's grapheme widths for both wrapping and scroll bounds.
+fn wrapped_rows(content: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    let width = usize::from(width.max(1));
+    let mut rows = Vec::new();
+    for line in content {
+        let mut row = Line::default();
+        let mut used = 0;
+        let mut last_space = None;
+        for grapheme in line.styled_graphemes(Style::default()) {
+            let span = Span::styled(grapheme.symbol.to_owned(), grapheme.style);
+            let size = span.width();
+            let whitespace = grapheme.symbol.chars().all(char::is_whitespace);
+            if used + size > width && used > 0 {
+                let carry = if !whitespace && let Some(index) = last_space {
+                    let carry = row.spans.split_off(index + 1);
+                    row.spans.truncate(index);
+                    carry
+                } else {
+                    Vec::new()
+                };
+                while row
+                    .spans
+                    .last()
+                    .is_some_and(|span| span.content.chars().all(char::is_whitespace))
+                {
+                    row.spans.pop();
+                }
+                rows.push(row);
+                row = Line::from(carry);
+                used = row.width();
+                last_space = None;
+                if whitespace && row.spans.is_empty() {
+                    continue;
+                }
+            }
+            used += size;
+            row.spans.push(span);
+            if whitespace {
+                last_space = Some(row.spans.len() - 1);
+            }
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
@@ -344,7 +450,9 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
     );
     if area.width < 40 || area.height < 14 {
         frame.render_widget(
-            Paragraph::new(if app.setup.is_some() {
+            Paragraph::new(if app.launch.is_some() {
+                "aswp\nEnlarge to 40 x 14.\nEsc cancels launch.\nCtrl-C quits."
+            } else if app.setup.is_some() {
                 "aswp\nEnlarge to 40 x 14.\nCtrl-G cancels setup.\nCtrl-C quits."
             } else if app.searching {
                 "aswp\nEnlarge to 40 x 14.\nEsc clears search.\nCtrl-C quits."
@@ -392,6 +500,14 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         setup.draw(frame, parts[1].union(parts[2]), app.masked);
         frame.render_widget(
             Paragraph::new(setup.footer()).style(Style::default().fg(TEAL)),
+            parts[3],
+        );
+        return;
+    }
+    if let Some(review) = &app.launch {
+        review.draw(frame, parts[1].union(parts[2]), app.masked);
+        frame.render_widget(
+            Paragraph::new(review.footer()).style(Style::default().fg(TEAL)),
             parts[3],
         );
         return;
@@ -462,7 +578,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
                 ("native CLI", "Workspace + permissions: native agent\nProfile isolation: unverified")
             };
             format!(
-                "{}\n{} / {}\nAvailability: {}\n\nEngine: {engine}\n{ownership}\n\nAccount: unverified\nQuota: unknown / not measured\nAutomatic switching: not enabled\n\nEnter checks launch readiness.",
+                "{}\n{} / {}\nAvailability: {}\n\nEngine: {engine}\n{ownership}\n\nAccount: unverified\nQuota: unknown / not measured\nAutomatic switching: not enabled\n\nEnter reviews a new launch.\nl reviews login. c resumes gents.",
                 app.label(p), p.harness, app.status(p), if p.enabled { "enabled" } else { "disabled" }
             )
         }).unwrap_or_else(|| "Your selected profile's details appear here.\n\nQuota: unknown until measured.".to_owned());
@@ -479,7 +595,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         );
     }
     let details = if app.help {
-        "Navigation: arrows or j/k. / search. a adds a profile.\nEnter checks preflight; it never starts an agent.\ne enables/disables future launches.\nCtrl-P toggles privacy, including setup and search.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured.".to_owned()
+        "Navigation: arrows or j/k. / search. a adds a profile.\nEnter reviews a new launch; l reviews native login.\nc reviews the latest gents session. Native resume is unavailable.\ne enables/disables future launches. Ctrl-P toggles privacy.\nr refresh. Esc dismisses. q or Ctrl-C quits.\nQuota unknown means unmeasured.".to_owned()
     } else if app.searching {
         let query = if app.masked && !app.query.is_empty() {
             "[hidden]".to_owned()
@@ -500,7 +616,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
                 }
             )
         } else if wide {
-            "Enter checks launch readiness. e changes availability for future launches.\nAccount identity and capacity require provider verification.".to_owned()
+            "Enter reviews a new launch. l reviews native login. c resumes gents.\nAccount identity and capacity require provider verification.".to_owned()
         } else if profile.harness == agentswapper_core::Harness::Gents {
             "Engine: gents / attached client\nWorkspace + permissions: gents\nRuntime may outlive chat\nQuota: unknown / no auto switch".to_owned()
         } else {
@@ -525,7 +641,7 @@ fn draw(frame: &mut Frame<'_>, app: &Dashboard) {
         } else if app.searching {
             " Enter apply  Backspace edit  Esc clear\n Ctrl-P privacy  Ctrl-C quit"
         } else {
-            " a add  e enable/disable  / search\n j/k move  Enter preflight  m mask\n r refresh  ? help  Esc back  q quit"
+            " Enter review  l login  c gents resume\n a add  e enable/disable  / search\n j/k move  m mask  r refresh  ? help  q quit"
         })
             .style(Style::default().fg(TEAL)),
         parts[3],
@@ -539,7 +655,47 @@ mod tests {
     use agentswapper_core::Harness;
     use ratatui::backend::TestBackend;
 
-    fn screenshot(app: &Dashboard, width: u16, height: u16) -> String {
+    #[test]
+    fn wrapped_rows_keep_words_styles_and_graphemes_intact() {
+        let content = "Context is not transferred. Review before starting another agent.";
+        let rows = wrapped_rows(vec![Line::from(content)], 24);
+        assert!(rows.iter().all(|line| line.width() <= 24));
+        assert_eq!(
+            rows.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
+            content
+        );
+        let identifier = "a".repeat(150);
+        let rows = wrapped_rows(vec![Line::from(identifier.clone())], 24);
+        assert!(rows.iter().all(|line| line.width() <= 24));
+        assert_eq!(
+            rows.iter().map(ToString::to_string).collect::<String>(),
+            identifier
+        );
+        let rows = wrapped_rows(
+            vec![Line::from(Span::styled(
+                "界界 e\u{301} long-unbroken-field",
+                Style::default().fg(TEAL),
+            ))],
+            8,
+        );
+        assert!(rows.iter().all(|line| line.width() <= 8));
+        assert!(
+            rows.iter()
+                .map(ToString::to_string)
+                .collect::<String>()
+                .contains("e\u{301}")
+        );
+        assert!(
+            rows.iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| span.style.fg == Some(TEAL))
+        );
+    }
+
+    pub(super) fn screenshot(app: &Dashboard, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer();

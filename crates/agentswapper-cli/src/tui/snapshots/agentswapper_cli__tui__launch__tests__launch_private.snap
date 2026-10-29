@@ -1,0 +1,28 @@
+---
+source: crates/agentswapper-cli/src/tui/launch.rs
+expression: "screenshot(&app, 80, 24)"
+---
+ aswp  / AgentSwapper  developer preview
+ 1 profile / 0 unresolved / privacy on
+
+ Review launch ─────────────────────────────────────────────────────────────────
+ Start the selected agent
+ Destination: [hidden] / codex
+ Program: [hidden]
+ Profile home: [hidden]
+ Workspace: [hidden]
+ Continuity: new conversation. Context is not transferred.
+ Permissions and tools: native agent. Descendants may outlive its exit.
+
+ Experimental launch: profile isolation is unverified.
+ Quota: unknown. Automatic switching is not enabled.
+ The dashboard returns when the agent/client exits.
+ Agent output has its own privacy settings.
+ Check outgoing work and any background jobs before starting another agent.
+
+ Unmask with Ctrl-P to launch. Agent output is outside dashboard privacy.
+
+
+ Space accept  Enter start  Esc cancel
+ PgUp/PgDn scroll  Ctrl-P privacy
+ Ctrl-G cancel  Ctrl-C quit

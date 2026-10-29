@@ -110,7 +110,7 @@ enum RegistryCommands {
     },
     /// Remove the mapping for this directory.
     Unmap { directory: Option<PathBuf> },
-    /// Browse profiles and launch preflight in the terminal dashboard.
+    /// Browse profiles, review launches and sign in through the terminal dashboard.
     Tui {
         /// Start with profile aliases hidden, overriding ui.mask.
         #[arg(long, conflicts_with = "show_aliases")]
@@ -885,23 +885,15 @@ fn launch_profile(
 }
 
 fn install_launch_interrupt_handler() -> Result<()> {
-    #[cfg(unix)]
-    {
-        // A fresh process can inherit SIG_IGN across exec. Installing a new
-        // handler over it would make exec reset the child's disposition to
-        // SIG_DFL. Preserve any existing disposition; if it belongs to an
-        // embedding host, that host retains responsibility for its behavior.
-        match ctrlc::try_set_handler(|| {}) {
-            Ok(()) | Err(ctrlc::Error::MultipleHandlers) => Ok(()),
-            Err(_) => Err(Error::Io(io::Error::other(
-                "could not install interrupt handler",
-            ))),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        ctrlc::set_handler(|| {})
-            .map_err(|_| Error::Io(io::Error::other("could not install interrupt handler")))
+    // A fresh Unix process can inherit SIG_IGN across exec. Preserve any
+    // existing disposition; an embedding host remains responsible for its own
+    // handler. A dashboard may also have installed our handler for an earlier
+    // launch. Keep it on both platforms so subsequent launches still work.
+    match ctrlc::try_set_handler(|| {}) {
+        Ok(()) | Err(ctrlc::Error::MultipleHandlers) => Ok(()),
+        Err(_) => Err(Error::Io(io::Error::other(
+            "could not install interrupt handler",
+        ))),
     }
 }
 

@@ -18,8 +18,8 @@ expression: wide
                                                        │ Quota: unknown / not measured
                                                        │ Automatic switching: not enabled
                                                        │
-                                                       │ Enter checks launch readiness.
-                                                       │
+                                                       │ Enter reviews a new launch.
+                                                       │ l reviews login. c resumes gents.
                                                        │
                                                        │
                                                        │
@@ -27,10 +27,10 @@ expression: wide
                                                        │
                                                        │
  Next step ─────────────────────────────────────────────────────────────────────────────────────────
-Enter checks launch readiness. e changes availability for future launches.
+Enter reviews a new launch. l reviews native login. c resumes gents.
 Account identity and capacity require provider verification.
 
 
+ Enter review  l login  c gents resume
  a add  e enable/disable  / search
- j/k move  Enter preflight  m mask
- r refresh  ? help  Esc back  q quit
+ j/k move  m mask  r refresh  ? help  q quit

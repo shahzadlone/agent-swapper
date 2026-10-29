@@ -21,11 +21,14 @@ def main():
     # Snapshot acceptance remains manual; rendering must not silently rewrite it.
     env.pop("INSTA_UPDATE", None)
     subprocess.run(["cargo", "test", "--locked", "-p", "agentswapper-cli",
-                    "--lib", "tui::tests"], cwd=repo, env=env, check=True)
+                    "--lib", "tui::"], cwd=repo, env=env, check=True)
     names = ["overview", "overview-80", "overview-160", "overview-44",
              "unresolved", "gents", "privacy-search", "privacy-narrow", "empty",
              "setup-agents", "setup-label", "setup-native-review", "setup-invalid-route",
-             "setup-private-100", "setup-private-80", "setup-private-44", "setup-private-40"]
+             "setup-private-100", "setup-private-80", "setup-private-44", "setup-private-40",
+             "launch-review-80", "launch-review-100", "launch-review-160",
+             "launch-private-40", "launch-private-44", "launch-private-80",
+             "launch-private-100", "launch-private-160"]
     links = "".join(f'<li><a href="{name}.html">{name.replace("-", " ")}</a></li>'
                     for name in names)
     destination.joinpath("index.html").write_text(
