@@ -38,11 +38,19 @@ def check(binary, mode):
         output = bytearray()
         try:
             def controlling_terminal():
-                os.setsid()
-                fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-            process = subprocess.Popen(command + ["run", "fixture", "--experimental-native", "--executable", str(agent)],
-                                       cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave,
-                                       preexec_fn=None if mode == "detached" else controlling_terminal)
+                try:
+                    os.setsid()
+                    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+                except BaseException as error:
+                    os.write(2, f"terminal setup: {type(error).__name__}: {error}\n".encode())
+                    raise
+            try:
+                process = subprocess.Popen(command + ["run", "fixture", "--experimental-native", "--executable", str(agent)],
+                                           cwd=root, env=env, stdin=slave, stdout=slave, stderr=slave,
+                                           preexec_fn=None if mode == "detached" else controlling_terminal)
+            except subprocess.SubprocessError as error:
+                detail = os.read(master, 4096) if select.select([master], [], [], 0.5)[0] else b""
+                raise RuntimeError(f"could not start PTY fixture: {error}; {detail!r}") from error
             deadline = time.monotonic() + 10
             sent_interrupt = False
             while process.poll() is None:
@@ -100,7 +108,13 @@ def main():
     binary = Path(sys.argv[1]).resolve(strict=True)
     for mode in ("exit", "interrupt", "detached", "foreground-change"):
         print(f"::notice title=Native terminal fixture::starting {mode}", flush=True)
-        check(binary, mode)
+        try:
+            check(binary, mode)
+        except Exception as error:
+            detail = f"{mode}: {type(error).__name__}: {error}"[:2000]
+            detail = detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=Native terminal fixture::{detail}", flush=True)
+            raise
         print(f"::notice title=Native terminal fixture::completed {mode}", flush=True)
 
 
