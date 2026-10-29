@@ -73,6 +73,11 @@ def role(name, directory, expected, forced):
     if name == 'outside':
         tick(directory, 'outside-heartbeat', 40, 'outside-stop')
         return
+    if name == 'peer':
+        require(membership() != expected, "peer is inside the target scope")
+        check_controls(Path('/sys/fs/cgroup' + expected))
+        (directory / 'peer-controls-checked').write_text('checked')
+        return
     require(membership() == expected, "target is outside its managed scope")
     scope = Path('/sys/fs/cgroup' + expected)
     check_controls(scope)
@@ -121,6 +126,10 @@ def trial(root, forced, run_id, attempt):
             wait_for(lambda: (directory / 'service-ready').exists() or manager.poll() is not None)
             require((directory / 'service-ready').exists(), "managed service failed before readiness")
             require((directory / 'controls-checked').exists(), "control permissions were not checked")
+            subprocess.run([sys.executable, executable, 'peer', str(directory), expected, str(int(forced))],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, check=True, timeout=5)
+            require((directory / 'peer-controls-checked').exists(), "same-user peer permissions were not checked")
             require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
                     "managed scope was not populated before cleanup")
             before = (directory / 'outside-heartbeat').read_text()
@@ -136,7 +145,7 @@ def trial(root, forced, run_id, attempt):
             wait_for(lambda: (directory / 'outside-heartbeat').read_text() != before)
             require(outside.poll() is None, "outside writer was terminated")
             label = 'forced' if forced else 'graceful'
-            print(f'::notice title=Linux managed scope {label}::root-owned migration controls refused writes; detached writer stopped; original scope removed; outside writer continued; manager exit {result}', flush=True)
+            print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; manager exit {result}', flush=True)
     finally:
         (directory / 'outside-stop').write_text('stop')
         try:

@@ -393,7 +393,12 @@ for writing by that user, then lets the main process exit with a detached writer
 still active. Graceful and forced-stop trials require manager removal of the
 original scope, a stopped worker heartbeat and a continuing outside writer.
 This experiment runs only on disposable hosted CI; it never provisions a local
-service or changes host security settings. Its result is pending. It does not
+service or changes host security settings. Both trials passed at `de6ed91` in
+[CI run 40904554997](https://github.com/shahzadlone/agent-swapper/actions/runs/40904554997/job/123555651888):
+the manager reported exit 0 for graceful cleanup and exit 1 for the forced-stop
+timeout, with scope removal and the outside heartbeat checked in both cases.
+The extended trial now also checks a separate same-user peer outside the scope;
+that additional result is pending. The experiment does not
 qualify interactive terminal behavior, manager authentication, receipt binding,
 administrator adversaries, external delegated work or production integration.
 Using a system manager in a shipped backend would need an explicitly authorized
