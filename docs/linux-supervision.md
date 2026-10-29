@@ -186,7 +186,9 @@ The fixture also uses a shared retirement routine that verifies the transferred
 scope and zero population before sending RETIRE, then checks the original
 descriptor for the missing events file after the guardian acknowledges removal.
 Invalid scope capabilities fail locally before the control message is sent;
-the combined routine still awaits its delegated CI run and issues no receipt.
+the combined routine passed the delegated Linux job in
+[CI run 40833388825](https://github.com/shahzadlone/agent-swapper/actions/runs/40833388825/job/123312467344)
+at `aeac2b9`. It issues no receipt.
 An experimental wait path now polls for the guardian's empty report without a
 total live-session deadline, while checking only the owned guardian child for
 unexpected exit. Local tests cover multiple polling intervals, guardian loss and
