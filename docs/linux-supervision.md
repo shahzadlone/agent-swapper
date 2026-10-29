@@ -43,6 +43,14 @@ and terminal fixtures. Control messages reject empty expectations, malformed
 packets and unexpected descriptors; a local test checks that rejecting a
 transferred lock closes the received descriptor. This does not connect the
 transport to production launches or establish a cleanup receipt.
+An internal, bounded launch envelope separately encodes the original Unix
+argument and environment bytes without requiring UTF-8. It rejects NULs,
+ambiguous environment keys, excess lengths, truncation and trailing data, and
+reconstructs a command with an explicit environment; a local subprocess test
+checks byte preservation and directory selection. Envelope buffers are
+zeroized on drop, but process-environment snapshots, `Command` and operating
+system copies are outside that guarantee. The envelope is not yet transferred
+over the guardian channel or used by production launch.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).
