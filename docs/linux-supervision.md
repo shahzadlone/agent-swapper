@@ -154,7 +154,9 @@ same-name cgroup. These observations passed the delegated Linux job at `e527350`
 in [CI run 40832463049](https://github.com/shahzadlone/agent-swapper/actions/runs/40832463049/job/123309571171).
 They remain observations under evaluation, not a receipt. A further fixture
 now attempts retirement using the original descriptor after replacement and
-requires the replacement to survive; that added check awaits hosted CI.
+requires the replacement to survive; that added check passed the delegated
+Linux job in [CI run 40832914815](https://github.com/shahzadlone/agent-swapper/actions/runs/40832914815/job/123310979486)
+at `85f94e0`. This does not test the separate check/remove race.
 In Linux [`v7.0` cgroup destruction](https://github.com/torvalds/linux/blob/v7.0/kernel/cgroup/cgroup.c),
 the kernel checks population, disables migration and removes the cgroup's
 visible files during destruction; those implementation details need qualification
@@ -178,6 +180,11 @@ that an already-expired preparation transfers no capability, that the receiver
 waits for GO, and that a journal failure never sends GO. A failed GO after the
 journal commit leaves the run unresolved. These routines are not wired into
 normal launches; their delegated test results await hosted CI.
+The fixture also uses a shared retirement routine that verifies the transferred
+scope and zero population before sending RETIRE, then checks the original
+descriptor for the missing events file after the guardian acknowledges removal.
+Invalid scope capabilities fail locally before the control message is sent;
+the combined routine still awaits its delegated CI run and issues no receipt.
 
 `linux_guardian_probe` uses only temporary files and cooperating fixtures. The
 parent transfers its locked open file description over the anonymous socket;

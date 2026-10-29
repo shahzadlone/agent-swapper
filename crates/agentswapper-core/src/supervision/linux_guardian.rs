@@ -69,6 +69,27 @@ pub(crate) fn record_and_go(
     Ok(())
 }
 
+/// Independently inspect the held scope before and after asking the guardian
+/// to retire it. This observation is experimental and is not a stop receipt.
+#[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
+pub(crate) fn retire_observed(
+    channel: &OwnedFd,
+    parent: &File,
+    leaf: &File,
+    path: &Path,
+    deadline: Instant,
+) -> io::Result<()> {
+    cgroup::validate_scope(parent, leaf, path)?;
+    cgroup::require(!cgroup::populated(leaf)?, "scope remains populated")?;
+    cgroup::require(!cgroup::events_missing(leaf)?, "scope already retired")?;
+    transport::send_until(channel, RETIRE, &[], deadline)?;
+    receive_retired(channel, deadline)?;
+    cgroup::require(
+        cgroup::events_missing(leaf)?,
+        "scope retirement not observed",
+    )
+}
+
 #[allow(dead_code, reason = "normal launcher integration is not yet enabled")]
 pub(crate) fn receive_pid(channel: impl AsFd, deadline: Instant) -> io::Result<u32> {
     let pid = u32::from_be_bytes(transport::receive_number_until(
@@ -239,6 +260,29 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retirement_refuses_invalid_scope_without_sending_control() -> io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let directory = File::open(temp.path())?;
+        let (sender, receiver) = transport::pair()?;
+        assert!(
+            retire_observed(
+                &sender,
+                &directory,
+                &directory,
+                temp.path(),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .is_err()
+        );
+        let mut bytes = [0; 1];
+        assert!(matches!(
+            recv(&receiver, &mut bytes, RecvFlags::DONTWAIT),
+            Err(rustix::io::Errno::AGAIN)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn gate_requires_recorded_pid_and_send_failure_keeps_run_unresolved() -> crate::Result<()> {

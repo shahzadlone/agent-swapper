@@ -584,8 +584,14 @@ fn internal_guardian_case(parent_loss: bool, loss_after_empty: bool) {
         assert!(scope.path().exists());
         assert!(matches!(store.attest_stopped(&run), Err(Error::Busy)));
         if !loss_after_empty {
-            transport::send(&channel, linux_guardian::RETIRE, &[]).unwrap();
-            linux_guardian::receive_retired(&channel, Instant::now() + BUDGET).unwrap();
+            linux_guardian::retire_observed(
+                &channel,
+                scope.parent(),
+                scope.directory(),
+                scope.path(),
+                Instant::now() + BUDGET,
+            )
+            .unwrap();
         }
         drop(channel);
     }
