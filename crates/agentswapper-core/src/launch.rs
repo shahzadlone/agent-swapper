@@ -103,6 +103,10 @@ pub struct LaunchPreview<'a> {
     pub isolation: &'static str,
     pub quota: &'static str,
     pub containment: &'static str,
+    /// Whether the Kimi legacy-home preflight will be required at launch.
+    pub kimi_legacy_preflight: &'static str,
+    /// Whether the Claude shared-profile preflight will be required at launch.
+    pub claude_shared_auth_preflight: &'static str,
     pub engine: ExecutionEngine,
     pub runtime_owner: &'static str,
     pub workspace_owner: &'static str,
@@ -279,6 +283,19 @@ impl LaunchPlan {
             isolation: "unverified",
             quota: "unknown",
             containment: self.containment.map_or("none", Containment::as_str),
+            kimi_legacy_preflight: match (self.profile.harness, self.allow_kimi_legacy) {
+                (Harness::Kimi, true) => "bypassed",
+                (Harness::Kimi, false) => "required",
+                _ => "not_applicable",
+            },
+            claude_shared_auth_preflight: match (
+                self.profile.harness,
+                self.allow_claude_shared_auth,
+            ) {
+                (Harness::Claude, true) => "bypassed",
+                (Harness::Claude, false) => "required",
+                _ => "not_applicable",
+            },
             engine: self.profile.harness.engine(),
             runtime_owner: if self.profile.harness == Harness::Gents {
                 "external_gents_runtime"

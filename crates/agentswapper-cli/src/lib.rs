@@ -770,6 +770,18 @@ fn launch_profile(
         {
             writeln!(io::stdout(), "{shared_auth}")?;
         }
+        if !json_mode && preview.kimi_legacy_preflight == "bypassed" {
+            writeln!(
+                io::stdout(),
+                "Kimi legacy-home preflight bypassed for this launch."
+            )?;
+        }
+        if !json_mode && preview.claude_shared_auth_preflight == "bypassed" {
+            writeln!(
+                io::stdout(),
+                "Claude shared-profile preflight bypassed for this launch."
+            )?;
+        }
         return Ok(0);
     }
     if json_mode {
@@ -789,6 +801,18 @@ fn launch_profile(
         plan.profile().harness,
         plan.preview().containment
     )?;
+    if plan.preview().kimi_legacy_preflight == "bypassed" {
+        writeln!(
+            io::stderr(),
+            "Kimi legacy-home preflight bypassed for this launch."
+        )?;
+    }
+    if plan.preview().claude_shared_auth_preflight == "bypassed" {
+        writeln!(
+            io::stderr(),
+            "Claude shared-profile preflight bypassed for this launch."
+        )?;
+    }
     if launch.experimental_containment.is_some() {
         writeln!(
             io::stderr(),

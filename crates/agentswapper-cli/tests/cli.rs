@@ -338,13 +338,34 @@ fn kimi_legacy_home_requires_explicit_per_launch_consent() {
         .output()
         .unwrap();
     let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["data"]["plan"]["kimi_legacy_preflight"], "required");
     assert!(
         preview["data"]["kimiLegacyRisk"]
             .as_str()
             .unwrap()
             .contains("--allow-kimi-legacy")
     );
-    s.run("work").arg("--allow-kimi-legacy").assert().success();
+    let bypass = s
+        .command()
+        .args([
+            "run",
+            "work",
+            "--dry-run",
+            "--json",
+            "--experimental-native",
+            "--allow-kimi-legacy",
+            "--executable",
+        ])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    let bypass: Value = serde_json::from_slice(&bypass.stdout).unwrap();
+    assert_eq!(bypass["data"]["plan"]["kimi_legacy_preflight"], "bypassed");
+    s.run("work")
+        .arg("--allow-kimi-legacy")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("preflight bypassed"));
     assert_eq!(
         std::fs::read(legacy.join("sentinel")).unwrap(),
         b"unchanged"
@@ -483,6 +504,29 @@ fn claude_shared_profile_requires_explicit_per_launch_consent() {
             .unwrap()
             .contains("--allow-claude-shared-auth")
     );
+    assert_eq!(
+        preview["data"]["plan"]["claude_shared_auth_preflight"],
+        "required"
+    );
+    let bypass = s
+        .command()
+        .args([
+            "run",
+            "work",
+            "--dry-run",
+            "--json",
+            "--experimental-native",
+            "--allow-claude-shared-auth",
+            "--executable",
+        ])
+        .arg(fixture())
+        .output()
+        .unwrap();
+    let bypass: Value = serde_json::from_slice(&bypass.stdout).unwrap();
+    assert_eq!(
+        bypass["data"]["plan"]["claude_shared_auth_preflight"],
+        "bypassed"
+    );
     s.run("work")
         .assert()
         .code(125)
@@ -493,7 +537,8 @@ fn claude_shared_profile_requires_explicit_per_launch_consent() {
     s.run("work")
         .arg("--allow-claude-shared-auth")
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("preflight bypassed"));
     assert_eq!(
         std::fs::read(root.join("active_config")).unwrap(),
         b"private-profile-canary"

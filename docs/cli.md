@@ -113,6 +113,8 @@ remain unverified; see the [support matrix](support-matrix.md#claude-source-cont
 Launch previews show argument counts, never argument contents. They do not
 reserve a profile or guarantee a later launch will succeed. Native stdout
 belongs to the child, so actual launches cannot use `--json`.
+Both the preview and the launch message identify explicitly bypassed provider
+preflights; a bypass does not establish that the selected account is isolated.
 
 On Unix, a launch whose stdin is its foreground controlling terminal saves its attributes and
 restores them after the child is observed to exit. If the foreground changes or
