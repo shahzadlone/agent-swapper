@@ -151,6 +151,39 @@ jobs:
           key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
       - run: cargo +1.98.0 deny --locked check
 
+  linux-namespace-evidence:
+    # A second distribution image gives the experimental namespace boundary a
+    # chance to run without weakening the newer runner's security settings.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Record platform evidence
+        run: python3 tools/platform_evidence.py
+      - name: Exercise delegated custody and namespace probes
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          python3 -m unittest discover -s tools -p test_delegated_custody_probe.py -v
+          cargo +1.98.0 build --locked -p agentswapper-core --example linux_custody_probe --example linux_terminal_guardian_probe
+          cargo +1.98.0 build --locked -p agentswapper-cli --bin aswp
+          core_test="$(cargo +1.98.0 test --locked -p agentswapper-core --lib --no-run --message-format=json | python3 tools/find_core_test_binary.py)"
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo -n systemd-run --wait --pipe --collect --service-type=exec \
+            --uid="$(id -u)" --gid="$(id -g)" --property=Delegate=yes \
+            --property=RuntimeMaxSec=120 \
+            --working-directory="$GITHUB_WORKSPACE" \
+            --unit="aswp-custody-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            /usr/bin/python3 "$GITHUB_WORKSPACE/tools/run_delegated_custody_probe.py" \
+            "$GITHUB_WORKSPACE/target/debug/examples/linux_custody_probe" \
+            "$GITHUB_WORKSPACE/target/debug/examples/linux_terminal_guardian_probe" \
+            "$core_test"
+
   candidate:
     needs: [test, dependencies]
     strategy:

@@ -412,6 +412,9 @@ at `6a2d21b`. The [kernel's `nsdelegate` mount option](https://docs.kernel.org/a
 is system-wide, and namespace setup may affect user identity, filesystem access,
 and agent behavior. The test does not yet qualify those effects, alternative
 escape paths, or this approach for production.
+A separate `ubuntu-22.04` hosted job now runs the same delegated probes to seek
+evidence on another image without changing the newer runner's security settings.
+It has not yet established namespace availability or a passing result.
 The delegated driver now also reports whether its cgroup2 mount advertises
 `nsdelegate`; missing or ambiguous mount information is reported as unknown.
 This metadata is context for the experiment, not proof of a boundary.
