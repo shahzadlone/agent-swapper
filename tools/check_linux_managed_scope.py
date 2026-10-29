@@ -30,9 +30,9 @@ def membership():
     return entries[0]
 
 
-def private_directory(directory):
+def private_directory(directory, owner=None):
     metadata = directory.lstat()
-    require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
+    require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == (os.getuid() if owner is None else owner)
             and metadata.st_mode & 0o077 == 0, "fixture directory is not private")
 
 
@@ -95,6 +95,45 @@ def tick(directory, name, seconds, stop_name=None):
         time.sleep(0.02)
 
 
+def manager_command(directory, unit, expected, uid, gid, forced):
+    return ['systemd-run', '--wait', '--pipe', '--collect', '--service-type=exec',
+            '--uid=' + str(uid), '--gid=' + str(gid),
+            '--property=Delegate=no', '--property=KillMode=control-group',
+            '--property=SendSIGKILL=yes', '--property=TimeoutStopSec=2s',
+            '--property=RuntimeMaxSec=30s', '--unit=' + unit,
+            '/usr/bin/python3', str(Path(__file__).resolve()), 'service',
+            str(directory), expected, str(int(forced))]
+
+
+def client_helper(directory, expected):
+    # CI-only failure injector. It starts a fixed service as the directory's
+    # ordinary owner; no caller-supplied service properties or root target.
+    import pwd
+    require(os.geteuid() == 0, "client helper requires the disposable manager authority")
+    require(re.fullmatch(r'/system\.slice/aswp-managed-[0-9]{1,24}-[0-9]{1,8}-client-loss\.service', expected),
+            "invalid disposable client-loss unit")
+    owner = directory.lstat().st_uid
+    require(owner != 0, "client helper cannot launch a root target")
+    private_directory(directory, owner)
+    group = pwd.getpwuid(owner).pw_gid
+    unit = expected.rsplit('/', 1)[1].removesuffix('.service')
+    client = subprocess.Popen(manager_command(directory, unit, expected, owner, group, False),
+                              stdin=subprocess.DEVNULL, close_fds=True)
+    try:
+        wait_for(lambda: (directory / 'kill-client').exists() or client.poll() is not None)
+        require(client.poll() is None, "manager client exited before failure injection")
+        require(Path(f'/proc/{client.pid}/comm').read_text().strip() == 'systemd-run',
+                "failure injector does not own the systemd-run client")
+        client.kill()
+        result = client.wait(timeout=3)
+        require(result == -signal.SIGKILL, "manager client was not killed through its owned handle")
+        (directory / 'client-status').write_text(str(result))
+    finally:
+        if client.poll() is None:
+            client.kill()
+            client.wait(timeout=3)
+
+
 def role(name, directory, expected, forced):
     private_directory(directory)
     if name == 'outside':
@@ -145,14 +184,10 @@ def trial(root, forced, run_id, attempt, client_loss=False):
     try:
         wait_for(lambda: (directory / 'outside-heartbeat').exists())
         with (directory / 'manager.log').open('wb') as log:
-            manager = subprocess.Popen([
-                'sudo', '-n', 'systemd-run', '--wait', '--pipe', '--collect', '--service-type=exec',
-                '--uid=' + str(os.getuid()), '--gid=' + str(os.getgid()),
-                '--property=Delegate=no', '--property=KillMode=control-group',
-                '--property=SendSIGKILL=yes', '--property=TimeoutStopSec=2s',
-                '--property=RuntimeMaxSec=30s', '--unit=' + unit,
-                '/usr/bin/python3', executable, 'service', str(directory), expected, str(int(forced)),
-            ], stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True)
+            command = (['sudo', '-n', '/usr/bin/python3', executable, 'client-helper', str(directory), expected]
+                       if client_loss else ['sudo', '-n'] + manager_command(
+                           directory, unit, expected, os.getuid(), os.getgid(), forced))
+            manager = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True)
             wait_for(lambda: (directory / 'service-ready').exists() or manager.poll() is not None)
             require((directory / 'service-ready').exists(), "managed service failed before readiness")
             require((directory / 'controls-checked').exists(), "control permissions were not checked")
@@ -174,10 +209,12 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                     and opened.st_uid == 0, "opened scope identity does not match")
             before = (directory / 'outside-heartbeat').read_text()
             if client_loss:
-                client_name = Path(f'/proc/{manager.pid}/comm').read_text().strip()
-                require(client_name == 'systemd-run', "owned launcher has not execed the systemd-run client")
-                manager.kill()
-                result = manager.wait(timeout=3)
+                (directory / 'kill-client').write_text('kill')
+                wait_for(lambda: (directory / 'client-status').exists() or manager.poll() is not None)
+                require((directory / 'client-status').exists(), "client failure injection did not complete")
+                result = int((directory / 'client-status').read_text())
+                require(result == -signal.SIGKILL and manager.wait(timeout=3) == 0,
+                        "manager client-loss observation is invalid")
                 # Losing the owned client is not evidence that the target
                 # stopped. The root manager still owns its populated scope.
                 require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
@@ -225,6 +262,9 @@ def trial(root, forced, run_id, attempt, client_loss=False):
 
 
 def main():
+    if sys.platform == 'linux' and len(sys.argv) == 4 and sys.argv[1] == 'client-helper':
+        client_helper(Path(sys.argv[2]), sys.argv[3])
+        return
     require(sys.platform == 'linux' and os.geteuid() != 0, "fixture needs an ordinary Linux user")
     if len(sys.argv) == 5:
         role(sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4] == '1')

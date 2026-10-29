@@ -405,10 +405,15 @@ client after readiness, checks that the populated workload remains owned by the
 manager, then permits main-process exit and requires descendant cleanup. A
 client's death is never classified as target exit; the measured client exit was
 `-9`, while original scope removal and worker cessation were checked separately.
-The next revision also requires the owned launcher's kernel command name to be
-`systemd-run` immediately before failure injection, so losing a surviving sudo
-wrapper cannot be confused with killing the actual client. Earlier trials did
-not include that explicit command-name observation.
+The stricter owned-client check failed at `0dad7f2` in
+[CI run 40906167288](https://github.com/shahzadlone/agent-swapper/actions/runs/40906167288/job/123561390422).
+Earlier launcher-loss observations therefore do not prove that the actual
+`systemd-run` client was killed. A CI-only privileged failure injector now owns
+that client directly, verifies its command name, kills its owned child handle
+and checks SIGKILL status. Its fixed service command runs the target as the
+private fixture directory's ordinary owner with that owner's primary group;
+it refuses a root target or an unrelated unit name. This revised client-loss
+test is pending and does not introduce a production privileged helper.
 The next revision additionally retains the original directory descriptor and
 requires its events file to disappear after cleanup; all three trials passed
 with that observation at `3fc45f4` in

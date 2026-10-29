@@ -8,6 +8,16 @@ import check_linux_managed_scope as probe
 
 
 class ManagedScopeTests(unittest.TestCase):
+    def test_client_injector_rejects_unprivileged_or_invalid_invocation(self):
+        for user, expected in [(1000, '/system.slice/aswp-managed-12-1-client-loss.service'),
+                               (0, '/system.slice/unrelated.service')]:
+            with self.subTest(user=user, expected=expected), \
+                 patch.object(probe.os, 'geteuid', return_value=user), \
+                 patch.object(probe.subprocess, 'Popen') as spawn:
+                with self.assertRaises(RuntimeError):
+                    probe.client_helper(Path('/unused'), expected)
+                spawn.assert_not_called()
+
     def test_manager_identity_binds_unit_scope_user_and_invocation(self):
         unit, scope = 'aswp-managed-12-1-graceful', '/system.slice/aswp-managed-12-1-graceful.service'
         fields = {'Id': unit + '.service', 'ControlGroup': scope, 'MainPID': '42',
