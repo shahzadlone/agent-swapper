@@ -3,11 +3,28 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from test_verify_candidate_set import TARGETS, make_candidate
-from verify_rebuilt_candidate import compare
+from test_verify_candidate_set import LOCK, REVISION, SOURCE_FILES, TARGETS, VERSION, make_candidate
+from verify_rebuilt_candidate import compare, verify_rebuild
 
 
 class RebuiltCandidateTests(unittest.TestCase):
+    def test_candidate_integrity_and_source_binding_precede_comparison(self):
+        name, target = next(iter(TARGETS.items()))
+        for mode in ("valid", "tamper", "wrong_revision"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                make_candidate(root, name, target, tamper=mode == "tamper")
+                binaries = root / "binaries"
+                binaries.mkdir()
+                (binaries / "aswp").write_bytes(b"binary a")
+                (binaries / "agentswapper").write_bytes(b"binary b")
+                revision = "c" * 40 if mode == "wrong_revision" else REVISION
+                if mode == "valid":
+                    verify_rebuild(root / name, target, revision, LOCK, VERSION, SOURCE_FILES, binaries)
+                else:
+                    with self.assertRaises(ValueError):
+                        verify_rebuild(root / name, target, revision, LOCK, VERSION, SOURCE_FILES, binaries)
+
     def test_both_binaries_must_match_on_every_target(self):
         for name, target in TARGETS.items():
             with self.subTest(target=target), tempfile.TemporaryDirectory() as temp:
