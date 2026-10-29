@@ -496,24 +496,43 @@ fn guardian_exit_target() {
             );
         }
         let (dir, scope) = fixture_paths();
-        let parent = match cgroup::checked_directory(scope.parent().unwrap()) {
-            Ok(parent) => parent,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
-                ) =>
-            {
-                fs::write(dir.join("escape-result"), b"denied").unwrap();
-                std::process::exit(7);
+        let inherited = std::env::var_os("ASWP_JOURNAL_INHERITED_FD_PROBE").is_some();
+        let parent = if inherited {
+            None
+        } else {
+            match cgroup::checked_directory(scope.parent().unwrap()) {
+                Ok(parent) => Some(parent),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
+                    ) =>
+                {
+                    fs::write(dir.join("escape-result"), b"denied").unwrap();
+                    std::process::exit(7);
+                }
+                Err(error) => panic!("unexpected parent access error: {error}"),
             }
-            Err(error) => panic!("unexpected parent access error: {error}"),
         };
-        let result = cgroup::control(&parent, "cgroup.procs", OFlags::WRONLY)
-            .and_then(|mut file| file.write_all(format!("{}\n", std::process::id()).as_bytes()));
+        let pid = format!("{}\n", std::process::id());
+        let result = if let Some(parent) = &parent {
+            cgroup::control(parent, "cgroup.procs", OFlags::WRONLY)
+                .and_then(|mut file| file.write_all(pid.as_bytes()))
+        } else {
+            io::stderr().write_all(pid.as_bytes())
+        };
         match result {
             Ok(()) => {
-                assert!(cgroup::contains(&parent, std::process::id()).unwrap());
+                if let Some(parent) = &parent {
+                    assert!(cgroup::contains(parent, std::process::id()).unwrap());
+                } else {
+                    assert!(
+                        !fs::read_to_string("/proc/self/cgroup")
+                            .unwrap()
+                            .lines()
+                            .any(|line| line == "0::/")
+                    );
+                }
                 fs::write(dir.join("escape-result"), b"escaped").unwrap();
                 Command::new(std::env::current_exe().unwrap())
                     .args([
@@ -559,14 +578,27 @@ fn escaped_writer() {
     fs::write(dir.join("escaped-done"), b"done").unwrap();
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MigrationProbe {
+    None,
+    Direct,
+    Namespace,
+    InheritedFd,
+}
+
 fn internal_guardian_case(
     parent_loss: bool,
     loss_after_empty: bool,
     guardian_loss: bool,
-    escape_probe: bool,
-    namespace_probe: bool,
+    probe: MigrationProbe,
 ) {
     use crate::supervision::linux_guardian;
+    let escape_probe = probe != MigrationProbe::None;
+    let namespace_probe = matches!(
+        probe,
+        MigrationProbe::Namespace | MigrationProbe::InheritedFd
+    );
+    let inherited_probe = probe == MigrationProbe::InheritedFd;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
     let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
     let domain = cgroup::Domain::open(&delegated).unwrap();
@@ -638,6 +670,10 @@ fn internal_guardian_case(
                 "ASWP_JOURNAL_NAMESPACE_PROBE".into(),
                 namespace_probe.then(|| "1".into()),
             ),
+            (
+                "ASWP_JOURNAL_INHERITED_FD_PROBE".into(),
+                inherited_probe.then(|| "1".into()),
+            ),
         ],
     )
     .unwrap();
@@ -645,7 +681,11 @@ fn internal_guardian_case(
     input.write_all(b"GO\n").unwrap();
     input.seek(SeekFrom::Start(0)).unwrap();
     let output = File::create(temp.path().join("target_fixture.stdout")).unwrap();
-    let diagnostic = File::create(temp.path().join("target_fixture.stderr")).unwrap();
+    let diagnostic = if inherited_probe {
+        cgroup::control(scope.parent(), "cgroup.procs", OFlags::WRONLY).unwrap()
+    } else {
+        File::create(temp.path().join("target_fixture.stderr")).unwrap()
+    };
     let pid = linux_guardian::prepare(
         &channel,
         [
@@ -721,7 +761,9 @@ fn internal_guardian_case(
                 );
                 fs::write(temp.path().join("escaped-stop"), b"stop").unwrap();
                 until(|| temp.path().join("escaped-done").exists());
-                let title = if namespace_probe {
+                let title = if inherited_probe {
+                    "Linux inherited cgroup capability"
+                } else if namespace_probe {
                     "Linux cgroup namespace migration"
                 } else {
                     "Linux cgroup migration"
@@ -729,7 +771,9 @@ fn internal_guardian_case(
                 println!("::notice title={title}::escaped writer survived retirement");
             }
             "denied" => {
-                let title = if namespace_probe {
+                let title = if inherited_probe {
+                    "Linux inherited cgroup capability"
+                } else if namespace_probe {
                     "Linux cgroup namespace migration"
                 } else {
                     "Linux cgroup migration"
@@ -836,7 +880,7 @@ fn internal_guardian_cleans_up_on_incomplete_startup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_reports_exit_after_cleanup() {
-    internal_guardian_case(false, false, false, false, false);
+    internal_guardian_case(false, false, false, MigrationProbe::None);
     println!(
         "::notice title=Linux internal guardian exit::actual CLI guardian observed exit and retired the scope; journal remains pending"
     );
@@ -845,7 +889,7 @@ fn internal_guardian_reports_exit_after_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
-    internal_guardian_case(true, false, false, false, false);
+    internal_guardian_case(true, false, false, MigrationProbe::None);
     println!(
         "::notice title=Linux internal guardian EOF::actual CLI guardian retired target scope on channel loss; journal remains pending"
     );
@@ -854,7 +898,7 @@ fn internal_guardian_cleans_up_on_supervisor_channel_loss() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
-    internal_guardian_case(false, true, false, false, false);
+    internal_guardian_case(false, true, false, MigrationProbe::None);
     println!(
         "::notice title=Linux internal guardian pre-retirement EOF::actual CLI guardian retained lease through empty-scope cleanup after channel loss"
     );
@@ -863,7 +907,7 @@ fn internal_guardian_cleans_up_if_parent_disappears_before_retirement() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_loss_preserves_unresolved_run_through_cleanup() {
-    internal_guardian_case(false, false, true, false, false);
+    internal_guardian_case(false, false, true, MigrationProbe::None);
     println!(
         "::notice title=Linux internal guardian loss::owned guardian loss leaves the run unresolved while the supervisor retains custody through cleanup"
     );
@@ -872,11 +916,17 @@ fn internal_guardian_loss_preserves_unresolved_run_through_cleanup() {
 #[test]
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_checks_same_user_cgroup_migration() {
-    internal_guardian_case(false, false, false, true, false);
+    internal_guardian_case(false, false, false, MigrationProbe::Direct);
 }
 
 #[test]
 #[ignore = "requires delegated cgroup, unprivileged namespaces and the actual CLI guardian"]
 fn internal_guardian_checks_namespaced_cgroup_migration() {
-    internal_guardian_case(false, false, false, true, true);
+    internal_guardian_case(false, false, false, MigrationProbe::Namespace);
+}
+
+#[test]
+#[ignore = "requires delegated cgroup, unprivileged namespaces and the actual CLI guardian"]
+fn internal_guardian_checks_inherited_cgroup_capability() {
+    internal_guardian_case(false, false, false, MigrationProbe::InheritedFd);
 }

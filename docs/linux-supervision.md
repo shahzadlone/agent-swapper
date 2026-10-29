@@ -407,6 +407,16 @@ evidence of containment. The [kernel's `nsdelegate` mount option](https://docs.k
 is system-wide, and namespace setup may affect user identity, filesystem access,
 and agent behavior. The test does not yet qualify those effects, alternative
 escape paths, or this approach for production.
+The Linux 6.8 [cgroup implementation](https://github.com/torvalds/linux/blob/v6.8/kernel/cgroup/cgroup.c)
+records a cgroup namespace at control-file open and uses that recorded
+namespace and the opening credentials during migration checks. A process that
+receives a parent `cgroup.procs` file opened outside its namespace could
+therefore have a different migration authority from one that opens it after
+entering the namespace. A further fixture transfers such an already-open file
+as stderr and attempts migration through it. This deliberately models a
+dangerous inherited capability; its hosted result is pending. A namespace
+boundary cannot be qualified without accounting for inherited descriptors and
+other ways to obtain a file opened outside that boundary.
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.

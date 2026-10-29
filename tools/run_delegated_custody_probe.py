@@ -60,6 +60,7 @@ def main():
         if usable:
             env["ASWP_TEST_UNSHARE"] = unshare
             cases.insert(0, ("internal_guardian_checks_namespaced_cgroup_migration", "Linux cgroup namespace migration"))
+            cases.insert(0, ("internal_guardian_checks_inherited_cgroup_capability", "Linux inherited cgroup capability"))
         else:
             print("::notice title=Linux cgroup namespace migration::not run; unprivileged namespace setup unavailable", flush=True)
         for name, notice in cases:
