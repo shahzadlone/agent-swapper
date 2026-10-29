@@ -37,6 +37,12 @@ ignored signal dispositions; do not blindly reset them. See Linux
 semantics, close-on-exec and malformed admission. Its independent-stream case
 transfers stdin, stdout and stderr separately, verifies shared offsets and
 distinct output contents, and rejects a partial handoff before target execution.
+The descriptor and control-packet transport now lives in the core's private
+`src/supervision/linux_admission_transport.rs` module, shared with the journal
+and terminal fixtures. Control messages reject empty expectations, malformed
+packets and unexpected descriptors; a local test checks that rejecting a
+transferred lock closes the received descriptor. This does not connect the
+transport to production launches or establish a cleanup receipt.
 `linux_custody_probe` combines
 that transport with actual delegated cgroup admission and cleanup. Their CI
 results are recorded in [supervision validation](supervision-validation.md).

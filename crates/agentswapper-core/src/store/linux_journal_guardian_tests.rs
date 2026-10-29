@@ -1,8 +1,7 @@
 //! Delegated cgroup fixture with the real profile lease and durable journal.
 #![allow(clippy::unwrap_used)]
+use crate::supervision::linux_admission_transport as transport;
 use crate::supervision::linux_cgroup as cgroup;
-#[path = "../../examples/support/linux_admission_transport.rs"]
-mod transport;
 
 use super::*;
 use rustix::{

@@ -2,7 +2,7 @@
 //! Optional explicit delegation exercises cgroup admission; no production receipt/provider.
 #![forbid(unsafe_code)]
 #[cfg(target_os = "linux")]
-#[path = "support/linux_admission_transport.rs"]
+#[path = "../src/supervision/linux_admission_transport.rs"]
 mod admission_transport;
 #[cfg(target_os = "linux")]
 #[path = "../src/supervision/linux_cgroup.rs"]
@@ -24,12 +24,12 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod fixture {
     use super::{
-        admission_transport::{GO, pair, receive, send},
+        admission_transport::{GO, pair, receive, receive_control, send},
         cgroup,
     };
     use rustix::{
-        fd::{AsFd, OwnedFd},
-        net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recv, recvmsg},
+        fd::AsFd,
+        net::{RecvFlags, recv},
         process::{
             Pid, Signal, WaitOptions, getpgid, getpgrp, getpid, getppid, kill_process,
             set_child_subreaper, setsid, waitpid,
@@ -40,8 +40,7 @@ mod fixture {
     use std::{
         ffi::OsString,
         fs::{self, File},
-        io::{self, BufRead, IoSliceMut, IsTerminal, Write},
-        mem::MaybeUninit,
+        io::{self, BufRead, IsTerminal, Write},
         os::unix::{
             ffi::{OsStrExt, OsStringExt},
             process::{CommandExt, ExitStatusExt},
@@ -85,35 +84,6 @@ mod fixture {
         } else {
             Err(io::Error::other(message))
         }
-    }
-
-    fn receive_control(socket: impl AsFd, expected: &[u8]) -> io::Result<()> {
-        let mut bytes = [0_u8; 32];
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-        let received = recvmsg(
-            socket,
-            &mut [IoSliceMut::new(&mut bytes)],
-            &mut ancillary,
-            RecvFlags::CMSG_CLOEXEC,
-        )?;
-        let mut unexpected = false;
-        for message in ancillary.drain() {
-            unexpected = true;
-            if let RecvAncillaryMessage::ScmRights(rights) = message {
-                // Dropping the owned rights closes them, including on refusal.
-                drop(rights.collect::<Vec<OwnedFd>>());
-            }
-        }
-        require(
-            !unexpected
-                && !received
-                    .flags
-                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-                && received.bytes == expected.len()
-                && &bytes[..received.bytes] == expected,
-            "invalid guardian control packet",
-        )
     }
 
     fn publish(dir: &Path, name: &str, value: serde_json::Value) -> io::Result<()> {
@@ -654,31 +624,5 @@ mod fixture {
             );
         }
         result
-    }
-    #[cfg(test)]
-    mod control_tests {
-        use super::*;
-
-        #[test]
-        fn control_packets_require_exact_bytes_and_no_descriptors() -> io::Result<()> {
-            for (packet, attach, valid) in [
-                (READY, false, true),
-                (GO, false, false),
-                (READY, true, false),
-                (b"ASWP-READY-1-with-extra".as_slice(), false, false),
-                (
-                    b"ASWP-READY-1-with-extra-bytes-exceeding-control-buffer".as_slice(),
-                    false,
-                    false,
-                ),
-            ] {
-                let (sender, receiver) = pair()?;
-                let file = tempfile::tempfile()?;
-                let descriptors = if attach { vec![file.as_fd()] } else { vec![] };
-                send(&sender, packet, &descriptors)?;
-                assert_eq!(receive_control(&receiver, READY).is_ok(), valid);
-            }
-            Ok(())
-        }
     }
 }

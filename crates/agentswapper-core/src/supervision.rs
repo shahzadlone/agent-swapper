@@ -14,3 +14,10 @@ pub mod windows_job;
     reason = "the guardian launch integration is not yet enabled"
 )]
 pub(crate) mod linux_cgroup;
+
+#[cfg(target_os = "linux")]
+#[allow(
+    dead_code,
+    reason = "the guardian launch integration is not yet enabled"
+)]
+pub(crate) mod linux_admission_transport;

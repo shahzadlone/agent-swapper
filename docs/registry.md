@@ -55,6 +55,9 @@ file handle or establish Windows reparse-point behavior.
 On Windows, existing sidecars and migration backups are also opened for a
 handle-based reparse-point and hardlink check during preflight. SQLite later
 opens sidecars by path, so these checks do not prevent replacement after preflight.
+The three sidecar hardlink regressions passed on Windows in
+[CI run 40826913882](https://github.com/shahzadlone/agent-swapper/actions/runs/40826913882/job/123291942911)
+at `6e5e827`, along with the journal crash matrix and lifecycle stress step.
 The opened-file hardlink rejection test passed on macOS in
 [CI run 40825712953](https://github.com/shahzadlone/agent-swapper/actions/runs/40825712953/job/123288160167)
 at `acc5ad6`. The SQLite no-follow regression also passed in the

@@ -1,7 +1,7 @@
 //! Provider-free stdin handoff experiment. This does not establish cgroup custody.
 #![forbid(unsafe_code)]
 #[cfg(target_os = "linux")]
-#[path = "support/linux_admission_transport.rs"]
+#[path = "../src/supervision/linux_admission_transport.rs"]
 mod admission_transport;
 
 #[cfg(not(target_os = "linux"))]
