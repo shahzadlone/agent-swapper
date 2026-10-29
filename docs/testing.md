@@ -122,7 +122,7 @@ is recorded in [Linux supervision](linux-supervision.md).
 The same controller accepts `--cgroup-root /explicit/delegated/parent` to verify
 shim admission and retirement under those terminal operations. CI supplies this
 inside its existing delegated service; the controller never provisions one.
-Delegated mode adds three detached-writer cases (ten total): normal root exit,
+Delegated mode adds three detached-writer cases (twelve total): normal root exit,
 parent-only loss, and guardian-only loss. Each checks kernel emptiness before
 scope completion. In the first two cases the helper reaps the adopted writer
 only after reaping its owned root; in the guardian-loss case the parent observes

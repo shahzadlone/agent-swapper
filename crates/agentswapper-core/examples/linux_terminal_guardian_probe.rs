@@ -34,7 +34,7 @@ mod fixture {
             Pid, Signal, WaitOptions, getpgid, getpgrp, getpid, getppid, kill_process,
             set_child_subreaper, setsid, waitpid,
         },
-        termios::{tcgetpgrp, tcgetwinsize},
+        termios::{OptionalActions, tcgetattr, tcgetpgrp, tcgetwinsize, tcsetattr},
     };
     use serde_json::json;
     use std::{
@@ -147,6 +147,11 @@ mod fixture {
             tcgetpgrp(io::stdin())? == getpgrp(),
             "parent is not foreground",
         )?;
+        let original_terminal = if dir.join("with-raw-terminal").exists() {
+            Some(tcgetattr(io::stdin())?)
+        } else {
+            None
+        };
         publish(
             dir,
             "parent",
@@ -260,7 +265,16 @@ mod fixture {
             return publish(dir, "finished", json!({"guardianSignal":9}));
         }
         drop(channel);
-        require(status.success(), "guardian failed")
+        require(status.success(), "guardian failed")?;
+        if let Some(original) = original_terminal {
+            require(
+                tcgetpgrp(io::stdin())? == getpgrp(),
+                "terminal foreground changed before restoration",
+            )?;
+            tcsetattr(io::stdin(), OptionalActions::Now, &original)?;
+            publish(dir, "terminal-restored", json!({"foreground":true}))?;
+        }
+        Ok(())
     }
 
     fn guardian(
@@ -472,6 +486,12 @@ mod fixture {
         )?;
         let group = getpgrp();
         require(tcgetpgrp(io::stdin())? == group, "target is not foreground")?;
+        if dir.join("with-raw-terminal").exists() {
+            let mut attributes = tcgetattr(io::stdin())?;
+            attributes.make_raw();
+            tcsetattr(io::stdin(), OptionalActions::Now, &attributes)?;
+            publish(dir, "raw-entered", json!({"raw":true}))?;
+        }
         let ignored = ignored_signals()?;
         let resized = Arc::new(AtomicBool::new(false));
         // Observe WINCH without overriding an explicitly inherited SIG_IGN.

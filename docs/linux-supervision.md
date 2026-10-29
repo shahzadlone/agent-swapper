@@ -201,6 +201,14 @@ delegated Linux CI job at `97ca8af`; that successful fixture result does not cla
 guardian failure as a normal run completion. Simultaneous supervisor loss and
 journal reconciliation remain open gates.
 
+Two additional provider-free cases put the target in actual terminal raw mode.
+On normal exit, the fixture supervisor restores the exact saved attributes while
+it still owns the foreground; the observer checks them after the shell resumes.
+On parent SIGKILL, the observer records whether the shell restored attributes,
+without treating that observation as a crash-recovery guarantee. The fixture
+restoration is not yet integrated with native launches. Both cases need the
+delegated CI run at their own commit.
+
 ## Remaining gates
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after

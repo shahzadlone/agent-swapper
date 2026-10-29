@@ -112,6 +112,10 @@ def run_case(binary, mode, delegated=None):
         root = Path(directory)
         shell = Shell(root)
         try:
+            shell_settings = termios.tcgetattr(shell.master)
+            raw = mode in ("raw-exit", "raw-parent-kill")
+            if raw:
+                (root / "with-raw-terminal").touch()
             detached = mode in ("detached-writer", "detached-parent-kill", "detached-guardian-kill")
             if detached:
                 assert delegated is not None, "detached fixture requires an explicit scope"
@@ -127,6 +131,10 @@ def run_case(binary, mode, delegated=None):
                 command += f" 2>{shlex.quote(str(root / 'stderr.txt'))}"
             shell.send((command + "\n").encode())
             target = marker(shell, root, "target")
+            if raw:
+                assert marker(shell, root, "raw-entered") == {"raw": True}
+                flags = termios.tcgetattr(shell.master)[3]
+                assert not flags & (termios.ICANON | termios.ECHO | termios.ISIG)
             parent = marker(shell, root, "parent")
             guardian = marker(shell, root, "guardian")
             assert not lease_available(root), "guardian failed to retain transferred lease"
@@ -150,6 +158,7 @@ def run_case(binary, mode, delegated=None):
                     assert str(writer["pid"]) in (scope_path / "cgroup.procs").read_text().splitlines()
                     shell.wait_for(lambda: json.loads((root / "writer-heartbeat").read_text())["tick"] > writer["tick"] + 3)
             active_settings = termios.tcgetattr(shell.master)
+            prompt_offset = len(shell.output)
 
             if mode in ("suspend-resize", "group-kill"):
                 offset = len(shell.output)
@@ -183,7 +192,7 @@ def run_case(binary, mode, delegated=None):
                 shell.send(b"exit\n")
             elif mode == "terminal-close":
                 shell.hangup()
-            elif mode in ("parent-kill", "detached-parent-kill"):
+            elif mode in ("parent-kill", "detached-parent-kill", "raw-parent-kill"):
                 (root / "kill-parent").touch()
             elif mode == "detached-guardian-kill":
                 (root / "kill-guardian").touch()
@@ -192,7 +201,7 @@ def run_case(binary, mode, delegated=None):
                 assert "populated 0" in (scope_path / "cgroup.events").read_text().splitlines()
                 assert not (root / "writer-exited").exists()
                 (root / "retire-scope").touch()
-            elif mode in ("redirected-stderr", "detached-writer"):
+            elif mode in ("redirected-stderr", "detached-writer", "raw-exit"):
                 shell.send(b"exit\n")
             else:
                 raise AssertionError(f"unknown mode: {mode}")
@@ -217,7 +226,7 @@ def run_case(binary, mode, delegated=None):
                 assert finished["exit"] is None
             elif mode == "group-kill":
                 assert finished["signal"] == signal.SIGKILL
-            elif mode in ("parent-kill", "detached-parent-kill"):
+            elif mode in ("parent-kill", "detached-parent-kill", "raw-parent-kill"):
                 assert finished["parentEof"] is True
                 assert finished["signal"] == signal.SIGKILL
             elif mode == "terminal-close":
@@ -237,10 +246,18 @@ def run_case(binary, mode, delegated=None):
 
             if shell.master is not None:
                 foreground(shell, shell.pid)
+                if raw:
+                    shell.prompt(prompt_offset)
+                    restored = termios.tcgetattr(shell.master) == shell_settings
+                    if mode == "raw-exit":
+                        assert marker(shell, root, "terminal-restored") == {"foreground": True}
+                        assert restored, "terminal attributes were not restored on normal exit"
+                    else:
+                        print(f"raw-parent-kill: shell restored terminal={restored}; crash recovery remains unqualified", flush=True)
                 shell.send(b"printf '__ASWP_RC=%s__\\n' \"$?\"\n")
                 # After group-kill, $? belongs to the successful kill builtin;
                 # the guardian's target SIGKILL is asserted independently above.
-                expected = 130 if mode == "interrupt" else (137 if mode in ("parent-kill", "detached-parent-kill") else 0)
+                expected = 130 if mode == "interrupt" else (137 if mode in ("parent-kill", "detached-parent-kill", "raw-parent-kill") else 0)
                 shell.wait_for(lambda: f"__ASWP_RC={expected}__".encode() in shell.output)
             print(f"{mode}: pass", flush=True)
         finally:
@@ -258,13 +275,13 @@ def main():
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     delegated = args.cgroup_root.absolute() if args.cgroup_root is not None else None
-    modes = ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr"]
+    modes = ["suspend-resize", "interrupt", "ignored-signals", "group-kill", "parent-kill", "terminal-close", "redirected-stderr", "raw-exit", "raw-parent-kill"]
     if delegated is not None:
         modes += ["detached-writer", "detached-parent-kill", "detached-guardian-kill"]
     for mode in modes:
         run_case(binary, mode, delegated)
     if delegated is not None:
-        print("::notice title=Linux terminal cgroup::ten terminal cases: detached writer cleanup after root exit, parent loss, and guardian loss with retained lease", flush=True)
+        print("::notice title=Linux terminal cgroup::twelve terminal cases: normal raw-mode restoration, crash restoration observation, and detached-writer cleanup with retained lease", flush=True)
 
 
 if __name__ == "__main__":
