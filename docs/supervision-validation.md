@@ -28,6 +28,7 @@ isolation or external work. Automatic switching remains disabled.
 | `06bee8e` | [CI 40682984695](https://github.com/shahzadlone/agent-swapper/actions/runs/40682984695) | All four jobs passed; seven shell cases under delegated cgroup admission, including independent target/supervisor membership checks and scope retirement |
 | `267ec49` | [CI 40689746815](https://github.com/shahzadlone/agent-swapper/actions/runs/40689746815) | All four jobs passed; 12 hidden-entry PTY cases on POSIX, queued-input removal, post-prompt cryptographic cancellation, and shared terminal-signal handling |
 | `d1d2afb` | [CI 40691671337](https://github.com/shahzadlone/agent-swapper/actions/runs/40691671337) | All four jobs passed; nine terminal/cgroup cases, including detached-writer SIGKILL after normal root exit and parent loss |
+| `afa45a2` | [CI 40813187840](https://github.com/shahzadlone/agent-swapper/actions/runs/40813187840) | All four jobs passed; ten delegated terminal cases, including guardian loss, independent empty observation and lease exclusion before retirement |
 
 At `6d0e394`, platform annotations recorded Rust 1.98.0 and:
 

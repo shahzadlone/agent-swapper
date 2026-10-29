@@ -221,8 +221,8 @@ impl LaunchPlan {
 
     /// Requires explicit opt-in until version/platform isolation gates pass.
     /// The intent is durable before spawning; ambiguous failures leave it pending.
-    /// The caller installs a catching interrupt handler before using foreground
-    /// mode. The CLI does this without changing the child's exec disposition.
+    /// The caller must arrange foreground interrupt handling. The CLI catches
+    /// default SIGINT and preserves an existing disposition on Unix.
     pub fn execute(&self, store: &mut Store, experimental: bool) -> Result<i32> {
         if self.profile.harness == Harness::Gents {
             return Err(Error::UnverifiedGents);

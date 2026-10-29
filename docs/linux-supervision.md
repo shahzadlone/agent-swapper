@@ -186,8 +186,9 @@ before permitting retirement, then verifies removal and only permits lease
 release afterwards. The guardian's death leaves no owned target status in the
 parent; the fixture records guardian loss rather than inventing a target exit
 status or a production custody receipt. A bounded drop cleanup is a fixture
-backstop, not a guarantee after simultaneous supervisor loss. This case requires
-delegated CI at its own commit before claiming runtime evidence.
+backstop, not a guarantee after simultaneous supervisor loss. All four CI jobs
+passed at `afa45a2`, including the ten-case delegated terminal suite in
+[CI 40813187840](https://github.com/shahzadlone/agent-swapper/actions/runs/40813187840).
 
 The parent-loss case passed the delegated Linux CI job at `3f541db`, including
 the explicit kernel-empty, lock-exclusion and outside-writer observations.
@@ -202,8 +203,8 @@ journal reconciliation remain open gates.
 
 ## Remaining gates
 
-Qualify the combined terminal/cgroup mode with its transferred lease and
-guardian-loss case in delegated CI, then integrate it with the actual journal.
+Integrate the combined terminal/cgroup fixture with the actual journal, after
+the remaining transport, signal and lifetime gates pass.
 Replace fixture lifetime limits with phase-specific startup/cleanup deadlines
 before production use; normal live sessions and suspension must not expire.
 Spawn trusted helpers before changing inherited interrupt dispositions in the

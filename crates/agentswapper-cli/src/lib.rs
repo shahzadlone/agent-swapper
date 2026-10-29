@@ -788,11 +788,31 @@ fn launch_profile(
                 .map_or("none", |selection| selection.as_str()),
         )?;
     }
-    ctrlc::set_handler(|| {})
-        .map_err(|_| Error::Io(io::Error::other("could not install interrupt handler")))?;
+    install_launch_interrupt_handler()?;
     match engine {
         ExecutionEngine::Native => plan.execute(store, true),
         ExecutionEngine::Gents => plan.execute_gents(store, true),
+    }
+}
+
+fn install_launch_interrupt_handler() -> Result<()> {
+    #[cfg(unix)]
+    {
+        // A fresh process can inherit SIG_IGN across exec. Installing a new
+        // handler over it would make exec reset the child's disposition to
+        // SIG_DFL. Preserve any existing disposition; if it belongs to an
+        // embedding host, that host retains responsibility for its behavior.
+        match ctrlc::try_set_handler(|| {}) {
+            Ok(()) | Err(ctrlc::Error::MultipleHandlers) => Ok(()),
+            Err(_) => Err(Error::Io(io::Error::other(
+                "could not install interrupt handler",
+            ))),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        ctrlc::set_handler(|| {})
+            .map_err(|_| Error::Io(io::Error::other("could not install interrupt handler")))
     }
 }
 

@@ -694,6 +694,75 @@ fn foreground_sigint_reaches_child_while_supervisor_records_exit() {
     assert_eq!(value["data"][0]["exitCode"], 130);
 }
 
+#[cfg(unix)]
+#[test]
+fn inherited_ignored_sigint_survives_native_launch() {
+    use rustix::process::{Pid, Signal, kill_process_group};
+    use std::os::unix::process::CommandExt;
+    let s = Sandbox::new();
+    s.add("claude", "work");
+    let ready = s.temp.path().join("ready");
+    let stop = s.temp.path().join("stop");
+    struct StopOnDrop(PathBuf);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, "stop");
+        }
+    }
+    let _cleanup = StopOnDrop(stop.clone());
+    let mut command = Command::new("/bin/sh");
+    command
+        .env_clear()
+        .env("HOME", s.temp.path().join("home"))
+        .current_dir(s.temp.path())
+        .args(["-c", "trap '' INT; exec \"$@\"", "fixture-shell"])
+        .arg(assert_cmd::cargo::cargo_bin!("aswp"))
+        .arg("--state-dir")
+        .arg(s.state())
+        .args(["run", "work", "--experimental-native", "--executable"])
+        .arg(fixture())
+        .args(["--", "--wait"])
+        .arg(&ready)
+        .arg(&stop)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline && child.try_wait().unwrap().is_none(),
+            "fixture did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    kill_process_group(Pid::from_child(&child), Signal::INT).unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "ignored interrupt terminated supervisor or target"
+    );
+    std::fs::write(&stop, "stop").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("fixture did not exit");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    let output = s.command().args(["runs", "--json"]).output().unwrap();
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["data"][0]["exitCode"], 0);
+    assert_eq!(value["data"][0]["custody"], "exited_uncontained");
+}
+
 fn gents_profile(s: &Sandbox, address: &str, agent: &str) -> PathBuf {
     let output = s
         .command()
