@@ -431,6 +431,10 @@ through the compiled Rust probe as well as its fixture checks; that new hosted
 integration is pending. This is structural validation only: unauthenticated text
 can still be fabricated, so it issues no stop receipt and is not connected to
 normal launches or automatic switching.
+The core also validates subsequent active snapshots against the retained
+invocation ID, rejecting a recreated unit even if its other fields match.
+Local tests cover this replacement case; the hosted fixture now uses the bound
+Rust check after client loss, and that combined result is pending.
 
 Same-user cgroup migration is a release-blocking containment concern. This
 prototype requires the delegated parent `cgroup.procs` to be writable, and the

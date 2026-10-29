@@ -74,16 +74,20 @@ def parse_identity(output, unit, expected, uid, main_pid):
     return invocation
 
 
-def inspect_identity(unit, expected, uid, main_pid):
+def inspect_identity(unit, expected, uid, main_pid, expected_invocation=None):
     result = subprocess.run(['systemctl', 'show', unit + '.service', '--no-pager',
                              '--property=Id,ControlGroup,MainPID,InvocationID,Transient,User,ActiveState'],
                             stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             check=True, timeout=5)
     invocation = parse_identity(result.stdout, unit, expected, uid, main_pid)
+    if expected_invocation is not None:
+        require(invocation == expected_invocation, "manager invocation was replaced")
     validator = os.environ.get('ASWP_MANAGED_VALIDATOR')
     require(validator is not None, "Rust manager validator is not configured")
-    checked = subprocess.run([validator, unit + '.service', str(uid), str(main_pid)],
-                             input=result.stdout, text=True, stdin=None,
+    arguments = [validator, unit + '.service', str(uid), str(main_pid)]
+    if expected_invocation is not None:
+        arguments.append(expected_invocation)
+    checked = subprocess.run(arguments, input=result.stdout, text=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              check=False, timeout=5)
     require(checked.returncode == 0, "Rust core refused manager identity")
@@ -227,7 +231,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                 # stopped. The root manager still owns its populated scope.
                 require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
                         "client-loss scope state was not observed")
-                require(inspect_identity(unit, expected, os.getuid(), main_pid) == invocation,
+                require(inspect_identity(unit, expected, os.getuid(), main_pid, invocation) == invocation,
                         "manager invocation changed after client loss")
             (directory / 'allow-main-exit').write_text('exit')
             if not client_loss:

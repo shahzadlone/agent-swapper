@@ -107,6 +107,23 @@ pub fn validate_properties(
     Invocation::parse(properties, unit, user, main_pid).map(|_| ())
 }
 
+/// Validate another active snapshot against the original invocation. A unit
+/// recreated under the same name must never inherit the previous authority.
+#[doc(hidden)]
+pub fn validate_bound_properties(
+    properties: &[u8],
+    unit: &str,
+    user: u32,
+    main_pid: u32,
+    expected_invocation: &str,
+) -> io::Result<()> {
+    let current = Invocation::parse(properties, unit, user, main_pid)?;
+    if current.invocation.simple().to_string() != expected_invocation {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +179,28 @@ mod tests {
         assert!(validate_properties(&[0xff], UNIT, 1000, 42).is_err());
         assert!(validate_properties(good.as_bytes(), UNIT, 0, 42).is_err());
         assert!(validate_properties(good.as_bytes(), UNIT, 1000, 0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_invocation_cannot_reuse_the_original_binding() -> io::Result<()> {
+        let original = properties();
+        let identity = "a".repeat(32);
+        validate_bound_properties(original.as_bytes(), UNIT, 1000, 42, &identity)?;
+        let replacement = original.replace(&identity, &"b".repeat(32));
+        assert!(
+            validate_bound_properties(replacement.as_bytes(), UNIT, 1000, 42, &identity).is_err()
+        );
+        for invalid in [
+            "".to_owned(),
+            "0".repeat(32),
+            "A".repeat(32),
+            "a".repeat(33),
+        ] {
+            assert!(
+                validate_bound_properties(original.as_bytes(), UNIT, 1000, 42, &invalid).is_err()
+            );
+        }
         Ok(())
     }
 
