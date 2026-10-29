@@ -426,11 +426,15 @@ therefore have a different migration authority from one that opens it after
 entering the namespace. A further fixture transfers such an already-open file
 as stderr to model a dangerous inherited capability. The shim now refuses
 standard streams backed by either cgroup filesystem before executing the target;
-the revised fixture requires refusal, and its hosted result is pending. A local
-test also checks a real cgroup control file when one is available. This check
-does not cover other inherited descriptors, capabilities received later, or
-access through another process. A namespace boundary cannot be qualified
-without accounting for those paths.
+the refusal passed in [CI run 40835383727](https://github.com/shahzadlone/agent-swapper/actions/runs/40835383727/job/123318823766)
+at `b8e4bfc`. A local test also checks a real cgroup control file when one is
+available. The shim now additionally marks nonstandard descriptors close-on-exec
+before target execution, failing if the operation cannot be completed. An
+actual-guardian fixture injects an inheritable parent cgroup control descriptor,
+checks that the guardian received it, and verifies it is absent after target
+exec; that fixture awaits hosted CI. These checks do not cover capabilities
+received later or access through another process. A namespace boundary cannot
+be qualified without accounting for those paths.
 The internal shim reports startup failures by exiting with status 125, which is
 also a possible exit status of an executed target. The guardian cannot
 distinguish those cases from the status alone, so it now treats either as an

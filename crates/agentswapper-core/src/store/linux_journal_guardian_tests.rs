@@ -17,7 +17,7 @@ use rustix::{
 use std::{
     fs,
     io::{self, BufRead, Seek, SeekFrom, Write},
-    os::unix::process::CommandExt,
+    os::{fd::AsRawFd, unix::process::CommandExt},
     process::{Child, Command, Stdio},
     thread,
 };
@@ -486,6 +486,13 @@ fn guardian_exit_target() {
     let mut grant = String::new();
     io::stdin().lock().read_line(&mut grant).unwrap();
     assert_eq!(grant, "GO\n");
+    if let Some(fd) = std::env::var_os("ASWP_JOURNAL_AMBIENT_FD") {
+        let (dir, scope) = fixture_paths();
+        let target = scope.parent().unwrap().join("cgroup.procs");
+        let observed = fs::read_link(format!("/proc/self/fd/{}", fd.to_string_lossy())).ok();
+        assert_ne!(observed.as_deref(), Some(target.as_path()));
+        fs::write(dir.join("ambient-fd-closed"), b"closed").unwrap();
+    }
     if std::env::var_os("ASWP_JOURNAL_ESCAPE_PROBE").is_some() {
         if std::env::var_os("ASWP_JOURNAL_NAMESPACE_PROBE").is_some() {
             assert!(
@@ -584,6 +591,7 @@ enum MigrationProbe {
     Direct,
     Namespace,
     InheritedFd,
+    AmbientFd,
 }
 
 fn internal_guardian_case(
@@ -593,16 +601,24 @@ fn internal_guardian_case(
     probe: MigrationProbe,
 ) {
     use crate::supervision::linux_guardian;
-    let escape_probe = probe != MigrationProbe::None;
+    let escape_probe = matches!(
+        probe,
+        MigrationProbe::Direct | MigrationProbe::Namespace | MigrationProbe::InheritedFd
+    );
     let namespace_probe = matches!(
         probe,
         MigrationProbe::Namespace | MigrationProbe::InheritedFd
     );
     let inherited_probe = probe == MigrationProbe::InheritedFd;
+    let ambient_probe = probe == MigrationProbe::AmbientFd;
     let delegated = PathBuf::from(std::env::var_os("ASWP_DELEGATED_CGROUP").unwrap());
     let executable = PathBuf::from(std::env::var_os("ASWP_TEST_CLI_SHIM").unwrap());
     let domain = cgroup::Domain::open(&delegated).unwrap();
     let mut scope = domain.create().unwrap();
+    let ambient = ambient_probe.then(|| {
+        let file = cgroup::control(scope.parent(), "cgroup.procs", OFlags::WRONLY).unwrap();
+        fuxix::io::duplicate_inheritable(&file).unwrap()
+    });
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
     let mut store = Store::open(&root).unwrap();
@@ -629,6 +645,11 @@ fn internal_guardian_case(
     )
     .unwrap();
     let mut guardian = OwnedChild(guardian);
+    if let Some(fd) = &ambient {
+        let observed = format!("/proc/{}/fd/{}", guardian.0.id(), fd.as_raw_fd());
+        let expected = scope.path().parent().unwrap().join("cgroup.procs");
+        until(|| fs::read_link(&observed).ok().as_deref() == Some(expected.as_path()));
+    }
     let target = if parent_loss || guardian_loss {
         TARGET
     } else {
@@ -675,6 +696,10 @@ fn internal_guardian_case(
             (
                 "ASWP_JOURNAL_INHERITED_FD_PROBE".into(),
                 inherited_probe.then(|| "1".into()),
+            ),
+            (
+                "ASWP_JOURNAL_AMBIENT_FD".into(),
+                ambient.as_ref().map(|fd| fd.as_raw_fd().to_string().into()),
             ),
         ],
     )
@@ -771,6 +796,12 @@ fn internal_guardian_case(
     assert_eq!(status.code(), Some(if loss_after_empty { 125 } else { 0 }));
     assert!(!scope.path().exists());
     assert!(cgroup::events_missing(scope.directory()).unwrap());
+    if ambient_probe {
+        assert!(temp.path().join("ambient-fd-closed").exists());
+        println!(
+            "::notice title=Linux ambient descriptor cleanup::the guardian inherited a cgroup capability that was closed before target exec"
+        );
+    }
     if escape_probe {
         let result = fs::read_to_string(temp.path().join("escape-result")).unwrap();
         match result.as_str() {
@@ -948,4 +979,10 @@ fn internal_guardian_checks_namespaced_cgroup_migration() {
 #[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
 fn internal_guardian_checks_inherited_cgroup_capability() {
     internal_guardian_case(false, false, false, MigrationProbe::InheritedFd);
+}
+
+#[test]
+#[ignore = "requires the disposable delegated CI cgroup and actual CLI guardian"]
+fn internal_guardian_closes_ambient_cgroup_capability() {
+    internal_guardian_case(false, false, false, MigrationProbe::AmbientFd);
 }

@@ -83,6 +83,7 @@ dependencies = [
  "age",
  "directories",
  "dunce",
+ "fuxix",
  "process-wrap",
  "proptest",
  "rusqlite",
@@ -979,6 +980,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuxix"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1b7e8fcb245e79824468e1ba763518f42051b620b432002a4d4d8df8b6c1e4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

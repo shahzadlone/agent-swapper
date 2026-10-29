@@ -61,6 +61,11 @@ pub(crate) fn exec_until(channel: impl AsFd, scope: &Path, deadline: Instant) ->
             "guardian startup deadline expired",
         ));
     }
+    // This role is entered as a fresh, single-threaded CLI process. Mark
+    // inherited descriptors for closure at exec, including descriptors opened
+    // before the guardian existed. Keep them usable during exec preparation;
+    // Command will duplicate the validated streams onto descriptors 0..2.
+    fuxix::io::cloexec_from(3, fuxix::io::Listed::now()).map_err(io::Error::from)?;
     let error = launch
         .command()
         .stdin(Stdio::from(input))
@@ -73,7 +78,13 @@ pub(crate) fn exec_until(channel: impl AsFd, scope: &Path, deadline: Instant) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{ffi::OsString, fs, os::fd::AsFd, process::Command, time::Duration};
+    use std::{
+        ffi::OsString,
+        fs,
+        os::fd::{AsFd, AsRawFd},
+        process::Command,
+        time::Duration,
+    };
     use wait_timeout::ChildExt;
 
     #[test]
@@ -93,6 +104,59 @@ mod tests {
             .split_once("::")
             .map_or(module_path!(), |(_, path)| path);
         format!("{path}::refusing_shim_fixture")
+    }
+
+    fn cloexec_role() -> String {
+        let path = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, path)| path);
+        format!("{path}::cloexec_process_fixture")
+    }
+
+    #[test]
+    #[ignore = "subprocess role for inherited descriptor exec test"]
+    fn cloexec_process_fixture() -> io::Result<()> {
+        let path =
+            std::env::var_os("ASWP_FD_CANARY").ok_or_else(|| io::Error::other("missing canary"))?;
+        if let Some(fd) = std::env::var_os("ASWP_FD_NUMBER") {
+            let fd = fd.to_string_lossy();
+            let inherited = fs::read_link(format!("/proc/self/fd/{fd}")).ok();
+            assert_ne!(inherited.as_deref(), Some(Path::new(&path)));
+            fs::write(Path::new(&path).with_extension("done"), b"done")?;
+            return Ok(());
+        }
+        let file = File::open(&path)?;
+        let inherited = fuxix::io::duplicate_inheritable(&file).map_err(io::Error::from)?;
+        assert!(!rustix::io::fcntl_getfd(&inherited)?.contains(rustix::io::FdFlags::CLOEXEC));
+        let number = inherited.as_raw_fd().to_string();
+        fuxix::io::cloexec_from(3, fuxix::io::Listed::now()).map_err(io::Error::from)?;
+        assert!(rustix::io::fcntl_getfd(&inherited)?.contains(rustix::io::FdFlags::CLOEXEC));
+        let executable = std::env::current_exe()?;
+        Err(Command::new(executable)
+            .args(["--exact", &cloexec_role(), "--ignored"])
+            .env("ASWP_FD_NUMBER", number)
+            .exec())
+    }
+
+    #[test]
+    fn inherited_descriptors_do_not_cross_exec() -> io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let canary = temp.path().join("canary");
+        fs::write(&canary, b"data")?;
+        let mut child = Command::new(std::env::current_exe()?)
+            .args(["--exact", &cloexec_role(), "--ignored"])
+            .env("ASWP_FD_CANARY", &canary)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let status = child.wait_timeout(Duration::from_secs(10))?;
+        if status.is_none() {
+            child.kill()?;
+            child.wait()?;
+        }
+        assert!(status.is_some_and(|status| status.success()));
+        assert!(canary.with_extension("done").exists());
+        Ok(())
     }
 
     #[test]

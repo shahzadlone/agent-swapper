@@ -52,6 +52,20 @@ filesystem and terminal operations happen in the fixture's ordinary loop.
 The fixture observes SIGWINCH and leaves inherited ignored signals intact.
 No new package, runtime core dependency or advisory exception was introduced.
 
+## Linux descriptor hygiene
+
+The experimental Linux shim pins `fuxix = 0.8.0` (MIT) for its safe
+`cloexec_from` wrapper. The package has no build script and depends only on
+`libc`, which was already in the lockfile. Review of the pinned source covered
+the Linux `close_range(CLOSE_RANGE_CLOEXEC)` call, its `/proc/self/fd` fallback,
+descriptor flag preservation and error conversion. The fallback enumerates
+descriptors and therefore relies on a trustworthy procfs and a single-threaded
+shim; neither this review nor the local exec test qualifies a hostile mount
+namespace or concurrent descriptor creation. Errors refuse target exec.
+The shim role is entered before normal CLI initialization; the core and
+actual-guardian tests do not yet prove all production embedding or race cases.
+The normal locked dependency audit and hosted integration remain required.
+
 ## Terminal signal restoration
 
 The CLI directly pins the already-transitive `signal-hook = 0.3.18` on Unix.

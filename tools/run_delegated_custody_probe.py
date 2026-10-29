@@ -52,6 +52,7 @@ def main():
         shim = Path(__file__).resolve().parents[1] / "target" / "debug" / "aswp"
         env["ASWP_TEST_CLI_SHIM"] = str(shim.resolve(strict=True))
         cases = [
+            ("internal_guardian_closes_ambient_cgroup_capability", "Linux ambient descriptor cleanup"),
             ("internal_guardian_checks_inherited_cgroup_capability", "Linux inherited cgroup capability"),
             ("internal_guardian_checks_same_user_cgroup_migration", "Linux cgroup migration"),
             ("internal_guardian_loss_preserves_unresolved_run_through_cleanup", "Linux internal guardian loss"),

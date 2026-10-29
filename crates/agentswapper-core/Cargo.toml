@@ -27,6 +27,7 @@ rustix = { version = "1", features = ["process", "fs", "termios"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", features = ["event", "net"] }
+fuxix = "=0.8.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1"
