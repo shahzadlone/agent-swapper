@@ -156,6 +156,8 @@ impl Dashboard {
 // Declared before the terminal so it restores raw mode even if terminal setup fails.
 struct Restore {
     active: bool,
+    #[cfg(windows)]
+    console: Option<agentswapper_core::windows_console::ConsoleSnapshot>,
 }
 impl Restore {
     fn restore(&mut self) -> io::Result<()> {
@@ -166,8 +168,16 @@ impl Restore {
                 crossterm::terminal::LeaveAlternateScreen,
                 crossterm::cursor::Show
             );
+            #[cfg(windows)]
+            let console = self
+                .console
+                .take()
+                .map(agentswapper_core::windows_console::ConsoleSnapshot::restore)
+                .transpose();
             raw?;
             screen?;
+            #[cfg(windows)]
+            console?;
             self.active = false;
         }
         Ok(())
@@ -236,8 +246,16 @@ fn run_terminal(
     app: &mut Dashboard,
     interrupted: impl Fn() -> bool,
 ) -> Result<TerminalOutcome> {
-    let mut restore = Restore { active: true };
+    let mut restore = Restore {
+        active: true,
+        #[cfg(windows)]
+        console: agentswapper_core::windows_console::ConsoleSnapshot::capture()?,
+    };
     crate::terminal_input::enable_raw_mode()?;
+    #[cfg(windows)]
+    if let Some(console) = &restore.console {
+        console.enable_ansi_output()?;
+    }
     crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
     let mut terminal = terminal::DashboardTerminal::new()?;
     loop {
@@ -283,6 +301,7 @@ fn run_terminal(
                 launch::Outcome::Launch => {
                     if let Some(review) = app.launch.take() {
                         // Fail rather than hand a raw or alternate-screen terminal to an agent.
+                        terminal.show_cursor()?;
                         restore.restore()?;
                         return Ok(TerminalOutcome::Launch(Box::new(review.into_plan())));
                     }
@@ -392,6 +411,7 @@ fn run_terminal(
             _ => {}
         }
     }
+    terminal.show_cursor()?;
     restore.restore()?;
     Ok(TerminalOutcome::Quit)
 }

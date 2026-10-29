@@ -81,6 +81,7 @@ name = "agentswapper-core"
 version = "0.1.0-dev"
 dependencies = [
  "age",
+ "ctrlc",
  "directories",
  "dunce",
  "fuxix",

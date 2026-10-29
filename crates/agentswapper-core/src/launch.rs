@@ -14,8 +14,9 @@ mod executable;
 #[cfg(unix)]
 mod terminal;
 #[cfg(windows)]
-#[path = "launch/windows_terminal.rs"]
-mod terminal;
+mod terminal {
+    pub(super) type ForegroundTerminal = crate::windows_console::ConsoleSnapshot;
+}
 
 /// The executable and environment used by execute(). Arguments are deliberately
 /// excluded from Debug and serialization: user-supplied arguments may be secrets.

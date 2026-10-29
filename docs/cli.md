@@ -141,9 +141,11 @@ through owned handles, including `CONIN$`/`CONOUT$` when standard streams are
 redirected. It restores and reads back those modes after the observed child exit;
 the optional Job path first stops its remaining local descendants. A failed
 restoration is reported after journaling the actual exit. This does not restore
-an entire screen buffer, a supervisor crash or external work. The new disposable
-console fixture is awaiting hosted qualification; interactive ConPTY transitions
-remain unverified. Other applications sharing the same Windows console are not
+an entire screen buffer, a supervisor crash or external work. The six disposable
+console cases passed at `08facc1` in
+[Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40959372054/job/123747795279).
+The new interactive ConPTY transition fixture is awaiting its first hosted result.
+Other applications sharing the same Windows console are not
 isolated from mode changes.
 
 A profile lease, stored outside the native home, prevents simultaneous launches by cooperating AgentSwapper
@@ -269,6 +271,12 @@ across filtering and renaming; Ctrl-P toggles privacy even during search or help
 Errors are escaped, with identifiers hidden in privacy mode. Terminals smaller
 than 40 x 14 receive a compact fallback. Plain commands remain available without
 a terminal.
+
+On Windows, each dashboard phase preserves its original console input/output
+modes, enables VT output for rendering, then restores the original modes before
+an agent takes over or the dashboard exits. This explicitly handles the terminal
+library's cached ANSI support across repeated launches. The dashboard requires
+a console that accepts VT output; native shell commands remain independently usable.
 
 On POSIX, external SIGINT, SIGTERM and SIGHUP requests leave raw mode and the
 alternate screen before terminating with the original signal. This applies to

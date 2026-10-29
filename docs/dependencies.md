@@ -17,6 +17,24 @@ path share restoration, with the latter restoring after local Job quiescence.
 This adds Windows binding features for constants used by production checks and
 the disposable-console example, with no new package or audit exception. Actual
 console/ConPTY evidence and provider qualification are separate gates.
+The CLI now consumes the same console snapshot for a dashboard phase: it enables
+VT output explicitly on every entry and restores the original modes after
+leaving the alternate screen. Source review found that crossterm caches its
+first ANSI-support result; mode restoration therefore requires re-enabling VT
+on later entries. Its Windows raw-mode helper also toggles three bits rather
+than saving every original input flag, so the owned snapshot preserves the full
+input mode independently. Final cursor output happens before that restoration.
+
+The Windows ConPTY test uses Python's standard ctypes interface to the
+[documented pseudoconsole startup and teardown APIs](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session).
+Review covers structure layouts, non-inherited communication handles, attribute
+list initialization/destruction, owned process-handle cleanup, bounded output,
+and separate input/output workers that keep draining during teardown. This is
+test code, not a runtime FFI addition to the Rust application. Its Rust coordinator
+uses the already-locked `ctrlc` as a Windows development dependency so Ctrl-C can
+reach a fixture agent without killing the observer. It adds no package or audit
+exception. Fake executables receive a minimal fixture environment and isolated
+homes; no real provider, login or network listener is used.
 
 The workspace and all dependency versions are locked. Own code is Apache-2.0;
 dependencies retain their original licenses. `cargo deny --locked check` checks

@@ -8,6 +8,10 @@ pub mod launch;
 mod private_fs;
 pub mod store;
 pub mod supervision;
+#[cfg(windows)]
+#[doc(hidden)]
+#[path = "launch/windows_terminal.rs"]
+pub mod windows_console;
 
 pub use domain::{Alias, ExecutionEngine, GentsAgentId, GentsBinding, Harness, Profile, ProfileId};
 pub use store::Store;

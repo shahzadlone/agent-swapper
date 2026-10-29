@@ -52,9 +52,21 @@ later terminal changes still need their own hosted evidence.
 Windows launch now includes owned console-mode capture/restoration. A new
 provider-free fixture creates a disposable console and deliberately changes
 input/output modes during native direct and Job launches with console, stderr-only
-and fully redirected streams. Its first hosted result is pending. This fixture
+and fully redirected streams. All six cases passed at `08facc1` in
+[Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40959372054/job/123747795279).
+This fixture
 does not qualify interactive ConPTY navigation, active screen buffers, crash
 restoration or real agent compatibility.
+
+A separate actual-ConPTY fixture now exercises the complete dashboard using
+provider-free Claude, Codex, Kimi and gents stand-ins. It checks reviewed launch,
+login, Ctrl-C, gents resume, resizing, masked/tiny-terminal launch refusal and
+exact original console modes after exit. Each phase explicitly re-enables VT
+output before drawing and restores the original snapshot before yielding the
+terminal; cached ANSI support must not leave VT disabled on the next phase.
+Its first native hosted result is pending. The test coordinator has its own
+process-lifetime Job and fake agents expire; this does not add default Job
+containment to production launches.
 
 ## Entry and visual direction
 
