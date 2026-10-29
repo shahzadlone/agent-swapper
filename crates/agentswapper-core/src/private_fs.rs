@@ -140,7 +140,20 @@ pub(crate) fn validate_file(path: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     };
-    validate_file_metadata(&meta)
+    validate_file_metadata(&meta)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        validate_file_metadata(&file.metadata()?)?;
+        if winapi_util::file::information(&file)?.number_of_links() != 1 {
+            return Err(Error::UnsafePath);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_file_metadata(meta: &fs::Metadata) -> Result<()> {
@@ -158,6 +171,16 @@ fn validate_metadata(meta: &fs::Metadata, allow_detached: bool) -> Result<()> {
     let _ = allow_detached;
     if !meta.is_file() || meta.file_type().is_symlink() {
         return Err(Error::UnsafePath);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(Error::UnsafePath);
+        }
     }
     #[cfg(unix)]
     {
@@ -189,7 +212,9 @@ mod tests {
         drop(file(&path).unwrap());
         fs::hard_link(&path, &alias).unwrap();
         assert!(matches!(file(&path), Err(Error::UnsafePath)));
+        assert!(matches!(validate_file(&path), Err(Error::UnsafePath)));
         fs::remove_file(alias).unwrap();
         assert!(file(&path).is_ok());
+        assert!(validate_file(&path).is_ok());
     }
 }

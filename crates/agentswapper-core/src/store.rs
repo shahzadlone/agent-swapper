@@ -843,6 +843,23 @@ mod tests {
     }
 
     #[test]
+    fn registry_refuses_hardlinked_sidecars_before_sqlite_opens() {
+        let (_temp, store) = setup();
+        let root = store.root().to_owned();
+        drop(store);
+        let marker = root.join("marker");
+        drop(private_fs::file(&marker).unwrap());
+        std::fs::write(&marker, b"unchanged").unwrap();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = root.join(format!("registry.sqlite3{suffix}"));
+            std::fs::hard_link(&marker, &sidecar).unwrap();
+            assert!(matches!(Store::open(&root), Err(Error::UnsafePath)));
+            assert_eq!(std::fs::read(&marker).unwrap(), b"unchanged");
+            std::fs::remove_file(sidecar).unwrap();
+        }
+    }
+
+    #[test]
     fn lock_and_unfinished_intent_independently_block_launch() {
         let (_temp, mut s) = setup();
         let p = s

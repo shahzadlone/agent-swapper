@@ -52,6 +52,9 @@ SQLite opens the registry and its migration reader with `SQLITE_OPEN_NOFOLLOW`;
 the direct symlink refusal is tested on Unix. This adds protection at the
 database open but does not bind SQLite's connection to the previously inspected
 file handle or establish Windows reparse-point behavior.
+On Windows, existing sidecars and migration backups are also opened for a
+handle-based reparse-point and hardlink check during preflight. SQLite later
+opens sidecars by path, so these checks do not prevent replacement after preflight.
 The opened-file hardlink rejection test passed on macOS in
 [CI run 40825712953](https://github.com/shahzadlone/agent-swapper/actions/runs/40825712953/job/123288160167)
 at `acc5ad6`; that run predates the SQLite no-follow change.
