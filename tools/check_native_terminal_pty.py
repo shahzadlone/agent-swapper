@@ -44,9 +44,9 @@ def check(binary, mode):
             suffix = f"{shlex.quote(sys.executable)} {shlex.quote(str(helper))} || exit 91\nexit 42\n"
         else:
             suffix = "exec sleep 10\n" if mode == "interrupt" else "exit 42\n"
-        redirected = mode in ("stdin-redirected", "stderr-only")
+        redirected = mode in ("stdin-redirected", "stderr-only", "all-redirected")
         terminal_input = " </dev/tty" if redirected else ""
-        ready_output = " >&2" if mode == "stderr-only" else ""
+        ready_output = " >&2" if mode == "stderr-only" else (" >/dev/tty" if mode == "all-redirected" else "")
         agent.write_text(f"#!/bin/sh\nstty raw -echo{terminal_input} || exit 90\nprintf fixture-ready{ready_output}\n" + suffix)
         agent.chmod(0o700)
         master, slave = pty.openpty()
@@ -68,7 +68,9 @@ def check(binary, mode):
                 # Keep the session leader alive while observing terminal state.
                 # Some systems revoke a PTY when its session leader exits, even
                 # if the controller still holds the slave open.
-                redirections = " </dev/null >/dev/null" if mode == "stderr-only" else (" </dev/null" if redirected else "")
+                redirections = (" </dev/null >/dev/null 2>/dev/null" if mode == "all-redirected"
+                                else " </dev/null >/dev/null" if mode == "stderr-only"
+                                else " </dev/null" if redirected else "")
                 shell = 'trap ":" INT; printf "__ASWP_SHELL_READY__\\n"; while [ ! -f "$ASWP_FIXTURE_START" ]; do sleep 0.05; done; "$@"' + redirections + '; status=$?; printf "\\n__ASWP_EXIT=%s__\\n" "$status"; while [ ! -f "$ASWP_FIXTURE_STOP" ]; do sleep 0.05; done; exit "$status"'
                 args = ["/bin/sh", "-c", shell, "fixture-shell"] + command + ["run", "fixture", "--experimental-native", "--executable", str(agent)]
                 process = subprocess.Popen(args,
@@ -138,7 +140,7 @@ def main():
     if os.name != "posix" or len(sys.argv) != 2:
         raise SystemExit("Usage on POSIX: check_native_terminal_pty.py PATH_TO_ASWP")
     binary = Path(sys.argv[1]).resolve(strict=True)
-    for mode in ("exit", "interrupt", "detached", "foreground-change", "stdin-redirected", "stderr-only"):
+    for mode in ("exit", "interrupt", "detached", "foreground-change", "stdin-redirected", "stderr-only", "all-redirected"):
         print(f"::notice title=Native terminal fixture::starting {mode}", flush=True)
         try:
             check(binary, mode)

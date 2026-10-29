@@ -118,8 +118,8 @@ preflights; a bypass does not establish that the selected account is isolated.
 
 On Unix, a launch with a foreground controlling terminal attached to stdin,
 stdout or stderr saves its attributes and restores them after the child is
-observed to exit. If all three streams are redirected, no terminal is captured.
-If the foreground changes or
+observed to exit. When streams are redirected, it also tries `/dev/tty`; an
+unavailable or non-foreground controlling terminal is left alone. If the foreground changes or
 restoration fails, the command reports `terminal_restore_failed`; run history
 still records the child's actual exit. A non-controlling PTY is left to its
 owner. Supervisor crashes and uncontained descendants remain separate custody
