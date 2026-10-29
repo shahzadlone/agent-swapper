@@ -11,6 +11,8 @@ use uuid::Uuid;
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
 const SCHEMA: i64 = 6;
+#[cfg(test)]
+mod crash_tests;
 mod journal;
 mod runs;
 mod sessions;

@@ -61,6 +61,11 @@ jobs:
           key: nextest-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-v0.9.150
       - name: Tests
         run: cargo +1.98.0 nextest run --locked --workspace --profile ci
+      - name: Journal process-crash recovery matrix
+        timeout-minutes: 12
+        env:
+          ASWP_JOURNAL_CRASH_TRIALS: '204'
+        run: cargo +1.98.0 test --locked -p agentswapper-core --lib store::crash_tests::crash_lifecycle_reopens_consistently -- --ignored --exact
       - name: Dashboard terminal entry and restoration
         if: runner.os != 'Windows'
         timeout-minutes: 2
