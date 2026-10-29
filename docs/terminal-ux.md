@@ -41,9 +41,20 @@ redraw a dashboard over a possibly active agent.
 Provider-free POSIX PTY checks exercise all three native fixtures, login,
 cross-brand selection, Ctrl-C, gents new/resumed sessions and terminal restoration.
 Unit tests cover acceptance, masking, resize/scroll, unsupported actions, busy
-profiles and availability changed after review. Native macOS execution and Windows
-ConPTY transitions require their own recorded evidence. No real-provider support
-cell is promoted by these fixtures.
+profiles and availability changed after review. Windows ConPTY transitions
+still require their own recorded evidence. No real-provider support
+cell is promoted by these fixtures. The dashboard foreground flow passed hosted
+Linux and macOS PTY checks at `8438909` in
+[CI run 40956977506](https://github.com/shahzadlone/agent-swapper/actions/runs/40956977506).
+That build's three-platform candidate rebuild and preview attestation also passed;
+later terminal changes still need their own hosted evidence.
+
+Windows launch now includes owned console-mode capture/restoration. A new
+provider-free fixture creates a disposable console and deliberately changes
+input/output modes during native direct and Job launches with console, stderr-only
+and fully redirected streams. Its first hosted result is pending. This fixture
+does not qualify interactive ConPTY navigation, active screen buffers, crash
+restoration or real agent compatibility.
 
 ## Entry and visual direction
 

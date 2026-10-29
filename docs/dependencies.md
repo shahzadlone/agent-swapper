@@ -5,6 +5,19 @@ save and restore foreground terminal attributes after an observed child exit.
 This uses an already locked dependency and adds no new package. It does not
 restore a terminal after supervisor termination or establish descendant custody.
 
+Windows native launch uses the already-locked `winapi-util 0.1.11` safe console
+mode APIs and standard-library owned handle clones. Review covered its
+GetConsoleMode/SetConsoleMode wrappers; no raw handle construction or unsafe
+code is added to the application. Capture includes inherited console streams
+and attached console input/output devices; detached processes can have none.
+Restoration attempts every captured buffer and verifies each mode by readback.
+Only the known no-console absence/invalid-handle cases are ignored during device
+open; other failures refuse launch. The normal child-exit path and optional Job
+path share restoration, with the latter restoring after local Job quiescence.
+This adds Windows binding features for constants used by production checks and
+the disposable-console example, with no new package or audit exception. Actual
+console/ConPTY evidence and provider qualification are separate gates.
+
 The workspace and all dependency versions are locked. Own code is Apache-2.0;
 dependencies retain their original licenses. `cargo deny --locked check` checks
 advisories, licenses, dependency versions, and sources. Never globally disable

@@ -136,6 +136,16 @@ still records the child's actual exit. A non-controlling PTY is left to its
 owner. Supervisor crashes and uncontained descendants remain separate custody
 limitations.
 
+On Windows, the experimental launch path now captures console input/output modes
+through owned handles, including `CONIN$`/`CONOUT$` when standard streams are
+redirected. It restores and reads back those modes after the observed child exit;
+the optional Job path first stops its remaining local descendants. A failed
+restoration is reported after journaling the actual exit. This does not restore
+an entire screen buffer, a supervisor crash or external work. The new disposable
+console fixture is awaiting hosted qualification; interactive ConPTY transitions
+remain unverified. Other applications sharing the same Windows console are not
+isolated from mode changes.
+
 A profile lease, stored outside the native home, prevents simultaneous launches by cooperating AgentSwapper
 processes. A durable intent is written before spawn. An interrupted supervisor
 leaves an unfinished run and blocks reuse even after its OS lease disappears.
@@ -243,9 +253,11 @@ storage, precedence, JSON output and recovery.
 
 ## Dashboard
 
-The dashboard follows the selected Night Shift palette. Arrows or `j`/`k`
+The dashboard follows the Distinction palette. Arrows or `j`/`k`
 navigate, `/` searches, `m` masks aliases, `r` refreshes, `?` shows help, and
-`q` or Ctrl-C exits. Enter shows launch preflight; it does not start an agent.
+`q` or Ctrl-C exits. Enter reviews a fresh launch, `l` reviews native login,
+and `c` reviews the latest eligible gents session. Space accepts the experimental
+launch and Enter starts it; Ctrl-P must unmask first. Esc or Ctrl-G cancels review.
 `e` enables or disables the selected profile for future launches; it does not
 stop existing work. Actions follow stable profile IDs, so renaming or reusing an
 alias from another terminal cannot redirect an availability change.
@@ -282,6 +294,8 @@ Parser errors (invalid syntax or arguments) retain clap's stderr/help behavior.
 
 Exit status: `0` success, `2` argument parsing, `125` AgentSwapper refusal or
 internal error, `126` unsafe/non-executable program, and `127` missing program.
-Once launched, the native child's exit code is returned. POSIX signal exits
+For shell `run`/`login` commands, the native child's exit code is returned. In the
+dashboard it is recorded and displayed before returning to profile selection;
+quitting the dashboard normally returns 0. POSIX child signal exits
 are represented as `128 + signal`; this preview does not re-raise the signal.
 Child codes can overlap wrapper codes; use structured preflight for diagnostics.

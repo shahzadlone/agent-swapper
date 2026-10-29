@@ -84,6 +84,12 @@ jobs:
         if: runner.os != 'Windows'
         timeout-minutes: 3
         run: python tools/check_handover_pty.py target/debug/aswp
+      - name: Windows native console restoration
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: |
+          cargo +1.98.0 build --locked -p agentswapper-cli --bins
+          cargo +1.98.0 run --locked -p agentswapper-core --example windows_terminal_probe -- target/debug/aswp.exe
       - name: Native launch terminal restoration
         if: runner.os != 'Windows'
         timeout-minutes: 2

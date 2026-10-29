@@ -13,6 +13,9 @@ use uuid::Uuid;
 mod executable;
 #[cfg(unix)]
 mod terminal;
+#[cfg(windows)]
+#[path = "launch/windows_terminal.rs"]
+mod terminal;
 
 /// The executable and environment used by execute(). Arguments are deliberately
 /// excluded from Debug and serialization: user-supplied arguments may be secrets.
@@ -379,7 +382,7 @@ impl LaunchPlan {
         if self.containment == Some(Containment::WindowsJob) {
             return self.execute_windows_job(store, &lease);
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let terminal = terminal::ForegroundTerminal::capture()?;
         let id = store.begin_run_with_session(
             &lease,
@@ -399,18 +402,18 @@ impl LaunchPlan {
             // unreaped direct child; descendant custody is still unknown.
             let _ = child.kill();
             let stopped = child.wait().is_ok();
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if stopped && let Some(terminal) = terminal {
                 let _ = terminal.restore();
             }
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             let _ = stopped;
             return Err(error);
         }
         // No transaction is held while a native interactive CLI owns the terminal.
         // A wait error or supervisor crash leaves an unfinished intent, blocking reuse.
         let status = child.wait()?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let terminal_result = terminal
             .map(terminal::ForegroundTerminal::restore)
             .transpose();
@@ -421,7 +424,7 @@ impl LaunchPlan {
             RunCompletion::ChildExited(code)
         };
         store.finish_run(id, completion)?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         terminal_result.map_err(|_| Error::TerminalRestore)?;
         drop(lease);
         Ok(code)
@@ -443,6 +446,7 @@ impl LaunchPlan {
         if !process_root_installed() {
             return Err(Error::WindowsRootRequired);
         }
+        let terminal = terminal::ForegroundTerminal::capture()?;
         let scope = WindowsJob::create()?;
         let id = store.begin_run_with_scope(
             lease,
@@ -463,7 +467,11 @@ impl LaunchPlan {
             let mut child = spawned.map_err(|error| admission_error.unwrap_or(Error::Io(error)))?;
             let code = exit_code(child.wait()?);
             let receipt = child.stop_and_observe()?;
+            let terminal_result = terminal
+                .map(terminal::ForegroundTerminal::restore)
+                .transpose();
             store.finish_run(id.clone(), RunCompletion::LocalScopeStopped(code, receipt))?;
+            terminal_result.map_err(|_| Error::TerminalRestore)?;
             Ok(code)
         };
         execute().map_err(|source| Error::SupervisionIncomplete {
