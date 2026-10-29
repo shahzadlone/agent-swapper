@@ -395,7 +395,10 @@ and common-ancestor files are writable. A target may therefore be able to
 move itself from the leaf into its parent and leave descendants there. Leaf
 emptiness and removal would not establish that all descendants stopped.
 A new bounded delegated fixture attempts this migration and checks whether a
-writer survives leaf retirement; its hosted result is pending. A production
+writer survives leaf retirement. In the delegated Linux job at `4a70a4e`, the
+target successfully moved itself to the parent and its writer continued after
+the original leaf was retired; see [CI run 40834407811](https://github.com/shahzadlone/agent-swapper/actions/runs/40834407811/job/123315712450).
+This confirms that the current prototype cannot prove descendant custody. A production
 backend needs an independently qualified boundary preventing escape, or must
 retain unknown custody; namespace setup by itself is not sufficient if the
 global hierarchy remains accessible. The existing fixture passes do not
