@@ -100,10 +100,11 @@ def role(name, directory, expected, forced):
     wait_for(lambda: (directory / 'allow-main-exit').exists())
 
 
-def trial(root, forced, run_id, attempt):
-    directory = root / ('forced' if forced else 'graceful')
+def trial(root, forced, run_id, attempt, client_loss=False):
+    label = 'client-loss' if client_loss else ('forced' if forced else 'graceful')
+    directory = root / label
     directory.mkdir(mode=0o700)
-    unit = f"aswp-managed-{run_id}-{attempt}-{'forced' if forced else 'graceful'}"
+    unit = f"aswp-managed-{run_id}-{attempt}-{label}"
     expected = '/system.slice/' + unit + '.service'
     scope = Path('/sys/fs/cgroup' + expected)
     require(not scope.exists(), "managed scope already exists")
@@ -133,9 +134,17 @@ def trial(root, forced, run_id, attempt):
             require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
                     "managed scope was not populated before cleanup")
             before = (directory / 'outside-heartbeat').read_text()
+            if client_loss:
+                manager.kill()
+                result = manager.wait(timeout=3)
+                # Losing the owned client is not evidence that the target
+                # stopped. The root manager still owns its populated scope.
+                require(scope.exists() and 'populated 1' in (scope / 'cgroup.events').read_text().splitlines(),
+                        "client-loss scope state was not observed")
             (directory / 'allow-main-exit').write_text('exit')
-            result = manager.wait(timeout=15)
-            if not forced:
+            if not client_loss:
+                result = manager.wait(timeout=15)
+            if not forced and not client_loss:
                 require(result == 0, "graceful managed service failed")
             wait_for(lambda: not scope.exists(), seconds=5)
             heartbeat = (directory / 'worker-heartbeat').read_text()
@@ -144,8 +153,7 @@ def trial(root, forced, run_id, attempt):
                     "detached worker survived manager cleanup")
             wait_for(lambda: (directory / 'outside-heartbeat').read_text() != before)
             require(outside.poll() is None, "outside writer was terminated")
-            label = 'forced' if forced else 'graceful'
-            print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; manager exit {result}', flush=True)
+            print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; systemd-run exit {result}', flush=True)
     finally:
         (directory / 'outside-stop').write_text('stop')
         try:
@@ -153,12 +161,13 @@ def trial(root, forced, run_id, attempt):
         except subprocess.TimeoutExpired:
             outside.kill()
             outside.wait(timeout=3)
-        if manager is not None and manager.poll() is None:
+        if manager is not None and scope.exists():
             # The manager's RuntimeMaxSec bounds target lifetime even if its
             # client is lost; cleanup uses the exact disposable unit name.
             subprocess.run(['sudo', '-n', 'systemctl', 'stop', unit + '.service'],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            timeout=15, check=False)
+        if manager is not None and manager.poll() is None:
             manager.wait(timeout=15)
 
 
@@ -177,6 +186,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='aswp-managed-') as temporary:
         for forced in (False, True):
             trial(Path(temporary), forced, run_id, attempt)
+        trial(Path(temporary), False, run_id, attempt, client_loss=True)
 
 
 if __name__ == '__main__':

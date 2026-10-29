@@ -398,7 +398,11 @@ service or changes host security settings. Both trials passed at `de6ed91` in
 the manager reported exit 0 for graceful cleanup and exit 1 for the forced-stop
 timeout, with scope removal and the outside heartbeat checked in both cases.
 The extended trial now also checks a separate same-user peer outside the scope;
-that additional result is pending. The experiment does not
+that additional result is pending. A third trial kills the owned `systemd-run`
+client after readiness, checks that the populated workload remains owned by the
+manager, then permits main-process exit and requires descendant cleanup. A
+client's death is never classified as target exit; this added trial is pending.
+The experiment does not
 qualify interactive terminal behavior, manager authentication, receipt binding,
 administrator adversaries, external delegated work or production integration.
 Using a system manager in a shipped backend would need an explicitly authorized
