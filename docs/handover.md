@@ -52,8 +52,10 @@ and Windows, flush or restoration failure reports `secret_input_cleanup_failed`
 before encryption or decrypted output; restoration is still attempted if
 flushing fails.
 The new native ConPTY fixture checks a nondefault input mode, both password
-phases, secret/context echo and prequeued secret disposal; the expanded fixture's
-first hosted result is pending. Forced process termination remains unqualified. Other
+phases, secret/context echo, prequeued secret disposal and cleanup refusal.
+These twelve cases passed at `bb9a5f0` before that workflow's later registry
+stress failure in [CI run 40993431486](https://github.com/shahzadlone/agent-swapper/actions/runs/40993431486).
+Forced process termination remains unqualified. Other
 applications sharing the console are not isolated from input or mode changes.
 Input arriving after cleanup is outside the discarded queue.
 

@@ -64,10 +64,14 @@ that a name pending classic deletion produces this same error. Optional sidecar
 validation now rechecks its complete metadata/handle validation for up to 250 ms
 on that exact OS error. It succeeds only after observed absence or successful
 validation; persistent denial and unsafe links still fail. Required registry,
-lock and backup opens do not use this retry policy. A native regression uses
-classic `DeleteFile` with an owned handle to measure pending deletion, bounded
-failure and recovery after that handle closes. Native qualification and whether
-this resolves the stress failure remain pending.
+lock and backup opens do not use this retry policy. A native experiment uses
+`DeleteFileW` with an owned handle. At `68d183e`, validation returned success,
+failing the test's original assumption that access would be denied while the
+handle remained open. The corrected experiment also records name existence and
+does not claim access-denied coverage when that state is absent. Separate error-injection
+checks require persistent denial to fail and recheck an actual missing or
+hardlinked replacement after an initial denial. Whether the recheck resolves
+the original concurrency failure remains pending.
 
 Migration backups use a distinct required read-only open and a second fingerprint
 check of the published snapshot. Absence cannot create a new empty backup or be

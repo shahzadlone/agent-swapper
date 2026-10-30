@@ -126,8 +126,11 @@ peek after its observed exit: no queued characters may remain after cancelling
 either password phase. Normal pack/inspect, wrong password, unsupported input,
 mismatch and pickup-file cases also check exit status, mode readback and canary
 echo. A read-only inherited input handle must cause flush refusal, restore modes
-and prevent pack publication. Its first complete hosted result is pending; wrapper cross-compilation
-and Python syntax checks alone do not qualify native behavior.
+and prevent pack publication. All twelve cases passed at `bb9a5f0` before the
+later registry concurrency failure in
+[CI run 40993431486](https://github.com/shahzadlone/agent-swapper/actions/runs/40993431486).
+That is scoped terminal evidence, not a successful overall candidate. Wrapper
+cross-compilation and Python syntax checks alone do not qualify native behavior.
 
 The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
 Windows, including Clippy and doctests. Handover changes run through the same

@@ -162,24 +162,27 @@ pub(crate) fn validate_file(path: &Path) -> Result<()> {
     #[cfg(not(windows))]
     return validate_optional_file_once(path);
     #[cfg(windows)]
-    {
-        // Classic Windows deletion keeps a name pending until the last owned
-        // handle closes. CreateFile then reports ACCESS_DENIED, even for an
-        // otherwise accessible SQLite sidecar. Recheck the entire validation
-        // briefly; permission denial itself never counts as safe absence.
-        let started = std::time::Instant::now();
-        loop {
-            let result = validate_optional_file_once(path);
-            match &result {
-                Err(Error::Io(error))
-                    if error.raw_os_error()
-                        == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
-                        && started.elapsed() < std::time::Duration::from_millis(250) =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                _ => return result,
+    recheck_optional_windows_file(|| validate_optional_file_once(path))
+}
+
+#[cfg(windows)]
+fn recheck_optional_windows_file(mut validate: impl FnMut() -> Result<()>) -> Result<()> {
+    // Windows can keep a deleted name pending until the last owned handle
+    // closes. CreateFile can then report ACCESS_DENIED, even for an
+    // otherwise accessible SQLite sidecar. Recheck the entire validation
+    // briefly; permission denial itself never counts as safe absence.
+    let started = std::time::Instant::now();
+    loop {
+        let result = validate();
+        match &result {
+            Err(Error::Io(error))
+                if error.raw_os_error()
+                    == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+                    && started.elapsed() < std::time::Duration::from_millis(250) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
+            _ => return result,
         }
     }
 }
@@ -319,10 +322,23 @@ mod tests {
         for release in [false, true] {
             fs::write(&path, b"fictional sidecar").unwrap();
             let held = OpenOptions::new().read(true).open(&path).unwrap();
-            // Use classic DeleteFile, not std's POSIX-style unlink. Holding a
-            // share-delete handle keeps the Windows name pending deletion.
+            // Measure DeleteFileW behavior with an owned share-delete handle.
             winsafe::DeleteFile(path.to_str().unwrap()).unwrap();
-            let error = validate_optional_file_once(&path).unwrap_err();
+            let error = match validate_optional_file_once(&path) {
+                Ok(()) => {
+                    // Record the observation instead of assuming that every
+                    // Windows/filesystem combination exposes ACCESS_DENIED.
+                    let present = path.try_exists().unwrap();
+                    drop(held);
+                    validate_file(&path).unwrap();
+                    assert!(!path.exists());
+                    eprintln!(
+                        "\n::notice title=Windows sidecar deletion::validation succeeded after DeleteFileW while original handle remained open; name present={present}; no access-denied condition observed"
+                    );
+                    continue;
+                }
+                Err(error) => error,
+            };
             assert!(matches!(error, Error::Io(ref error) if error.raw_os_error() == Some(5)));
             if release {
                 let closer = std::thread::spawn(move || {
@@ -350,9 +366,43 @@ mod tests {
         fs::write(&source, b"fictional source").unwrap();
         fs::hard_link(&source, &path).unwrap();
         assert!(matches!(validate_file(&path), Err(Error::UnsafePath)));
-        eprintln!(
-            "\n::notice title=Windows pending-delete sidecar::observed access denied, accepted only after deletion, retained persistent denial and hardlink refusal"
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn optional_sidecar_recheck_never_accepts_denial_or_skips_replacement_checks() {
+        let denied = || Err(Error::Io(std::io::Error::from_raw_os_error(5)));
+        let start = std::time::Instant::now();
+        assert!(
+            matches!(recheck_optional_windows_file(denied), Err(Error::Io(error)) if error.raw_os_error() == Some(5))
         );
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("registry.sqlite3-shm");
+        let source = directory.path().join("source");
+        fs::write(&source, b"fictional source").unwrap();
+        for replacement in [false, true] {
+            if replacement {
+                fs::hard_link(&source, &path).unwrap();
+            }
+            let mut attempts = 0;
+            let result = recheck_optional_windows_file(|| {
+                attempts += 1;
+                if attempts == 1 {
+                    denied()
+                } else {
+                    validate_optional_file_once(&path)
+                }
+            });
+            assert!(attempts > 1, "the replacement must actually be checked");
+            if replacement {
+                assert!(matches!(result, Err(Error::UnsafePath)));
+            } else {
+                result.unwrap();
+                assert!(!path.exists());
+            }
+        }
     }
 
     #[cfg(windows)]
