@@ -2,7 +2,7 @@
 
 use super::*;
 use std::{
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::windows::fs::OpenOptionsExt,
 };
 
@@ -314,6 +314,225 @@ fn creation_refuses_a_reparse_parent_and_never_adopts_a_link_target() {
 }
 
 #[test]
+fn reopening_preserves_contents_enforces_access_and_never_creates_missing_children() {
+    use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let parent_path = root.path().join("private");
+    let parent = policy
+        .create_new(&parent_path, ObjectKind::Directory)
+        .unwrap();
+    let name = OsStr::new("雪-🦀.txt");
+    let mut created = policy
+        .create_new_at(&parent, name, ObjectKind::File)
+        .unwrap();
+    created.write_all(b"original").unwrap();
+    drop(created);
+    drop(
+        policy
+            .create_new_at(&parent, OsStr::new("nested"), ObjectKind::Directory)
+            .unwrap(),
+    );
+
+    let directory = policy
+        .open_existing_directory_at(&parent, OsStr::new("nested"))
+        .unwrap();
+    let mut read_only = policy
+        .open_existing_file_at(&parent, name, FileAccess::ReadOnly)
+        .unwrap();
+    let mut bytes = Vec::new();
+    read_only.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
+    assert_eq!(
+        read_only.write(b"forbidden").unwrap_err().raw_os_error(),
+        Some(5)
+    );
+    assert_eq!(read_only.set_len(0).unwrap_err().raw_os_error(), Some(5));
+    let mut writable = policy
+        .open_existing_file_at(&parent, name, FileAccess::ReadWrite)
+        .unwrap();
+    assert_eq!(writable.seek(SeekFrom::End(0)).unwrap(), 8);
+    writable.write_all(b" preserved").unwrap();
+    writable.sync_all().unwrap();
+    assert_eq!(
+        std::fs::read(parent_path.join(name)).unwrap(),
+        b"original preserved"
+    );
+    for handle in [&directory, &read_only, &writable] {
+        let mut flags = 0;
+        assert_ne!(
+            // SAFETY: each File owns a live handle; flags is an aligned writable output.
+            unsafe { GetHandleInformation(handle.as_raw_handle(), &mut flags) },
+            0
+        );
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    }
+    assert!(std::fs::rename(parent_path.join(name), parent_path.join("moved.txt")).is_err());
+    assert!(std::fs::rename(parent_path.join("nested"), parent_path.join("moved-dir")).is_err());
+    for access in [FileAccess::ReadOnly, FileAccess::ReadWrite] {
+        assert!(matches!(
+            policy.open_existing_file_at(&parent, OsStr::new("missing"), access),
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(
+            policy
+                .open_existing_file_at(&parent, OsStr::new("nested"), access)
+                .is_err()
+        );
+    }
+    assert!(matches!(
+        policy.open_existing_directory_at(&parent, OsStr::new("missing")),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound
+    ));
+    assert!(policy.open_existing_directory_at(&parent, name).is_err());
+    assert!(!parent_path.join("missing").exists());
+    drop((directory, read_only, writable));
+    // Positive controls prove the earlier rename failures depended on the handles.
+    std::fs::rename(parent_path.join(name), parent_path.join("moved.txt")).unwrap();
+    std::fs::rename(parent_path.join("nested"), parent_path.join("moved-dir")).unwrap();
+}
+
+#[test]
+fn reopening_uses_the_owned_parent_after_its_old_name_is_replaced() {
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let path = root.path().join("parent");
+    let moved = root.path().join("moved");
+    let parent = policy.create_new(&path, ObjectKind::Directory).unwrap();
+    let child = policy
+        .create_new_at(&parent, OsStr::new("nested"), ObjectKind::Directory)
+        .unwrap();
+    let mut file = policy
+        .create_new_at(&child, OsStr::new("file"), ObjectKind::File)
+        .unwrap();
+    file.write_all(b"original object").unwrap();
+    drop((file, child, parent));
+    // std's delete sharing deliberately permits replacement of the parent's name.
+    let parent = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&path)
+        .unwrap();
+    std::fs::rename(&path, &moved).unwrap();
+    std::fs::create_dir_all(path.join("nested")).unwrap();
+    std::fs::write(path.join("nested/file"), b"replacement").unwrap();
+    let child = policy
+        .open_existing_directory_at(&parent, OsStr::new("nested"))
+        .unwrap();
+    let mut file = policy
+        .open_existing_file_at(&child, OsStr::new("file"), FileAccess::ReadWrite)
+        .unwrap();
+    let mut data = String::new();
+    file.read_to_string(&mut data).unwrap();
+    assert_eq!(data, "original object");
+    file.write_all(b" updated").unwrap();
+    file.sync_all().unwrap();
+    assert_eq!(
+        std::fs::read(path.join("nested/file")).unwrap(),
+        b"replacement"
+    );
+    assert_eq!(
+        std::fs::read(moved.join("nested/file")).unwrap(),
+        b"original object updated"
+    );
+}
+
+#[test]
+fn reopening_refuses_broad_acls_hardlinks_reparse_points_and_unsafe_names_without_repair() {
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let path = root.path().join("private");
+    let parent = policy.create_new(&path, ObjectKind::Directory).unwrap();
+    let broad =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
+            .unwrap();
+    let directory = create_at(&parent, OsStr::new("broad"), ObjectKind::Directory, &broad).unwrap();
+    let broad_file =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;;FA;;;WD)", policy.owner.sddl())).unwrap();
+    let mut file = create_at(
+        &parent,
+        OsStr::new("broad-file"),
+        ObjectKind::File,
+        &broad_file,
+    )
+    .unwrap();
+    file.write_all(b"must not change").unwrap();
+    let before = LocalDescriptor::from_file(&file)
+        .unwrap()
+        .bytes()
+        .unwrap()
+        .to_vec();
+    for access in [FileAccess::ReadOnly, FileAccess::ReadWrite] {
+        assert!(matches!(
+            policy.open_existing_file_at(&parent, OsStr::new("broad-file"), access),
+            Err(Error::UnexpectedDacl)
+        ));
+        assert!(matches!(
+            policy.open_existing_file_at(&directory, OsStr::new("missing"), access),
+            Err(Error::UnexpectedDacl)
+        ));
+    }
+    assert!(matches!(
+        policy.open_existing_directory_at(&parent, OsStr::new("broad")),
+        Err(Error::UnexpectedDacl)
+    ));
+    assert_eq!(
+        LocalDescriptor::from_file(&file).unwrap().bytes().unwrap(),
+        before
+    );
+    assert_eq!(
+        std::fs::read(path.join("broad-file")).unwrap(),
+        b"must not change"
+    );
+
+    drop(
+        policy
+            .create_new_at(&parent, OsStr::new("linked-file"), ObjectKind::File)
+            .unwrap(),
+    );
+    std::fs::hard_link(path.join("linked-file"), path.join("alias")).unwrap();
+    assert!(matches!(
+        policy.open_existing_file_at(&parent, OsStr::new("linked-file"), FileAccess::ReadOnly),
+        Err(Error::UnsupportedObject)
+    ));
+    std::os::windows::fs::symlink_file(path.join("broad-file"), path.join("file-link")).unwrap();
+    std::os::windows::fs::symlink_dir(path.join("broad"), path.join("dir-link")).unwrap();
+    assert!(
+        policy
+            .open_existing_file_at(&parent, OsStr::new("file-link"), FileAccess::ReadWrite)
+            .is_err()
+    );
+    assert!(
+        policy
+            .open_existing_directory_at(&parent, OsStr::new("dir-link"))
+            .is_err()
+    );
+    for name in [
+        "../escape",
+        r"..\escape",
+        "file:stream",
+        "NUL",
+        "trailing.",
+        "trailing ",
+        "nested/file",
+    ] {
+        assert!(matches!(
+            policy.open_existing_file_at(&parent, OsStr::new(name), FileAccess::ReadOnly),
+            Err(Error::UnsupportedPath)
+        ));
+        assert!(matches!(
+            policy.open_existing_directory_at(&parent, OsStr::new(name)),
+            Err(Error::UnsupportedPath)
+        ));
+    }
+    assert_eq!(
+        std::fs::read(path.join("broad-file")).unwrap(),
+        b"must not change"
+    );
+    assert!(!path.join("broad/missing").exists());
+}
+
+#[test]
 fn thread_impersonation_refuses_identity_selection_and_creation() {
     use windows_sys::Win32::Security::{ImpersonateSelf, RevertToSelf, SecurityImpersonation};
     // Keep thread-local identity changes away from the harness's worker thread.
@@ -348,6 +567,14 @@ fn thread_impersonation_refuses_identity_selection_and_creation() {
         ));
         assert!(matches!(
             policy.create_new_at(&parent, OsStr::new("refused.txt"), ObjectKind::File),
+            Err(Error::Impersonation)
+        ));
+        assert!(matches!(
+            policy.open_existing_file_at(&parent, OsStr::new("refused.txt"), FileAccess::ReadOnly),
+            Err(Error::Impersonation)
+        ));
+        assert!(matches!(
+            policy.open_existing_directory_at(&parent, OsStr::new("refused")),
             Err(Error::Impersonation)
         ));
         drop(restore);

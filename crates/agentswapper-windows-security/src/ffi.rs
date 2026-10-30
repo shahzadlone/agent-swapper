@@ -18,8 +18,8 @@ use std::{
 use windows_sys::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
-        FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT,
-        FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
+        FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
     },
 };
 use windows_sys::Win32::{
@@ -46,12 +46,12 @@ use windows_sys::Win32::{
         IO::IO_STATUS_BLOCK,
         SystemServices::FILE_PERSISTENT_ACLS,
         Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
-        WindowsProgramming::FILE_CREATED,
+        WindowsProgramming::{FILE_CREATED, FILE_OPENED},
     },
 };
 
 use crate::{
-    Error, ObjectKind, Result, SecurityPolicy,
+    Error, FileAccess, ObjectKind, Result, SecurityPolicy,
     descriptor::{MAX_DESCRIPTOR, Sid, sid_prefix},
 };
 
@@ -319,6 +319,24 @@ fn create_at(
     kind: ObjectKind,
     descriptor: &LocalDescriptor,
 ) -> Result<File> {
+    open_at(parent, name, kind, OpenMode::Create(descriptor))
+}
+
+enum OpenMode<'a> {
+    Create(&'a LocalDescriptor),
+    Existing(FileAccess),
+}
+
+fn open_at(parent: &File, name: &OsStr, kind: ObjectKind, mode: OpenMode<'_>) -> Result<File> {
+    let (descriptor, disposition, expected_result, writable) = match mode {
+        OpenMode::Create(descriptor) => (descriptor.0.as_ptr(), FILE_CREATE, FILE_CREATED, true),
+        OpenMode::Existing(access) => (
+            null_mut(),
+            FILE_OPEN,
+            FILE_OPENED,
+            access == FileAccess::ReadWrite,
+        ),
+    };
     let mut name_buffer = wide_component(name)?;
     let name = UNICODE_STRING {
         Length: (name_buffer.len() * 2) as u16,
@@ -330,12 +348,12 @@ fn create_at(
         RootDirectory: parent.as_raw_handle(),
         ObjectName: &name,
         Attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
-        SecurityDescriptor: descriptor.0.as_ptr().cast(),
+        SecurityDescriptor: descriptor.cast(),
         SecurityQualityOfService: null(),
     };
     let (access, options, file_attributes) = match kind {
         ObjectKind::File => (
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_GENERIC_READ | if writable { FILE_GENERIC_WRITE } else { 0 },
             FILE_NON_DIRECTORY_FILE,
             FILE_ATTRIBUTE_NORMAL,
         ),
@@ -347,12 +365,13 @@ fn create_at(
     };
     let mut handle = null_mut();
     let mut status_block = IO_STATUS_BLOCK::default();
-    // SAFETY: parent and OS descriptor stay alive; name is a bounded single
+    // SAFETY: parent and optional OS descriptor stay alive; name is a bounded single
     // component with an explicit UTF-16 byte length and no traversal, streams
     // or NULs. All structs and outputs are initialized/aligned. NtCreateFile
-    // completes creation before returning; synchronous non-alertable mode also
+    // completes the open/create before returning; synchronous non-alertable mode also
     // makes the returned handle usable by std::File. No OBJ_INHERIT, delete
     // sharing, overwrite disposition, async buffers or extended attributes.
+    // FILE_OPEN supplies no descriptor and cannot create or truncate anything.
     let status = unsafe {
         NtCreateFile(
             &mut handle,
@@ -362,7 +381,7 @@ fn create_at(
             null(),
             file_attributes,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
-            FILE_CREATE,
+            disposition,
             options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
             null(),
             0,
@@ -377,10 +396,10 @@ fn create_at(
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(Error::UnsupportedObject);
     }
-    // SAFETY: successful native creation transferred a real, uniquely owned
+    // SAFETY: successful native open/create transferred a real, uniquely owned
     // file/directory handle, which standard File closes using CloseHandle.
     let file = unsafe { File::from_raw_handle(handle) };
-    if status_block.Information != FILE_CREATED as usize {
+    if status_block.Information != expected_result as usize {
         return Err(Error::UnsupportedObject);
     }
     Ok(file)
@@ -471,6 +490,42 @@ impl SecurityPolicy {
         self.validate_handle(parent, ObjectKind::Directory)?;
         let descriptor = self.creation_descriptor(kind)?;
         let file = create_at(parent, name, kind, &descriptor)?;
+        self.validate_handle(&file, kind)?;
+        Ok(file)
+    }
+
+    /// Reopen one existing file relative to an owned private directory. The
+    /// actual opened file must match the exact protected creation policy before
+    /// its handle is returned. Never creates, truncates, follows a reparse point
+    /// or repairs an ACL. The handle does not share deletion or inherit into
+    /// child processes. Parent/ancestor custody remains the caller's obligation.
+    pub fn open_existing_file_at(
+        &self,
+        parent: &File,
+        name: &OsStr,
+        access: FileAccess,
+    ) -> Result<File> {
+        self.open_existing_at(parent, name, ObjectKind::File, access)
+    }
+
+    /// Reopen one existing private directory relative to its owned private
+    /// parent. Requests traversal and inspection rights, not child enumeration
+    /// or modification. Retain the returned handle while relying on its name;
+    /// this does not retain or establish custody of the parent's ancestors.
+    pub fn open_existing_directory_at(&self, parent: &File, name: &OsStr) -> Result<File> {
+        self.open_existing_at(parent, name, ObjectKind::Directory, FileAccess::ReadOnly)
+    }
+
+    fn open_existing_at(
+        &self,
+        parent: &File,
+        name: &OsStr,
+        kind: ObjectKind,
+        access: FileAccess,
+    ) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_handle(parent, ObjectKind::Directory)?;
+        let file = open_at(parent, name, kind, OpenMode::Existing(access))?;
         self.validate_handle(&file, kind)?;
         Ok(file)
     }

@@ -55,7 +55,7 @@ The candidate implements:
 - Process-user SID lookup without account-name resolution. Token information
   uses bounded, initialized, word-aligned storage; native pointers are checked
   against that allocation before the safe SID parser copies bytes. Thread
-  impersonation is refused before identity selection and creation.
+  impersonation is refused before identity selection, creation and reopening.
 - SDDL conversion through Windows, with a protected DACL granting full control
   only to that user, LocalSystem and built-in Administrators. Those principals
   and other processes of the same user are trusted. Files use explicit ACEs;
@@ -68,6 +68,13 @@ The candidate implements:
   creation result. Returned handles are not inheritable and do not share deletion.
   Existing objects are never adopted or repaired. Failed post-creation checks
   can leave an empty object; cleanup never deletes an uncertain pathname.
+- Existing files and directories reopen relative to a validated private parent
+  handle using `FILE_OPEN`, never create-or-open or overwrite. The resulting
+  handle must pass the same owner/DACL, type, link and volume checks before it
+  reaches the caller. File access is explicitly read-only or read/write;
+  directory handles request inspection and traversal. Reopened handles also
+  exclude deletion sharing and inheritance. An invalid ACL is refused without
+  repair. This still requires custody of the parent and its ancestors.
 - Owner/DACL snapshots via `GetSecurityInfo` on the actual file handle, with
   `LocalFree` ownership. Native descriptors must be self-relative before their
   bounded bytes are read. Owner, DACL presence, nullness, bounds, overlapping
@@ -149,8 +156,14 @@ before [file disposition](https://learn.microsoft.com/en-us/windows/win32/api/fi
 could run. The revised probe distinguishes that private-directory observation
 from the successful permissive-directory control. A preexisting ACL denial is
 never counted as proof that retaining a handle blocked deletion.
+At `43fe407`, the revised fixture passed in the Windows test job of
+[CI run 41003109095](https://github.com/shahzadlone/agent-swapper/actions/runs/41003109095).
+The closed private file and closed permissive directory were deleted. Both
+retained-handle attempts returned sharing violation (32). The closed private
+directory returned access denied (5), independently of handle retention.
+These observations qualify the fixture's measured intervals only.
 This test does not cover every group policy, filesystem or vendor credential
-layout. Its execution result must be recorded before treating it as evidence.
+layout. Reopening changes after that revision need their own native results.
 
 The fixture uses the documented [local account creation API](https://learn.microsoft.com/en-us/windows/win32/api/lmaccess/nf-lmaccess-netuseradd),
 [local logon API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-logonuserw)
@@ -181,8 +194,9 @@ refusal. At `515e519`, the native separate-identity fixture passed in
 the temporary standard user read/wrote the permissive control and received
 access-denied errors for the protected operations; original bytes and account
 removal were checked. That result predates the parent-delete-child experiment
-and does not itself establish packaging/rebuild success or production privacy.
-Later parent-custody and parser changes need their own results.
+and does not establish production privacy. Its complete pipeline, including
+candidate builds, separate-runner rebuild comparisons and preview provenance,
+also passed. Later code changes need their own results.
 
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle

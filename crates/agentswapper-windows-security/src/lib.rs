@@ -3,7 +3,7 @@
 //! No production AgentSwapper crate depends on this qualification candidate.
 //! Handle validation is a snapshot, not a guarantee against later ACL changes.
 //! Creation requires a trusted, stable parent: ancestor custody, vendor-created
-//! descendants and separate-identity access tests remain integration gates.
+//! descendants and production storage integration remain qualification gates.
 
 mod descriptor;
 #[cfg(windows)]
@@ -17,6 +17,14 @@ mod ffi;
 pub enum ObjectKind {
     File,
     Directory,
+}
+
+/// Access requested when reopening an existing private file. Neither option
+/// creates, truncates, repairs permissions or shares deletion of the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileAccess {
+    ReadOnly,
+    ReadWrite,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -39,7 +47,7 @@ pub enum Error {
     UnsupportedObject,
     #[error("the path is not an absolute, local Windows filesystem path")]
     UnsupportedPath,
-    #[error("thread impersonation is unsupported for private object creation")]
+    #[error("thread impersonation is unsupported for private object access")]
     Impersonation,
     #[error("Windows security operation failed")]
     Io(#[from] std::io::Error),
