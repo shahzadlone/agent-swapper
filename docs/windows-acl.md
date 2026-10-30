@@ -509,8 +509,9 @@ the actual device, reparse status and exact private ACL. It never establishes
 that a name still references the snapshot and must not validate required locks.
 Native fixtures retire both protected and inherited files, preserve original
 bytes, reject multiple links and reject broad ACLs even after unlinking.
-The actual core fixture retains an old config read handle across replacement
-and requires both a private old snapshot and the new saved preferences. These
+The actual core fixture retains an old config read handle while a writer starts,
+then releases it within the existing bounded replacement retry and requires both
+a private original read and the new saved preferences. These
 snapshot additions need native results; the core is not yet wired to them.
 
 The first snapshot run at `4aee481` passed the protected-file case but refused
@@ -526,6 +527,15 @@ handle's link count is read after the ACL snapshot; named files and required
 opens do not use this detached-only policy. Broad/mixed/unknown grants remain
 refusals. Portable mutation tests cover the additional layout; native hosted
 qualification remains required.
+
+The attempted settings replacement while retaining the old reader failed with
+access denied (5) at `173e982`. A local four-case control measured `MoveFileEx`
+replacement with/without the directory guard and with/without a reader that
+shared deletion: both retained-reader cases failed with 5; both cases without
+a reader succeeded. This is not a guard-specific failure. The fixture now
+models the core's short-lived reader and existing bounded retry instead of
+requiring Windows to replace a destination whose reader stays open indefinitely.
+Detached-file ACL semantics are tested separately through actual final unlink.
 
 A consumer-compatibility fixture now wraps the actual core `Store`,
 `ConfigStore` and `ProfileLease` in an externally retained candidate root. It

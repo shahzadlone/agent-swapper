@@ -44,12 +44,24 @@ impl Fixture {
         config.set(ConfigKey::UiMask, "true").unwrap();
         let original = std::fs::read(config.path()).unwrap();
         let mut snapshot = File::open(config.path()).unwrap();
-        config.set(ConfigKey::HistoryLimit, "23").unwrap();
-        policy.validate_private_file_snapshot(&snapshot).unwrap();
-        let mut bytes = Vec::new();
-        snapshot.read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes, original);
-        drop(snapshot);
+        std::thread::scope(|scope| {
+            let (started, ready) = std::sync::mpsc::sync_channel(0);
+            let setter = scope.spawn(move || {
+                started.send(()).unwrap();
+                config.set(ConfigKey::HistoryLimit, "23").unwrap()
+            });
+            ready.recv().unwrap();
+            // MoveFileEx replacement can be denied while a read handle stays
+            // open, even with delete sharing. A real config read releases its
+            // snapshot promptly; publication's existing bounded retry must work.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            policy.validate_private_file_snapshot(&snapshot).unwrap();
+            let mut bytes = Vec::new();
+            snapshot.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, original);
+            drop(snapshot);
+            setter.join().unwrap();
+        });
         let profile_name = profile.id.to_string();
         let profiles = policy
             .open_existing_inherited_directory_at(root.directory(), OsStr::new("profiles"))
