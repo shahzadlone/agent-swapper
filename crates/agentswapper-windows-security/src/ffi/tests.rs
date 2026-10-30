@@ -171,6 +171,9 @@ fn refuses_relative_unc_device_ads_and_ambiguous_paths_before_creation() {
         r"C:\fixture\CON",
         r"C:\fixture\NUL.txt",
         r"C:\fixture\COM1.log",
+        r"C:\fixture\file\",
+        r"C:\fixture\.",
+        r"\\?\C:\fixture\file\",
         "C:\\fixture\\nul\0suffix",
     ] {
         assert!(

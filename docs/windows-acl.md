@@ -128,6 +128,12 @@ checks original file bytes and cleanup. All owner-held file handles are closed
 before probing, so a sharing violation cannot masquerade as an ACL denial. The
 control parent grants others read/traverse, **not delete-child** access. A
 permissive ancestor with deletion rights remains a separate custody problem.
+The fixture also exercises that case explicitly: under an additional parent
+granting everyone full control, it attempts to delete closed private objects
+and objects whose creation handles are retained. The closed objects are required
+to be removable, while retained-handle attempts must fail with access-denied or
+sharing-violation status. It reports the actual codes. This measures a handle's
+protection during that interval, not a permanent guarantee for the full path.
 This test does not cover every group policy, filesystem or vendor credential
 layout. Its execution result must be recorded before treating it as evidence.
 
@@ -147,6 +153,12 @@ snapshot also cannot prevent later changes by trusted principals. Those gaps
 must be resolved before storage integration or a privacy claim.
 
 ## Required before a privacy claim
+
+The initial candidate's seven native fixtures and portable parser tests passed
+at `54c7b19` in [CI run 40999147184](https://github.com/shahzadlone/agent-swapper/actions/runs/40999147184),
+including the complete candidate/rebuild/provenance pipeline. This is evidence
+for the initial snapshot/creation implementation only; later relative-creation
+and separate-identity changes require their own execution results.
 
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle

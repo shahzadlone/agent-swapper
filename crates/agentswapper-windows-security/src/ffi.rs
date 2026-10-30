@@ -221,6 +221,13 @@ fn reject_impersonation() -> Result<()> {
 }
 
 fn wide_path(path: &Path) -> Result<Vec<u16>> {
+    // Path::components/file_name normalize a trailing separator or `/.`.
+    // Refuse that spelling before deriving a parent and child; otherwise a
+    // request spelling a directory can silently create a regular file instead.
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if matches!(wide.last(), None | Some(32 | 46 | 47 | 92)) || wide.len() >= 32767 {
+        return Err(Error::UnsupportedPath);
+    }
     let mut components = path.components();
     if !matches!(components.next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
         || components.next() != Some(Component::RootDir)
@@ -238,11 +245,8 @@ fn wide_path(path: &Path) -> Result<Vec<u16>> {
     if count == 0 {
         return Err(Error::UnsupportedPath);
     }
-    let path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-    if path.len() > 32767 {
-        return Err(Error::UnsupportedPath);
-    }
-    Ok(path)
+    wide.push(0);
+    Ok(wide)
 }
 
 fn wide_component(name: &OsStr) -> Result<Vec<u16>> {

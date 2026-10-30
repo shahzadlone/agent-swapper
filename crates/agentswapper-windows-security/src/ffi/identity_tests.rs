@@ -148,6 +148,19 @@ fn denied<T>(result: io::Result<T>, operation: &str) {
     }
 }
 
+fn guarded_deletion(result: io::Result<()>, operation: &str) {
+    match result {
+        Err(error) if matches!(error.raw_os_error(), Some(5 | 32)) => {
+            println!(
+                "::notice title=Windows ACL owned handle::{operation} refused with OS code {}",
+                error.raw_os_error().unwrap()
+            );
+        }
+        Err(error) => panic!("{operation}: unexpected failure {error}"),
+        Ok(()) => panic!("{operation}: deletion succeeded while the creation handle was retained"),
+    }
+}
+
 #[test]
 #[ignore = "creates/removes a disposable local account; explicit GitHub-hosted Windows CI only"]
 fn separate_identity_cannot_access_private_objects() {
@@ -185,6 +198,35 @@ fn separate_identity_cannot_access_private_objects() {
     drop(nested);
     drop(directory);
     drop(parent);
+
+    // Parent delete-child rights can override a child's restrictive DACL.
+    // Measure this explicitly, alongside the no-delete-share creation handles.
+    let delete_parent_sd =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
+            .unwrap();
+    let delete_parent_path = root.path().join("delete-child-parent");
+    let delete_parent = create(
+        &delete_parent_path,
+        ObjectKind::Directory,
+        &delete_parent_sd,
+    )
+    .unwrap();
+    let released_file = delete_parent_path.join("released.txt");
+    let released_directory = delete_parent_path.join("released-directory");
+    drop(policy.create_new(&released_file, ObjectKind::File).unwrap());
+    drop(
+        policy
+            .create_new(&released_directory, ObjectKind::Directory)
+            .unwrap(),
+    );
+    let held_file_path = delete_parent_path.join("held.txt");
+    let held_directory_path = delete_parent_path.join("held-directory");
+    let held_file = policy
+        .create_new(&held_file_path, ObjectKind::File)
+        .unwrap();
+    let held_directory = policy
+        .create_new(&held_directory_path, ObjectKind::Directory)
+        .unwrap();
 
     let control_for_thread = control_path.clone();
     let private_for_thread = private_path.clone();
@@ -242,6 +284,18 @@ fn separate_identity_cannot_access_private_objects() {
             std::fs::remove_file(directory_for_thread.join("nested.txt")),
             "delete nested private file",
         );
+        // These successful controls prevent blaming the containing directory
+        // or caller identity for the retained-handle refusals that follow.
+        std::fs::remove_file(&released_file).unwrap();
+        std::fs::remove_dir(&released_directory).unwrap();
+        guarded_deletion(
+            std::fs::remove_file(&held_file_path),
+            "delete retained private file",
+        );
+        guarded_deletion(
+            std::fs::remove_dir(&held_directory_path),
+            "delete retained private directory",
+        );
         drop(restore);
         drop(token);
     })
@@ -250,6 +304,19 @@ fn separate_identity_cannot_access_private_objects() {
     // and impersonation guard are gone before this explicit cleanup.
     account.remove().unwrap();
     checked.unwrap();
+    policy
+        .validate_handle(&held_file, ObjectKind::File)
+        .unwrap();
+    policy
+        .validate_handle(&held_directory, ObjectKind::Directory)
+        .unwrap();
+    drop(held_file);
+    drop(held_directory);
+    drop(delete_parent);
+    assert!(!delete_parent_path.join("released.txt").exists());
+    assert!(!delete_parent_path.join("released-directory").exists());
+    assert!(delete_parent_path.join("held.txt").is_file());
+    assert!(delete_parent_path.join("held-directory").is_dir());
     assert_eq!(
         std::fs::read(control_path).unwrap(),
         b"other user control write"
@@ -265,5 +332,8 @@ fn separate_identity_cannot_access_private_objects() {
     assert!(!private_directory.join("injected.txt").exists());
     println!(
         "::notice title=Windows ACL separate identity::temporary standard user read/wrote the permissive control but was denied private reads, writes, security changes, deletion, rename, listing and child creation; original bytes preserved and owned account removed"
+    );
+    println!(
+        "::notice title=Windows ACL ancestor limit::the temporary user deleted closed private objects through parent delete-child rights; owned creation handles blocked deletion in the measured interval; complete ancestor custody remains a gate"
     );
 }
