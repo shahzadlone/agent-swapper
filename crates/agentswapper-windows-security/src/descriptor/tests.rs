@@ -310,6 +310,10 @@ fn inherited_file_policy_requires_exact_inherited_grants_and_an_already_trusted_
             ));
             bytes[2] |= 1; // A defaulted owner remains subject to the SID check.
             policy().validate_inherited_file_descriptor(&bytes).unwrap();
+            // Newly inherited files can omit propagation bookkeeping while
+            // their individual ACEs are still all marked inherited.
+            bytes[3] &= !0x04;
+            policy().validate_inherited_file_descriptor(&bytes).unwrap();
         }
     }
     assert!(matches!(
@@ -358,7 +362,7 @@ fn inherited_file_policy_refuses_mixed_explicit_inherit_only_unknown_or_pending_
         bytes[ace] = ace_type;
         assert!(policy().validate_inherited_file_descriptor(&bytes).is_err());
     }
-    for control in [0x8004_u16, 0x9004, 0x9404, 0x8504, 0x840c, 0xc404, 0x8400] {
+    for control in [0x9004_u16, 0x9404, 0x8504, 0x840c, 0xc404, 0x8400] {
         let mut bytes = original.clone();
         bytes[2..4].copy_from_slice(&control.to_le_bytes());
         assert!(

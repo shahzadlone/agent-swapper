@@ -118,9 +118,7 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
     }
     match layout {
         Layout::Protected if control & DACL_PROTECTED == 0 => return Err(Error::UnprotectedDacl),
-        Layout::InheritedFile
-            if control & (DACL_PROTECTED | DACL_AUTO_INHERITED) != DACL_AUTO_INHERITED =>
-        {
+        Layout::InheritedFile if control & DACL_PROTECTED != 0 => {
             return Err(Error::UnexpectedDacl);
         }
         _ => {}
@@ -133,7 +131,8 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
     let allowed_control = SELF_RELATIVE
         | DACL_PRESENT
         | DACL_PROTECTED
-        | 0x0402
+        | DACL_AUTO_INHERITED
+        | 0x0002
         | if layout == Layout::InheritedFile {
             1
         } else {

@@ -193,8 +193,21 @@ creation/open APIs keep their original policy.
 
 The child policy requires exactly three full-control allow ACEs, all marked
 inherited, for the selected user, SYSTEM and Administrators. It refuses mixed
-explicit/inherited grants, inherit-only or unknown flags, a protected or
-non-auto-inherited DACL, other trustees, null/empty DACLs and unknown layouts.
+explicit/inherited grants, inherit-only or unknown flags, a protected DACL,
+other trustees, null/empty DACLs and unknown layouts. The descriptor's
+`SE_DACL_AUTO_INHERITED` bookkeeping bit is optional; the inherited bit on
+**every individual ACE** remains mandatory. A local Windows fixture using
+atomic .NET directory creation and ordinary file creation observed inherited
+ACEs without that descriptor bookkeeping bit, with both `D:P` and `D:PAI`
+creation descriptors. That diagnostic does not replace the Rust native tests.
+The Rust fixture at `c61fc01` confirmed the same cause in
+[CI run 41005435587](https://github.com/shahzadlone/agent-swapper/actions/runs/41005435587):
+control `0x8004`, owner Administrators, and exactly three inherited (`0x10`)
+full-control (`0x001f01ff`) ACEs for the expected trustees. The original rule
+incorrectly required `SE_DACL_AUTO_INHERITED` and refused that valid layout.
+The corrected rule keeps every trustee, right and ACE flag check and permits
+either bookkeeping-bit value. The failed run is diagnostic evidence only;
+the correction still needs its own successful native run.
 The owner must be one of those same trusted principals: system-created files
 can select a token's default owner. This adds no principal beyond those already
 granted full control. It does not accept arbitrary vendor permission layouts.
