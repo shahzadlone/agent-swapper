@@ -535,6 +535,7 @@ impl LaunchPlan {
             {
                 return Err(Error::GentsRuntimeMismatch);
             }
+            crate::private_fs::validate_snapshot(&file).map_err(|_| Error::GentsRuntimeMismatch)?;
         }
         let mut bytes = Vec::new();
         file.take(65537)
@@ -564,8 +565,10 @@ impl LaunchPlan {
             return Err(Error::GentsRuntimeMismatch);
         }
         if !state.home.is_absolute()
-            || dunce::canonicalize(&state.home).map_err(|_| Error::GentsRuntimeMismatch)?
-                != self.home
+            // Compare canonical forms on both sides. Windows state retains its
+            // verbatim path while an engine may record a normal or short DOS path.
+            || std::fs::canonicalize(&state.home).map_err(|_| Error::GentsRuntimeMismatch)?
+                != std::fs::canonicalize(&self.home).map_err(|_| Error::GentsRuntimeMismatch)?
         {
             return Err(Error::GentsRuntimeMismatch);
         }
