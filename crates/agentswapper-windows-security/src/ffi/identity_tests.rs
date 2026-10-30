@@ -13,7 +13,10 @@ use windows_sys::Win32::{
         ImpersonateLoggedOnUser, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, LogonUserW,
         RevertToSelf,
     },
-    Storage::FileSystem::{DELETE, WRITE_DAC, WRITE_OWNER},
+    Storage::FileSystem::{
+        DELETE, FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle, WRITE_DAC,
+        WRITE_OWNER,
+    },
 };
 use zeroize::Zeroizing;
 
@@ -161,6 +164,43 @@ fn guarded_deletion(result: io::Result<()>, operation: &str) {
     }
 }
 
+fn delete_empty_directory_by_handle(path: &Path) -> io::Result<()> {
+    // The generic RemoveDirectoryW control returned access denied on the
+    // measured runner. Request only DELETE, then exercise disposition through
+    // that actual handle, to test the parent-rights/handle-sharing boundary.
+    let directory = std::fs::OpenOptions::new()
+        .access_mode(DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .inspect_err(|error| {
+            eprintln!(
+                "directory DELETE-only open: OS code {:?}",
+                error.raw_os_error()
+            )
+        })?;
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: directory owns a live DELETE-capable handle; the initialized
+    // fixed-size input matches FileDispositionInfo and lives through this
+    // synchronous call. Only an owned, empty fixture directory is targeted.
+    if unsafe {
+        SetFileInformationByHandle(
+            directory.as_raw_handle(),
+            FileDispositionInfo,
+            (&disposition as *const FILE_DISPOSITION_INFO).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        let error = io::Error::last_os_error();
+        eprintln!(
+            "directory handle disposition: OS code {:?}",
+            error.raw_os_error()
+        );
+        return Err(error);
+    }
+    Ok(()) // Closing the delete-marked handle completes directory removal.
+}
+
 #[test]
 #[ignore = "creates/removes a disposable local account; explicit GitHub-hosted Windows CI only"]
 fn separate_identity_cannot_access_private_objects() {
@@ -287,13 +327,13 @@ fn separate_identity_cannot_access_private_objects() {
         // These successful controls prevent blaming the containing directory
         // or caller identity for the retained-handle refusals that follow.
         std::fs::remove_file(&released_file).unwrap();
-        std::fs::remove_dir(&released_directory).unwrap();
+        delete_empty_directory_by_handle(&released_directory).unwrap();
         guarded_deletion(
             std::fs::remove_file(&held_file_path),
             "delete retained private file",
         );
         guarded_deletion(
-            std::fs::remove_dir(&held_directory_path),
+            delete_empty_directory_by_handle(&held_directory_path),
             "delete retained private directory",
         );
         drop(restore);

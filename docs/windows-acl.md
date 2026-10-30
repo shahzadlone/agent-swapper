@@ -134,6 +134,14 @@ and objects whose creation handles are retained. The closed objects are required
 to be removable, while retained-handle attempts must fail with access-denied or
 sharing-violation status. It reports the actual codes. This measures a handle's
 protection during that interval, not a permanent guarantee for the full path.
+At `edcb5ef`, the file control was deleted, but `RemoveDirectoryW` returned
+access denied for the closed directory in
+[CI run 41001315576](https://github.com/shahzadlone/agent-swapper/actions/runs/41001315576).
+The fixture failed before its retained-handle checks; that run does not qualify
+directory custody. The directory probe now requests a DELETE-only handle and
+uses [file disposition](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
+through that handle, recording whether refusal occurs during open or disposition.
+The high-level removal result is not treated as proof of handle protection.
 This test does not cover every group policy, filesystem or vendor credential
 layout. Its execution result must be recorded before treating it as evidence.
 

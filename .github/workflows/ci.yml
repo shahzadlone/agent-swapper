@@ -99,6 +99,18 @@ jobs:
         if: runner.os != 'Windows'
         timeout-minutes: 2
         run: python tools/check_native_terminal_pty.py target/debug/aswp
+      - name: Windows ACL qualification candidate
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: |
+          cargo +1.98.0 test --locked -p agentswapper-windows-security ffi::tests:: -- --nocapture
+      - name: Windows ACL separate identity
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted'
+        timeout-minutes: 3
+        env:
+          ASWP_CI_IDENTITY_FIXTURE: '1'
+        run: |
+          cargo +1.98.0 nextest run --locked -p agentswapper-windows-security --profile ci --run-ignored only -E 'test(=ffi::identity_tests::separate_identity_cannot_access_private_objects)' --success-output immediate --no-output-indent
       - name: Journal process-crash recovery matrix
         timeout-minutes: 12
         env:
@@ -119,18 +131,6 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 2
         run: cargo +1.98.0 test --locked -p agentswapper-core --lib private_fs::tests::optional_sidecar_ -- --nocapture
-      - name: Windows ACL qualification candidate
-        if: runner.os == 'Windows'
-        timeout-minutes: 2
-        run: |
-          cargo +1.98.0 test --locked -p agentswapper-windows-security ffi::tests:: -- --nocapture
-      - name: Windows ACL separate identity
-        if: runner.os == 'Windows' && runner.environment == 'github-hosted'
-        timeout-minutes: 3
-        env:
-          ASWP_CI_IDENTITY_FIXTURE: '1'
-        run: |
-          cargo +1.98.0 nextest run --locked -p agentswapper-windows-security --profile ci --run-ignored only -E 'test(=ffi::identity_tests::separate_identity_cannot_access_private_objects)' --success-output immediate --no-output-indent
       - name: Report failing tests
         if: failure()
         run: python tools/report_test_failures.py target/nextest/ci/junit.xml
