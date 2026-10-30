@@ -557,6 +557,14 @@ impl SecurityPolicy {
         let descriptor = LocalDescriptor::from_file(file)?;
         self.validate_descriptor(descriptor.bytes()?, kind)
     }
+
+    /// Snapshot of an ancestor directory's type, volume and mutation grants.
+    /// This neither opens/pins its ancestors nor establishes private storage.
+    pub fn validate_ancestor_handle(&self, directory: &File) -> Result<()> {
+        validate_object(directory, ObjectKind::Directory)?;
+        let descriptor = LocalDescriptor::from_file(directory)?;
+        self.validate_ancestor_descriptor(descriptor.bytes()?)
+    }
 }
 
 #[cfg(test)]

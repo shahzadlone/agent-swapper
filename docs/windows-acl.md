@@ -234,6 +234,41 @@ chain. The SQLite fixture adds only a Windows test dependency already present
 in the workspace. Cross-checking its native test binary requires MSVC's C tools;
 a Linux-only Rust check is not execution evidence.
 
+## Ancestor mutation classification
+
+`validate_ancestor_descriptor` and its handle form are a separate candidate
+classification, **not a private-directory or custody API**. They permit
+read/list/traverse, synchronization, new subdirectories, deletion and deletion
+of children for untrusted principals (`0x001300ed`). Deletion rights require
+the eventual path guard to retain every component without delete sharing.
+In-place data/EA/attribute writes and ACL/owner changes by other principals
+are refused, as are unknown ACE forms and flags. Inherit-only grants apply to
+future children, so they do not qualify or disqualify the current ancestor;
+every child must be independently validated. No deny ACE is used to explain
+away an otherwise broad grant: this conservative candidate refuses deny ACEs.
+
+Ancestor ownership and modification are trusted only to the selected user,
+SYSTEM, Administrators and the exact Windows TrustedInstaller service SID.
+The last is required for the observed system-drive root, and is confined to
+ancestor classification: it is not added to private file/directory owners or
+their three-principal DACL. Microsoft describes TrustedInstaller's OS role in
+[Windows Resource Protection](https://learn.microsoft.com/en-us/windows/win32/wfp/about-windows-file-protection).
+The local Windows temp ancestry was inspected read-only to identify actual
+permission forms; native Rust fixtures also check the disposable runner's temp
+ancestry. Neither establishes a retained full path on its own.
+
+The ignored identity fixture additionally attempts a mount-point junction
+mutation through [FSCTL_SET_REPARSE_POINT](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_set_reparse_point).
+Its bounded byte payload follows the documented
+[REPARSE_DATA_BUFFER layout](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_reparse_data_buffer).
+The temporary standard user must successfully convert a permissive control
+directory and read a fictional target through it. It must then be refused
+mutation rights and junction installation through an opened limited-rights
+directory. A bad payload or missing privilege cannot count as a successful
+negative test. Junction cleanup verifies the target remains intact. Until this
+fixture and actual component-by-component custody pass, ancestor privacy is
+unqualified.
+
 ## Required before a privacy claim
 
 The initial candidate's seven native fixtures and portable parser tests passed

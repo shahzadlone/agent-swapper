@@ -733,7 +733,11 @@ fn inherited_fixture_diagnostic(policy: &SecurityPolicy, path: &Path) {
     // Owned disposable fixtures only. Print permission metadata, never file
     // bytes, paths, account names or numeric user SIDs. No production logging.
     let file = File::open(path).unwrap();
-    let descriptor = LocalDescriptor::from_file(&file).unwrap();
+    fixture_descriptor_diagnostic(policy, &file);
+}
+
+fn fixture_descriptor_diagnostic(policy: &SecurityPolicy, file: &File) {
+    let descriptor = LocalDescriptor::from_file(file).unwrap();
     let bytes = descriptor.bytes().unwrap();
     let control = u16::from_le_bytes(bytes[2..4].try_into().unwrap());
     let owner_start = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
@@ -743,6 +747,7 @@ fn inherited_fixture_diagnostic(policy: &SecurityPolicy, path: &Path) {
     let classify = |sid: &str| match sid {
         "S-1-5-18" => "system",
         "S-1-5-32-544" => "administrators",
+        "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" => "trusted-installer",
         value if value == policy.owner.sddl() => "process-user",
         _ => "other",
     };
@@ -750,7 +755,7 @@ fn inherited_fixture_diagnostic(policy: &SecurityPolicy, path: &Path) {
     let acl = &bytes[acl_start..];
     let count = u16::from_le_bytes(acl[4..6].try_into().unwrap());
     eprintln!(
-        "inherited fixture metadata: control=0x{control:04x}, owner={}, ace_count={count}",
+        "fixture ACL metadata: control=0x{control:04x}, owner={}, ace_count={count}",
         classify(&owner)
     );
     let mut offset = 8;
@@ -760,11 +765,64 @@ fn inherited_fixture_diagnostic(policy: &SecurityPolicy, path: &Path) {
         let mask = u32::from_le_bytes(ace[4..8].try_into().unwrap());
         let trustee = Sid::parse(&ace[8..]).unwrap().sddl();
         eprintln!(
-            "inherited fixture ACE: type={}, flags=0x{:02x}, mask=0x{mask:08x}, trustee={}",
+            "fixture ACL entry: type={}, flags=0x{:02x}, mask=0x{mask:08x}, trustee={}",
             ace[0],
             ace[1],
             classify(&trustee)
         );
         offset += length;
     }
+}
+
+#[test]
+fn ancestor_snapshots_accept_native_temp_ancestry_and_refuse_mutable_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let mut handles = Vec::new();
+    for path in root.path().ancestors() {
+        let directory = std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .unwrap();
+        policy
+            .validate_ancestor_handle(&directory)
+            .inspect_err(|_| fixture_descriptor_diagnostic(&policy, &directory))
+            .unwrap();
+        handles.push(directory);
+    }
+    assert!(handles.len() > 1);
+    // This is snapshot classification, not the future component-by-component
+    // path API: the fixture deliberately inspects its already-known temp path.
+    let broad =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
+            .unwrap();
+    let broad_directory =
+        create(&root.path().join("broad"), ObjectKind::Directory, &broad).unwrap();
+    assert!(matches!(
+        policy.validate_ancestor_handle(&broad_directory),
+        Err(Error::UnexpectedDacl)
+    ));
+    let limited = LocalDescriptor::from_sddl(&format!(
+        "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x001300ed;;;WD)",
+        policy.owner.sddl(),
+        policy.owner.sddl()
+    ))
+    .unwrap();
+    let limited_directory = create(
+        &root.path().join("limited"),
+        ObjectKind::Directory,
+        &limited,
+    )
+    .unwrap();
+    policy.validate_ancestor_handle(&limited_directory).unwrap();
+    assert!(
+        policy
+            .validate_handle(&limited_directory, ObjectKind::Directory)
+            .is_err()
+    );
+    println!(
+        "::notice title=Windows ancestor ACL snapshots::native temp ancestors passed restricted mutation-grant classification; broad directory refused; deletion rights still require complete retained handle custody"
+    );
 }

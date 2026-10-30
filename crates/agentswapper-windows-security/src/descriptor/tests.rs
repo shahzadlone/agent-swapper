@@ -49,6 +49,19 @@ fn inherited(trustees: &[&[u8]], owner: &[u8]) -> Vec<u8> {
     bytes
 }
 
+fn ancestor(owner: &[u8], flags: u8, mask: u32) -> Vec<u8> {
+    let mut bytes = descriptor_with_owner(
+        ObjectKind::Directory,
+        &[USER, SYSTEM, ADMINISTRATORS, EVERYONE],
+        owner,
+    );
+    let ace =
+        20 + owner.len() + 8 + (8 + USER.len()) + (8 + SYSTEM.len()) + (8 + ADMINISTRATORS.len());
+    bytes[ace + 1] = flags;
+    bytes[ace + 4..ace + 8].copy_from_slice(&mask.to_le_bytes());
+    bytes
+}
+
 fn valid(kind: ObjectKind) -> Vec<u8> {
     descriptor(kind, &[USER, SYSTEM, ADMINISTRATORS])
 }
@@ -391,12 +404,82 @@ fn inherited_file_policy_refuses_mixed_explicit_inherit_only_unknown_or_pending_
     }
 }
 
+#[test]
+fn ancestor_policy_distinguishes_name_custody_from_in_place_mutation() {
+    for owner in [USER, SYSTEM, ADMINISTRATORS, TRUSTED_INSTALLER] {
+        let bytes = ancestor(owner, 3, GUARDED_ANCESTOR_RIGHTS);
+        policy().validate_ancestor_descriptor(&bytes).unwrap();
+        assert!(
+            policy()
+                .validate_descriptor(&bytes, ObjectKind::Directory)
+                .is_err()
+        );
+        assert!(policy().validate_inherited_file_descriptor(&bytes).is_err());
+        let mut unprotected = bytes;
+        unprotected[3] &= !0x10;
+        policy().validate_ancestor_descriptor(&unprotected).unwrap();
+    }
+    for bit in 0..32 {
+        let mask = 1 << bit;
+        assert_eq!(
+            policy()
+                .validate_ancestor_descriptor(&ancestor(USER, 0, mask))
+                .is_ok(),
+            mask & !GUARDED_ANCESTOR_RIGHTS == 0,
+            "right {mask:08x}"
+        );
+    }
+    assert!(matches!(
+        policy().validate_ancestor_descriptor(&ancestor(EVERYONE, 0, 1)),
+        Err(Error::OwnerMismatch)
+    ));
+    for flag in 0..=255 {
+        let result = policy().validate_ancestor_descriptor(&ancestor(USER, flag, FILE_ALL_ACCESS));
+        assert_eq!(
+            result.is_ok(),
+            flag & !0x1f == 0 && flag & 8 != 0,
+            "flags {flag:02x}"
+        );
+    }
+}
+
+#[test]
+fn ancestor_policy_trusts_only_the_exact_system_service_and_refuses_unrecognized_aces() {
+    let mut bytes = descriptor_with_owner(ObjectKind::Directory, &[TRUSTED_INSTALLER], USER);
+    policy().validate_ancestor_descriptor(&bytes).unwrap();
+    // A neighboring service SID with the same authority is not trusted.
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    assert!(matches!(
+        policy().validate_ancestor_descriptor(&bytes),
+        Err(Error::UnexpectedDacl)
+    ));
+    let original = ancestor(USER, 0, 1);
+    for ace_type in 1..=255 {
+        let mut changed = original.clone();
+        changed[20 + USER.len() + 8] = ace_type;
+        assert!(policy().validate_ancestor_descriptor(&changed).is_err());
+    }
+    for end in 0..original.len() {
+        assert!(
+            policy()
+                .validate_ancestor_descriptor(&original[..end])
+                .is_err()
+        );
+    }
+    let mut broad = ancestor(USER, 0, FILE_ALL_ACCESS);
+    // Replacing the parent owner does not make a broad trustee safe.
+    broad[2] |= 1;
+    assert!(policy().validate_ancestor_descriptor(&broad).is_err());
+}
+
 proptest! {
     #[test]
     fn arbitrary_descriptor_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
         let _ = policy().validate_descriptor(&bytes, ObjectKind::File);
         let _ = policy().validate_descriptor(&bytes, ObjectKind::Directory);
         let _ = policy().validate_inherited_file_descriptor(&bytes);
+        let _ = policy().validate_ancestor_descriptor(&bytes);
     }
 
     #[test]
@@ -411,5 +494,10 @@ proptest! {
             inherited[field..field+4].copy_from_slice(&value.to_le_bytes());
         }
         let _ = policy().validate_inherited_file_descriptor(&inherited);
+        let mut ancestor = ancestor(USER, 0, 1);
+        for (field, value) in [(4, owner), (8, group), (12, sacl), (16, dacl)] {
+            ancestor[field..field+4].copy_from_slice(&value.to_le_bytes());
+        }
+        let _ = policy().validate_ancestor_descriptor(&ancestor);
     }
 }

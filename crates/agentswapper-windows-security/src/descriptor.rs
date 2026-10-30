@@ -13,6 +13,16 @@ const DACL_AUTO_INHERITED: u16 = 0x0400;
 const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
 const SYSTEM: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
 const ADMINISTRATORS: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
+// NT SERVICE\TrustedInstaller. Accepted only for OS-managed ancestors, never
+// added to private object owners or grants. See docs/windows-acl.md.
+const TRUSTED_INSTALLER: &[u8] = &[
+    1, 6, 0, 0, 0, 0, 0, 5, 80, 0, 0, 0, 181, 137, 251, 56, 25, 132, 194, 203, 92, 108, 35, 109,
+    87, 0, 119, 110, 192, 2, 100, 135,
+];
+// Read/list/traverse, SYNCHRONIZE, create-subdirectory, DELETE and DELETE_CHILD.
+// Deletion is safe only while the caller retains the whole no-delete-shared
+// chain. In-place data/EA/attribute writes and ACL/owner changes are excluded.
+const GUARDED_ANCESTOR_RIGHTS: u32 = 0x0013_00ed;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Sid(Vec<u8>);
@@ -82,10 +92,15 @@ pub(crate) fn validate_inherited_file(bytes: &[u8], owner: &Sid) -> Result<()> {
     validate_layout(bytes, owner, ObjectKind::File, Layout::InheritedFile)
 }
 
+pub(crate) fn validate_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
+    validate_layout(bytes, owner, ObjectKind::Directory, Layout::Ancestor)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
     Protected,
     InheritedFile,
+    Ancestor,
 }
 
 fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) -> Result<()> {
@@ -133,19 +148,16 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
         | DACL_PROTECTED
         | DACL_AUTO_INHERITED
         | 0x0002
-        | if layout == Layout::InheritedFile {
-            1
-        } else {
-            0
-        };
+        | if layout != Layout::Protected { 1 } else { 0 };
     if control & !allowed_control != 0 || dword(bytes, 12)? != 0 {
         return Err(Error::InvalidDescriptor);
     }
     let owner_start = offset(bytes, 4)?;
     let actual_owner = sid_prefix(&bytes[owner_start..])?;
     if actual_owner != owner.0
-        && !(layout == Layout::InheritedFile
+        && !(layout != Layout::Protected
             && (actual_owner == SYSTEM || actual_owner == ADMINISTRATORS))
+        && !(layout == Layout::Ancestor && actual_owner == TRUSTED_INSTALLER)
     {
         return Err(Error::OwnerMismatch);
     }
@@ -166,16 +178,12 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
             return Err(Error::InvalidDescriptor);
         }
     }
-    if count != 3 || owner.0 == SYSTEM || owner.0 == ADMINISTRATORS {
+    if (layout != Layout::Ancestor && count != 3) || owner.0 == SYSTEM || owner.0 == ADMINISTRATORS
+    {
         return Err(Error::UnexpectedDacl);
     }
     let trustees = [owner.0.as_slice(), SYSTEM, ADMINISTRATORS];
     let mut seen = [false; 3];
-    let expected_flags = match (layout, kind) {
-        (Layout::InheritedFile, _) => 0x10,
-        (Layout::Protected, ObjectKind::File) => 0,
-        (Layout::Protected, ObjectKind::Directory) => 3,
-    };
     let mut cursor = 8;
     for _ in 0..count {
         let remaining = acl.get(cursor..).ok_or(Error::InvalidDescriptor)?;
@@ -184,18 +192,40 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
             .get(..ace_size)
             .filter(|v| v.len() >= 16)
             .ok_or(Error::InvalidDescriptor)?;
-        if ace[0] != 0 || ace[1] != expected_flags || dword(ace, 4)? != FILE_ALL_ACCESS {
+        if ace[0] != 0 {
             return Err(Error::UnexpectedDacl);
         }
         let sid = Sid::parse(&ace[8..])?;
-        let index = trustees
-            .iter()
-            .position(|allowed| *allowed == sid.0)
-            .ok_or(Error::UnexpectedDacl)?;
-        if seen[index] {
-            return Err(Error::UnexpectedDacl);
+        let mask = dword(ace, 4)?;
+        if layout == Layout::Ancestor {
+            let trusted = trustees.contains(&sid.0.as_slice()) || sid.0 == TRUSTED_INSTALLER;
+            // Inherit-only entries grant nothing on this directory. Each
+            // descendant must be independently validated before it is used.
+            if ace[1] & !0x1f != 0
+                || (!trusted && ace[1] & 0x08 == 0 && mask & !GUARDED_ANCESTOR_RIGHTS != 0)
+            {
+                return Err(Error::UnexpectedDacl);
+            }
+        } else {
+            let expected_flags = if layout == Layout::InheritedFile {
+                0x10
+            } else if kind == ObjectKind::Directory {
+                3
+            } else {
+                0
+            };
+            if ace[1] != expected_flags || mask != FILE_ALL_ACCESS {
+                return Err(Error::UnexpectedDacl);
+            }
+            let index = trustees
+                .iter()
+                .position(|allowed| *allowed == sid.0)
+                .ok_or(Error::UnexpectedDacl)?;
+            if seen[index] {
+                return Err(Error::UnexpectedDacl);
+            }
+            seen[index] = true;
         }
-        seen[index] = true;
         cursor += ace_size;
     }
     // An ACL can reserve unused bytes. Refuse nonzero unaccounted data rather
