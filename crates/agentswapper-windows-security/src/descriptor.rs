@@ -13,6 +13,9 @@ const DACL_AUTO_INHERITED: u16 = 0x0400;
 const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
 const SYSTEM: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
 const ADMINISTRATORS: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
+// S-1-3-4 represents the object's actual owner, not its creator or group.
+// Only ancestor checks use it, after independently validating the owner SID.
+const OWNER_RIGHTS: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0];
 // NT SERVICE\TrustedInstaller. Accepted only for OS-managed ancestors, never
 // added to private object owners or grants. See docs/windows-acl.md.
 const TRUSTED_INSTALLER: &[u8] = &[
@@ -236,7 +239,9 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
         let sid = Sid::parse(&ace[8..])?;
         let mask = dword(ace, 4)?;
         if is_ancestor {
-            let trusted = trustees.contains(&sid.0.as_slice()) || sid.0 == TRUSTED_INSTALLER;
+            let trusted = trustees.contains(&sid.0.as_slice())
+                || sid.0 == TRUSTED_INSTALLER
+                || sid.0 == OWNER_RIGHTS;
             // Inherit-only entries grant nothing on this directory. Each
             // descendant must be independently validated before it is used.
             if ace[1] & !0x1f != 0

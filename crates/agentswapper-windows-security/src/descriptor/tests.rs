@@ -8,6 +8,7 @@ const USER: &[u8] = &[
     1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 9, 0, 0, 0, 233, 3, 0, 0,
 ];
 const EVERYONE: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0];
+const OWNER_RIGHTS: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0];
 
 fn policy() -> SecurityPolicy {
     SecurityPolicy {
@@ -582,6 +583,47 @@ fn ancestor_policy_distinguishes_name_custody_from_in_place_mutation() {
             flag & !0x1f == 0 && flag & 8 != 0,
             "flags {flag:02x}"
         );
+    }
+}
+
+#[test]
+fn owner_rights_is_trusted_only_on_ancestors_with_an_independently_trusted_owner() {
+    let policy = policy();
+    let trustees = [SYSTEM, ADMINISTRATORS, OWNER_RIGHTS];
+    for owner in [USER, SYSTEM, ADMINISTRATORS, TRUSTED_INSTALLER] {
+        let bytes = descriptor_with_owner(ObjectKind::Directory, &trustees, owner);
+        policy.validate_ancestor_descriptor(&bytes).unwrap();
+        validate_traversed_ancestor(&bytes, &policy.owner).unwrap();
+        // The exact private-object policies still require the selected user's
+        // literal SID; accepting this ancestor never admits an OW state leaf.
+        assert!(
+            policy
+                .validate_descriptor(&bytes, ObjectKind::Directory)
+                .is_err()
+        );
+        assert!(
+            policy
+                .validate_inherited_directory_descriptor(&bytes)
+                .is_err()
+        );
+    }
+    for owner in [EVERYONE, OWNER_RIGHTS] {
+        let bytes = descriptor_with_owner(ObjectKind::Directory, &trustees, owner);
+        assert!(matches!(
+            policy.validate_ancestor_descriptor(&bytes),
+            Err(Error::OwnerMismatch)
+        ));
+        assert!(matches!(
+            validate_traversed_ancestor(&bytes, &policy.owner),
+            Err(Error::OwnerMismatch)
+        ));
+    }
+    for rid in [0_u8, 1, 2, 3, 5, 6, 255] {
+        let mut unknown = OWNER_RIGHTS.to_vec();
+        unknown[8] = rid;
+        let bytes = descriptor(ObjectKind::Directory, &[SYSTEM, ADMINISTRATORS, &unknown]);
+        assert!(policy.validate_ancestor_descriptor(&bytes).is_err());
+        assert!(validate_traversed_ancestor(&bytes, &policy.owner).is_err());
     }
 }
 

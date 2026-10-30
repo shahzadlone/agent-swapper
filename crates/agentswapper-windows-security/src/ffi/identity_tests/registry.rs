@@ -32,8 +32,15 @@ impl Fixture {
             .prefix("aswp-core-storage-")
             .tempdir_in(std::env::var_os("USERPROFILE").unwrap())
             .unwrap();
+        let owner_parent = fixture.path().join("owner-rights");
+        let owner_descriptor =
+            LocalDescriptor::from_sddl("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
+                .unwrap();
+        drop(create(&owner_parent, ObjectKind::Directory, &owner_descriptor).unwrap());
+        let owner_file = owner_parent.join("owner-only.txt");
+        std::fs::write(&owner_file, b"fictional owner-rights data").unwrap();
         let root = policy
-            .open_or_create_private_root(&fixture.path().join("private"))
+            .open_or_create_private_root(&owner_parent.join("private"))
             .unwrap();
         let mut store = Store::open(root.path()).unwrap();
         let profile = store
@@ -96,7 +103,7 @@ impl Fixture {
                 )
                 .unwrap(),
         );
-        let mut files = Vec::new();
+        let mut files = vec![owner_file];
         for name in [
             "registry.sqlite3",
             "registry.sqlite3-wal",
@@ -137,6 +144,7 @@ impl Fixture {
             root: root.path().to_path_buf(),
             files,
             directories: vec![
+                owner_parent,
                 root.path().join("profiles"),
                 root.path().join("locks"),
                 home_path,
@@ -182,7 +190,7 @@ impl Fixture {
             );
         }
         println!(
-            "::notice title=Windows core storage separate identity::temporary standard user reached the actual profile's public control but could not read/write/delete registry, settings, lock or fictional vendor files, inject children or rename private directories"
+            "::notice title=Windows core storage separate identity::temporary standard user reached the actual profile's public control through an OW ancestor but could not read/write/delete the OW canary, registry, settings, lock or fictional vendor files, inject children or rename retained directories"
         );
     }
 }
@@ -203,7 +211,13 @@ impl Custody {
             std::fs::read(home.join("fictional.txt")).unwrap(),
             b"fictional provider-owned state"
         );
+        let owner_parent = self.root.path().parent().unwrap();
+        assert_eq!(
+            std::fs::read(owner_parent.join("owner-only.txt")).unwrap(),
+            b"fictional owner-rights data"
+        );
         for path in [
+            owner_parent.to_path_buf(),
             self.root.path().to_path_buf(),
             self.root.path().join("profiles"),
             self.root.path().join("locks"),

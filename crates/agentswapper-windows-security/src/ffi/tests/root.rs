@@ -12,6 +12,46 @@ fn fixture() -> tempfile::TempDir {
 }
 
 #[test]
+fn python_style_owner_rights_ancestor_supports_private_state_without_acl_repair() {
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    // CPython 3.13+ mkdir(mode=0700), also used by TemporaryDirectory.
+    let descriptor =
+        LocalDescriptor::from_sddl("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)").unwrap();
+    let path = fixture.path().join("python-temp");
+    drop(create(&path, ObjectKind::Directory, &descriptor).unwrap());
+    let before = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(&path)
+        .unwrap();
+    let original = LocalDescriptor::from_file(&before).unwrap();
+    policy.validate_ancestor_handle(&before).unwrap();
+    assert!(policy.open_existing_private_root(&path).is_err());
+    let state = path.join("state");
+    let guard = policy.open_or_create_private_root(&state).unwrap();
+    let mut file = policy
+        .create_new_private_file_at(guard.directory(), OsStr::new("canary.txt"))
+        .unwrap();
+    file.write_all(b"fictional owner-rights ancestor").unwrap();
+    assert!(std::fs::rename(&path, path.with_extension("moved")).is_err());
+    assert_eq!(
+        LocalDescriptor::from_file(&before)
+            .unwrap()
+            .bytes()
+            .unwrap(),
+        original.bytes().unwrap()
+    );
+    assert_eq!(
+        std::fs::read(state.join("canary.txt")).unwrap(),
+        b"fictional owner-rights ancestor"
+    );
+    println!(
+        "::notice title=Windows owner-rights ancestor::CPython-style protected OW parent accepted without repair; private child created and checked; OW leaf refused; retained ancestor rename refused; bytes and descriptor preserved"
+    );
+}
+
+#[test]
 fn retains_all_components_until_private_root_guard_is_dropped() {
     let fixture = fixture();
     let policy = SecurityPolicy::for_current_process().unwrap();
