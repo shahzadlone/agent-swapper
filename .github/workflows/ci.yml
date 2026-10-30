@@ -122,7 +122,8 @@ jobs:
       - name: Windows ACL qualification candidate
         if: runner.os == 'Windows'
         timeout-minutes: 2
-        run: cargo +1.98.0 test --locked -p agentswapper-windows-security ffi::tests:: -- --nocapture
+        run: |
+          cargo +1.98.0 test --locked -p agentswapper-windows-security ffi::tests:: -- --nocapture
       - name: Report failing tests
         if: failure()
         run: python tools/report_test_failures.py target/nextest/ci/junit.xml
