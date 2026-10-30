@@ -552,6 +552,34 @@ impl SecurityPolicy {
         Ok(file)
     }
 
+    /// Exclusively create a protected file under an already-private protected
+    /// or strictly inherited directory. Never adopts an existing name. Keep
+    /// the parent and its complete guarded ancestry alive while using paths.
+    pub fn create_new_private_file_at(&self, parent: &File, name: &OsStr) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_private_parent(parent)?;
+        let descriptor = self.creation_descriptor(ObjectKind::File)?;
+        let file = create_at(parent, name, ObjectKind::File, &descriptor)?;
+        self.validate_handle(&file, ObjectKind::File)?;
+        Ok(file)
+    }
+
+    /// Reopen an existing protected or strictly inherited private directory
+    /// relative to its validated private parent, without creation or repair.
+    /// Permit trusted writes and exclude deletion sharing. Retain all ancestors.
+    pub fn open_existing_private_directory_at(&self, parent: &File, name: &OsStr) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_private_parent(parent)?;
+        let directory = open_at(
+            parent,
+            name,
+            ObjectKind::Directory,
+            OpenMode::Existing(FileAccess::ReadOnly),
+        )?;
+        self.validate_private_parent(&directory)?;
+        Ok(directory)
+    }
+
     /// Reopen one existing file relative to an owned private directory. The
     /// actual opened file must match the exact protected creation policy before
     /// its handle is returned. Never creates, truncates, follows a reparse point

@@ -154,6 +154,8 @@ impl ConfigStore {
         if !self.root_exists()? {
             return Ok(Document::default());
         }
+        #[cfg(windows)]
+        let _private_root = private_fs::StateRoot::open(&self.root, false)?;
         let file = match open_checked(&self.path(), false) {
             Ok(file) => file,
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -227,6 +229,8 @@ impl ConfigStore {
         })
     }
     fn update(&self, edit: Edit) -> Result<Preferences> {
+        #[cfg(windows)]
+        let _private_root = private_fs::StateRoot::open(&self.root, true)?;
         private_fs::directory(&self.root, true)?;
         let lock = open_checked(&self.root.join("config.lock"), true)?;
         let started = Instant::now();
@@ -259,7 +263,7 @@ impl ConfigStore {
             let mut file = tempfile::Builder::new()
                 .prefix(".config-")
                 .tempfile_in(&self.root)?;
-            private_fs::validate_file_metadata(&file.as_file().metadata()?)?;
+            validate_handle(file.as_file(), true)?;
             serde_json::to_writer_pretty(&mut file, &document)?;
             file.write_all(b"\n")?;
             file.as_file().sync_all()?;
@@ -335,6 +339,10 @@ enum Edit {
 }
 
 fn open_checked(path: &Path, create: bool) -> Result<File> {
+    #[cfg(windows)]
+    if create {
+        return private_fs::file(path);
+    }
     private_fs::reject_links(path)?;
     // Path checks also allow a detached snapshot: an atomic replacement can
     // unlink the old inode even while metadata(path) is completing.
@@ -380,6 +388,7 @@ fn validate_handle(file: &File, create: bool) -> Result<()> {
         if file.metadata()?.file_attributes() & 0x400 != 0 || links > 1 || (create && links == 0) {
             return Err(Error::UnsafePath);
         }
+        private_fs::validate_snapshot(file)?;
     }
     Ok(())
 }

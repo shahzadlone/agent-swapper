@@ -1,5 +1,5 @@
 //! Actual core storage under candidate custody, using only fictional profiles.
-//! This test dependency does not make core depend on the security candidate.
+//! Core owns its own root guard; this fixture retains a second guard for probes.
 
 use super::*;
 use agentswapper_core::{
@@ -64,13 +64,13 @@ impl Fixture {
         });
         let profile_name = profile.id.to_string();
         let profiles = policy
-            .open_existing_inherited_directory_at(root.directory(), OsStr::new("profiles"))
+            .open_existing_private_directory_at(root.directory(), OsStr::new("profiles"))
             .unwrap();
         let home = policy
-            .open_existing_inherited_directory_at(&profiles, OsStr::new(&profile_name))
+            .open_existing_private_directory_at(&profiles, OsStr::new(&profile_name))
             .unwrap();
         let locks = policy
-            .open_existing_inherited_directory_at(root.directory(), OsStr::new("locks"))
+            .open_existing_private_directory_at(root.directory(), OsStr::new("locks"))
             .unwrap();
         let home_path = store.profile_home(profile.id).unwrap();
         std::fs::write(
@@ -80,7 +80,7 @@ impl Fixture {
         .unwrap();
         drop(
             policy
-                .open_existing_inherited_file_at(
+                .open_existing_private_file_at(
                     &home,
                     OsStr::new("fictional.txt"),
                     FileAccess::ReadOnly,
@@ -89,7 +89,7 @@ impl Fixture {
         );
         drop(
             policy
-                .open_existing_inherited_file_at(
+                .open_existing_private_file_at(
                     &locks,
                     OsStr::new(&format!("{profile_name}.lock")),
                     FileAccess::ReadOnly,
@@ -107,7 +107,7 @@ impl Fixture {
         ] {
             drop(
                 policy
-                    .open_existing_inherited_file_at(
+                    .open_existing_private_file_at(
                         root.directory(),
                         OsStr::new(name),
                         FileAccess::ReadOnly,
@@ -218,7 +218,7 @@ impl Custody {
         reopened.check().unwrap();
         assert_eq!(reopened.profiles().unwrap()[0].id, self.profile);
         println!(
-            "::notice title=Windows core storage compatibility::actual registry replay and reopen, configuration replacement, profile registration and live lease preserved; all expected files had exact inherited grants; fixture owns the external root guard, production core still does not"
+            "::notice title=Windows core storage compatibility::actual registry replay and reopen, configuration replacement, profile registration and live lease preserved; all expected files had exact private grants; actual core and fixture retained their root guards"
         );
     }
 }
@@ -228,4 +228,42 @@ fn actual_core_storage_preserves_data_under_candidate_root_custody() {
     let policy = SecurityPolicy::for_current_process().unwrap();
     let (_, custody) = Fixture::prepare(&policy);
     custody.verify();
+}
+
+#[test]
+fn actual_core_refuses_broad_registry_and_preferences_without_repair_or_parsing() {
+    let fixture = tempfile::Builder::new()
+        .prefix("aswp-broad-core-")
+        .tempdir_in(std::env::var_os("USERPROFILE").unwrap())
+        .unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let root = policy
+        .open_or_create_private_root(&fixture.path().join("private"))
+        .unwrap();
+    let broad =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;;FA;;;WD)", policy.owner.sddl())).unwrap();
+    for name in ["registry.sqlite3", "config.json"] {
+        let mut file =
+            create_at(root.directory(), OsStr::new(name), ObjectKind::File, &broad).unwrap();
+        file.write_all(b"fictional invalid document").unwrap();
+        let before = LocalDescriptor::from_file(&file).unwrap();
+        if name == "registry.sqlite3" {
+            assert!(matches!(
+                Store::open(root.path()),
+                Err(agentswapper_core::Error::UnsafePath)
+            ));
+        } else {
+            let config = ConfigStore::new(root.path()).unwrap();
+            assert!(matches!(
+                config.set(ConfigKey::UiMask, "true"),
+                Err(agentswapper_core::Error::UnsafePath)
+            ));
+        }
+        let after = LocalDescriptor::from_file(&file).unwrap();
+        assert_eq!(before.bytes().unwrap(), after.bytes().unwrap());
+        assert_eq!(
+            std::fs::read(root.path().join(name)).unwrap(),
+            b"fictional invalid document"
+        );
+    }
 }

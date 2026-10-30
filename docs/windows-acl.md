@@ -6,6 +6,18 @@ privacy. File and directory ACLs can be inherited from their parent, so a
 successfully created directory alone is not evidence that other principals
 cannot read or modify it. See Microsoft's [file security reference](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
 
+The current integration connects the boundary to Windows registry and settings
+access; it still needs native qualification and independent review before a
+privacy claim. A `Store` retains the actual root and all ancestor handles until
+its SQLite connection closes. Profile leases share ownership of that guard,
+so dropping the store cannot expose a still-held lock to path replacement.
+Configuration reads and updates retain a guard for the entire operation.
+Validated verbatim DOS paths are preserved. New state and files receive the
+protected policy; existing protected or strictly inherited private layouts are
+accepted without repair. Unsupported filesystems and broader ACLs fail closed.
+Actual vendor credential layouts, externally chosen handover output paths and
+process containment are separate boundaries.
+
 ## Candidate audit
 
 Source review of `windows-acl` 0.3.0 (MIT, published by Trail of Bits) found
@@ -35,9 +47,9 @@ concern, not a demonstrated exploit; the crate has not been added.
 
 ## Owned boundary decision
 
-`agentswapper-windows-security` is a qualification candidate in the workspace;
-neither the core nor CLI depends on it. Its immediate consumer is a disposable
-Windows filesystem fixture. This replaces the idea of adopting an incomplete
+`agentswapper-windows-security` began as a qualification candidate consumed by
+disposable Windows fixtures. Its current core integration is described above.
+This replaces the idea of adopting an incomplete
 ACL wrapper with a small owned boundary over the already-locked Microsoft
 `windows-sys 0.61.2` bindings. It does not add a third-party package.
 
@@ -362,9 +374,9 @@ The first implementation passed the native Windows test job at `32bb0ad` in
 [CI run 41135840809](https://github.com/shahzadlone/agent-swapper/actions/runs/41135840809).
 That result predates write-sharing exclusion and device-information checks.
 Their later native results are recorded below. Independent review of the
-follow-up code, migration and storage integration remain gates. Neither
-the core nor CLI links this candidate, and `doctor` still reports Windows ACL
-privacy as unverified.
+follow-up code, migration and storage integration remained gates at that revision.
+The current integration is described at the top of this document; `doctor`
+continues to report Windows ACL privacy as unverified pending qualification.
 
 The combined CI-only fixture uses a newly owned directory under the runner's
 profile, two AD4 ancestors and an actual live SQLite database/WAL/SHM. It keeps
@@ -512,7 +524,7 @@ bytes, reject multiple links and reject broad ACLs even after unlinking.
 The actual core fixture retains an old config read handle while a writer starts,
 then releases it within the existing bounded replacement retry and requires both
 a private original read and the new saved preferences. These
-snapshot additions need native results; the core is not yet wired to them.
+snapshot additions and their core integration need native results.
 
 The first snapshot run at `4aee481` passed the protected-file case but refused
 the detached inherited-file descriptor in
@@ -545,10 +557,12 @@ and checks registry replay plus a concurrent reopen. The separate-user probe
 must reach a public control in that exact profile directory while private
 reads/writes/deletes, child injection and directory renames fail. The owner
 then checks original application state. These additions await native results.
-`agentswapper-core` is a Windows-only **test dependency of the candidate**;
-the production core still does not depend on or own the guard. No new registry
-package is introduced. This fixture addresses consumer compatibility but
-does not by itself establish correct guard lifetimes throughout production.
+`agentswapper-core` is a Windows-only **test dependency of the boundary crate**;
+the core's normal dependency now supplies its own guard too. This creates no
+production dependency cycle or new third-party package. The fixture addresses
+consumer compatibility; separate core regressions check that leases retain
+root custody after the originating store closes and that broad registry/settings
+files are refused before parsing, with original bytes and ACLs preserved.
 
 The first actual-core run at `74c1b36` failed at the initial settings save with
 sharing violation (32) in

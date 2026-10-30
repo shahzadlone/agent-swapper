@@ -26,6 +26,8 @@ mod lease_transfer_tests;
 mod linux_journal_guardian_tests;
 mod runs;
 mod sessions;
+#[cfg(all(test, windows))]
+mod windows_security_tests;
 pub use journal::VerificationReport;
 pub use runs::{LocalScope, ProcessCustody, RunRecord};
 pub use sessions::{GentsSession, ResumeCandidate};
@@ -110,6 +112,9 @@ pub struct Mapping {
 pub struct Store {
     root: PathBuf,
     db: Connection,
+    // SQLite closes first. Leases may keep this full path alive independently.
+    #[cfg(windows)]
+    private_root: std::sync::Arc<private_fs::StateRoot>,
     // Connection-local only. Any future restore, deserialize, incremental-blob
     // mutation, or reconnect must clear this baseline before another write.
     verified: Option<journal::StateStamp>,
@@ -120,6 +125,8 @@ pub struct Store {
 /// An advisory profile lease. A free lease does not prove a previous child stopped.
 pub struct ProfileLease {
     _file: File,
+    #[cfg(windows)]
+    _private_root: std::sync::Arc<private_fs::StateRoot>,
     profile: ProfileId,
 }
 
@@ -140,9 +147,16 @@ impl Store {
     }
 
     pub fn open(root: &Path) -> Result<Self> {
-        let root = private_fs::normalize_root(root)?;
-        private_fs::directory(&root, true)?;
-        let root = dunce::canonicalize(root)?;
+        #[cfg(windows)]
+        let private_root = std::sync::Arc::new(private_fs::StateRoot::open(root, true)?);
+        #[cfg(windows)]
+        let root = private_root.path().to_owned();
+        #[cfg(not(windows))]
+        let root = {
+            let root = private_fs::normalize_root(root)?;
+            private_fs::directory(&root, true)?;
+            dunce::canonicalize(root)?
+        };
         root.to_str().ok_or(Error::NonUtf8Path)?;
         private_fs::directory(&root.join("profiles"), true)?;
         private_fs::directory(&root.join("locks"), true)?;
@@ -196,6 +210,8 @@ impl Store {
         Ok(Self {
             root,
             db,
+            #[cfg(windows)]
+            private_root,
             verified: None,
             #[cfg(test)]
             full_write_checks: 0,
@@ -395,6 +411,8 @@ impl Store {
         }
         Ok(ProfileLease {
             _file: file,
+            #[cfg(windows)]
+            _private_root: std::sync::Arc::clone(&self.private_root),
             profile: id,
         })
     }

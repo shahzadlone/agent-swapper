@@ -5,8 +5,19 @@ use std::{
 
 use crate::{Error, Result};
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub(crate) use windows::{StateRoot, validate_snapshot};
+
+#[cfg(windows)]
+pub(crate) fn normalize_root(path: &Path) -> Result<std::path::PathBuf> {
+    windows::normalize_root(path)
+}
+
 // Parent aliases such as macOS /var are resolved before checking the private
 // state tree. The state root itself and everything inside it must not be links.
+#[cfg(not(windows))]
 pub(crate) fn normalize_root(path: &Path) -> Result<std::path::PathBuf> {
     if !path.is_absolute() {
         return Err(Error::UnsafePath);
@@ -68,6 +79,12 @@ pub(crate) fn reject_links(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub(crate) fn directory(path: &Path, create: bool) -> Result<()> {
+    windows::directory(path, create)
+}
+
+#[cfg(not(windows))]
 pub(crate) fn directory(path: &Path, create: bool) -> Result<()> {
     reject_links(path)?;
     if !path.exists() {
@@ -123,6 +140,12 @@ pub(crate) fn read_required_file(path: &Path) -> Result<File> {
     open_private_file(path, false)
 }
 
+#[cfg(windows)]
+fn open_private_file(path: &Path, writable: bool) -> Result<File> {
+    windows::open_private_file(path, writable)
+}
+
+#[cfg(not(windows))]
 fn open_private_file(path: &Path, writable: bool) -> Result<File> {
     reject_links(path)?;
     let mut options = OpenOptions::new();
@@ -228,6 +251,7 @@ fn validate_optional_windows_snapshot(file: &File) -> Result<()> {
     if winapi_util::file::information(file)?.number_of_links() > 1 {
         return Err(Error::UnsafePath);
     }
+    validate_snapshot(file)?;
     Ok(())
 }
 

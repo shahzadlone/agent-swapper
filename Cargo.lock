@@ -82,6 +82,7 @@ name = "agentswapper-core"
 version = "0.1.0-dev"
 dependencies = [
  "age",
+ "agentswapper-windows-security",
  "ctrlc",
  "directories",
  "dunce",

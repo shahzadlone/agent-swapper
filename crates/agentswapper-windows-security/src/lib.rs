@@ -1,6 +1,7 @@
 //! Experimental Windows ACL primitives, not a complete private-path boundary.
 //!
-//! No production AgentSwapper crate depends on this qualification candidate.
+//! Windows core state access consumes this boundary; native integration and
+//! independent review gates remain open before claiming production privacy.
 //! Handle validation is a snapshot, not a guarantee against later ACL changes.
 //! Single-object APIs require a trusted, stable parent. A separate retained
 //! root candidate now acquires the full directory chain; its native qualification,
