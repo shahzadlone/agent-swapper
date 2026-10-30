@@ -18,7 +18,17 @@ they inspect the dashboard child's actual signal status, restored attributes
 and alternate-screen exit bytes. A repeated macOS run had missed that final byte
 sequence when inspecting an exited standalone PTY child. EOF races remain a
 separate direct-child fixture: signal delivery and peer closure must happen in
-the same actor. The strengthened session fixture passed on macOS at `16053be` in
+the same actor. Control requests and results are now published through a fully
+written staging file followed by rename. At `e694f70`, Linux reported a missing
+signal-exit result in [CI run 41137916922](https://github.com/shahzadlone/agent-swapper/actions/runs/41137916922).
+Deliberately pausing the old request write after creating its empty file
+reproduced that failure: the session owner could parse an incomplete integer
+and exit before delivering the signal. The regression pauses publication for
+100 ms and still requires the dashboard's exact signal status and terminal
+restoration. Failure diagnostics now include delivery state and the host's
+bounded output tail. Local dashboard/launch PTY checks pass; the original CI
+failure's complete cause is not established solely by this reproduction.
+The strengthened session fixture passed on macOS at `16053be` in
 [CI run 40975543816](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816/job/123802538852).
 
 ## Implemented foreground transition

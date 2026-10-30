@@ -16,7 +16,7 @@ import tempfile
 import termios
 import time
 
-from terminal_fixture import same_terminal_configuration
+from terminal_fixture import publish_control, same_terminal_configuration
 
 
 def read_available(master, output):
@@ -170,10 +170,11 @@ def signal_host(binary, root, capture_diagnostics):
                 watched = int(request.read_text())
                 assert watched in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]
                 child.send_signal(watched)  # Owned, unreaped child; no journal PID.
+                (root / "delivered").touch()
                 sent = True
             time.sleep(0.005)
         status = child.wait(timeout=3)
-        (root / "result").write_text(str(status))
+        publish_control(root / "result", str(status))
         while not (root / "stop").exists() and time.monotonic() < deadline:
             time.sleep(0.005)
     finally:
@@ -249,7 +250,7 @@ def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_di
             if partial is not None:
                 os.write(master, partial)
                 wait_for_consumed_input(slave, master, process, output)
-            (root / "signal").write_text(str(int(quit_signal)))
+            publish_control(root / "signal", str(int(quit_signal)))
             deadline = time.monotonic() + 5
             status = None
             while status is None:
@@ -257,7 +258,12 @@ def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_di
                 try:
                     status = int((root / "result").read_text())
                 except (OSError, ValueError):
-                    assert process.poll() is None and time.monotonic() < deadline, "dashboard did not finish its signal exit"
+                    assert process.poll() is None and time.monotonic() < deadline, (
+                        f"dashboard did not finish its signal exit: signal={quit_signal}; "
+                        f"partial={partial!r}; host_status={process.poll()}; "
+                        f"delivered={(root / 'delivered').exists()}; "
+                        f"output_tail={bytes(output[-2000:])!r}"
+                    )
                     time.sleep(0.005)
             details = (root / "stderr.txt").read_bytes()[-5000:] if capture_diagnostics else b""
             assert status == -quit_signal, f"signal termination was replaced: expected {-quit_signal}, got {status}; stderr={details!r}"
@@ -277,6 +283,24 @@ def check_signal(binary, quit_signal, close_peer=False, partial=None, capture_di
             if master is not None:
                 os.close(master)
             os.close(slave)
+
+
+def check_atomic_signal_publication(binary):
+    # Force the exact visibility window that used to crash signal_host before
+    # it delivered the signal. Cover both the old public name and the staging
+    # name, so reverting to a direct write makes this regression fail again.
+    from unittest.mock import patch
+
+    original = Path.write_text
+
+    def slow_control_write(path, value, *args, **kwargs):
+        if path.name in ("signal", ".signal.pending"):
+            original(path, "")
+            time.sleep(0.1)
+        return original(path, value, *args, **kwargs)
+
+    with patch.object(Path, "write_text", slow_control_write):
+        check_signal(binary, signal.SIGTERM, capture_diagnostics=True)
 
 
 def check_setup(binary):
@@ -420,6 +444,7 @@ def main():
     check(Path(sys.argv[2]).resolve(strict=True), b"\x03")
     for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
         check_signal(Path(sys.argv[1]).resolve(strict=True), quit_signal)
+    check_atomic_signal_publication(Path(sys.argv[1]).resolve(strict=True))
     check_signal(Path(sys.argv[1]).resolve(strict=True), signal.SIGHUP, close_peer=True)
     # The old Mio event reader could spin forever on EOF before returning to
     # the application's signal check. Repeat this previously intermittent race.

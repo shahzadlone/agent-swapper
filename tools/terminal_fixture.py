@@ -3,6 +3,13 @@ import sys
 import termios
 
 
+def publish_control(path, value):
+    """Publish a complete message in a private, single-writer fixture directory."""
+    pending = path.with_name(f".{path.name}.pending")
+    pending.write_text(value)
+    pending.replace(path)
+
+
 def same_terminal_configuration(before, after):
     before = list(before)
     after = list(after)
