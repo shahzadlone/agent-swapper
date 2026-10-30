@@ -110,6 +110,34 @@ That fixture restores the thread identity on every exit; restoration failure
 aborts the owned test process. It is not a separate-user access test.
 Compilation is separate from native execution evidence.
 
+An additional **ignored, CI-only** fixture creates a random local standard user
+on this repository's disposable GitHub-hosted Windows runner. It requires both
+the hosted-runner environment markers and `ASWP_CI_IDENTITY_FIXTURE=1` inside
+the account-creation helper. Ordinary test runs skip it; invoking the ignored
+test elsewhere refuses before account creation. The fixture calls `NetUserAdd`
+with the local server, then `LogonUserW` and `ImpersonateLoggedOnUser` on a
+dedicated thread. Its random password stays in zeroizing buffers, never argv,
+environment variables, fixture files or output. It changes no existing account
+or group. Cleanup owns a name only after successful creation, removes that
+account explicitly after the test, and also attempts cleanup on error/unwind.
+
+The other identity must first read and write a permissive control file. The
+fixture then requires Windows `ERROR_ACCESS_DENIED` for private reads, writes,
+security/delete access, removal, rename, listing and child creation; it finally
+checks original file bytes and cleanup. All owner-held file handles are closed
+before probing, so a sharing violation cannot masquerade as an ACL denial. The
+control parent grants others read/traverse, **not delete-child** access. A
+permissive ancestor with deletion rights remains a separate custody problem.
+This test does not cover every group policy, filesystem or vendor credential
+layout. Its execution result must be recorded before treating it as evidence.
+
+The fixture uses the documented [local account creation API](https://learn.microsoft.com/en-us/windows/win32/api/lmaccess/nf-lmaccess-netuseradd),
+[local logon API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-logonuserw)
+and [thread impersonation API](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-impersonateloggedonuser).
+Impersonation failure stops the probe, and failure to restore the thread's
+identity aborts the owned test process. A killed CI job relies on destruction
+of its disposable runner; it is not a supported local-machine test procedure.
+
 This is not yet a private-path API. Creation is anchored to the supplied parent
 object, but the caller must still establish that parent's identity and custody.
 The candidate does not pin or validate the full ancestor chain, establish custody

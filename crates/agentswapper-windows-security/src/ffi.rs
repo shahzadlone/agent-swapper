@@ -481,4 +481,6 @@ impl SecurityPolicy {
 }
 
 #[cfg(test)]
+mod identity_tests;
+#[cfg(test)]
 mod tests;

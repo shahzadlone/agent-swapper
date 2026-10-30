@@ -17,6 +17,11 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Secu
 proptest.workspace = true
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dev-dependencies]
+getrandom = "=0.4.3"
+zeroize.workspace = true
+windows-sys = { version = "=0.61.2", features = ["Win32_NetworkManagement_NetManagement"] }
+
 # The only exception to the workspace's forbid rule is ffi.rs. The core,
 # CLI, descriptor parser and policy remain entirely safe Rust.
 [lints.rust]

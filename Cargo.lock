@@ -111,10 +111,12 @@ dependencies = [
 name = "agentswapper-windows-security"
 version = "0.1.0-dev"
 dependencies = [
+ "getrandom 0.4.3",
  "proptest",
  "tempfile",
  "thiserror 2.0.21",
  "windows-sys",
+ "zeroize",
 ]
 
 [[package]]

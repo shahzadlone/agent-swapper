@@ -8,6 +8,10 @@ and neither the core nor CLI links this candidate. Unlike the earlier console
 wrappers, this is a deliberately owned, narrowly scoped unsafe boundary; see
 the [API invariants and qualification gates](windows-acl.md). The policy/parser
 uses only safe Rust. It does not adopt `windows-acl` or `windows-permissions`.
+Its explicit Windows CI identity fixture enables the bindings' local-account
+APIs as development dependencies only, plus already-locked `getrandom 0.4.3`
+and `zeroize` for in-memory fixture passwords. No new external package is added;
+these test capabilities are absent from the core/CLI dependency path.
 
 The Unix native-launch path enables the existing `rustix` termios feature to
 save and restore foreground terminal attributes after an observed child exit.
