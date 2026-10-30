@@ -207,7 +207,10 @@ full-control (`0x001f01ff`) ACEs for the expected trustees. The original rule
 incorrectly required `SE_DACL_AUTO_INHERITED` and refused that valid layout.
 The corrected rule keeps every trustee, right and ACE flag check and permits
 either bookkeeping-bit value. The failed run is diagnostic evidence only;
-the correction still needs its own successful native run.
+the correction needed its own successful native run. At `65d9960`, the actual
+database/WAL/SHM checks and separate-user inherited-file probes passed in
+[CI run 41007621318](https://github.com/shahzadlone/agent-swapper/actions/runs/41007621318),
+along with the complete platform, package, rebuild and provenance pipeline.
 The owner must be one of those same trusted principals: system-created files
 can select a token's default owner. This adds no principal beyond those already
 granted full control. It does not accept arbitrary vendor permission layouts.
@@ -276,6 +279,24 @@ target and match the observed reparse attributes. A bad payload or missing
 privilege cannot count as a successful negative test. Cleanup checks that the
 target remains intact. Until these checks and component-by-component custody
 pass, ancestor privacy remains unqualified.
+
+At `65d9960`, that complete run observed successful junction mutation for
+create-subdirectory and combined rights, and access denial for read-only,
+delete-child and delete-self rights. Actual reparse attributes, target reads
+and cleanup were verified. This supports refusing create-subdirectory rights
+in the ordinary snapshot policy. It does not qualify deletion rights generally.
+
+The next fixture reads actual handle grants with `NtQueryInformationFile` and
+compares an empty directory with a parent containing a retained protected child.
+The empty create-subdirectory control must redirect successfully; the nonempty
+parent must return directory-not-empty (145), and the other identity must fail
+to acquire deletion rights, remove or rename the protected child. This follows
+the nonempty-directory rule in Microsoft's
+[FSCTL operation specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/4aeefef8-92c3-4abc-af7a-a610caf8a165).
+Handle grants, original child bytes and reparse attributes are checked. A
+successful empty control is required before any nonempty result is credited.
+Until this is measured, no conditional exception for create-subdirectory
+rights is implemented. In particular, no actual system-drive root is mutated.
 
 ## Required before a privacy claim
 

@@ -3,6 +3,9 @@
 
 use super::*;
 use std::path::PathBuf;
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_ACCESS_INFORMATION, FileAccessInformation, NtQueryInformationFile,
+};
 use windows_sys::Win32::{
     Storage::FileSystem::{
         FILE_ADD_SUBDIRECTORY, FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
@@ -16,6 +19,13 @@ pub(super) struct Fixture {
     target: PathBuf,
     control: PathBuf,
     cases: Vec<Probe>,
+    nonempty: PathBuf,
+}
+
+// Kept only by the original fixture identity, never passed into its probes.
+pub(super) struct Custody {
+    _child: File,
+    _parent: File,
 }
 
 #[derive(Clone)]
@@ -26,10 +36,11 @@ struct Probe {
 }
 
 impl Fixture {
-    pub(super) fn prepare(root: &Path, policy: &SecurityPolicy) -> Self {
+    pub(super) fn prepare(root: &Path, policy: &SecurityPolicy) -> (Self, Custody) {
         let fixture = Self {
             target: root.join("junction-target"),
             control: root.join("junction-control"),
+            nonempty: root.join("junction-nonempty"),
             cases: [
                 ("read-only", 0),
                 ("create-subdirectory", FILE_ADD_SUBDIRECTORY),
@@ -69,7 +80,36 @@ impl Fixture {
             .unwrap();
             drop(create(&probe.directory, ObjectKind::Directory, &limited).unwrap());
         }
-        fixture
+        let parent_sd = LocalDescriptor::from_sddl(&format!(
+            "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x001200ad;;;WD)",
+            policy.owner.sddl(),
+            policy.owner.sddl()
+        ))
+        .unwrap();
+        let parent = create(&fixture.nonempty, ObjectKind::Directory, &parent_sd).unwrap();
+        let child_sd = policy.creation_descriptor(ObjectKind::Directory).unwrap();
+        let child = create_at(
+            &parent,
+            OsStr::new("protected-child"),
+            ObjectKind::Directory,
+            &child_sd,
+        )
+        .unwrap();
+        policy
+            .validate_handle(&child, ObjectKind::Directory)
+            .unwrap();
+        std::fs::write(
+            fixture.nonempty.join("protected-child/canary.txt"),
+            b"protected child fixture",
+        )
+        .unwrap();
+        (
+            fixture,
+            Custody {
+                _child: child,
+                _parent: parent,
+            },
+        )
     }
 
     pub(super) fn probe_as_other_user(&self) -> Vec<bool> {
@@ -83,11 +123,14 @@ impl Fixture {
             std::fs::read(self.control.join("canary.txt")).unwrap(),
             b"junction target fixture"
         );
-        self.cases.iter().map(|probe| {
+        let results: Vec<_> = self.cases.iter().map(|probe| {
             for access in [FILE_WRITE_DATA, FILE_WRITE_EA, FILE_WRITE_ATTRIBUTES, WRITE_DAC, WRITE_OWNER] {
                 denied(open_directory(&probe.directory, access), "open ancestor mutation rights");
             }
             let directory = open_directory(&probe.directory, probe.rights).unwrap();
+            let granted = granted_access(&directory);
+            assert_eq!(granted & (FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES), 0);
+            println!("::notice title=Windows junction granted access::{}: requested=0x{:08x}, granted=0x{granted:08x}", probe.label, probe.rights);
             let changed = match set_junction(&directory, &payload) {
                 Ok(()) => true,
                 Err(error) if error.raw_os_error() == Some(5) => false,
@@ -101,7 +144,37 @@ impl Fixture {
                 assert!(!changed, "read-only directory allowed junction mutation");
             }
             changed
-        }).collect()
+        }).collect();
+        assert!(
+            results[1],
+            "empty create-subdirectory control must permit junction mutation before qualifying nonempty protection"
+        );
+        let directory = open_directory(
+            &self.nonempty,
+            FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY,
+        )
+        .unwrap();
+        match set_junction(&directory, &payload) {
+            Err(error) if error.raw_os_error() == Some(145) => {}
+            Err(error) => {
+                panic!("nonempty junction probe: expected directory not empty (145), got {error}")
+            }
+            Ok(()) => panic!("nonempty ancestor unexpectedly became a junction"),
+        }
+        let child = self.nonempty.join("protected-child");
+        denied(
+            open_directory(&child, DELETE),
+            "open protected child for deletion",
+        );
+        denied(std::fs::remove_dir(&child), "remove protected child");
+        denied(
+            std::fs::rename(&child, self.nonempty.join("moved-child")),
+            "rename protected child",
+        );
+        println!(
+            "::notice title=Windows nonempty ancestor::matched empty control redirected; parent with retained protected child refused junction mutation with directory-not-empty (145); other user denied child delete access, removal and rename"
+        );
+        results
     }
 
     pub(super) fn verify_and_remove_junction(&self, results: &[bool]) {
@@ -113,6 +186,18 @@ impl Fixture {
             0
         );
         assert_eq!(results.len(), self.cases.len());
+        assert_eq!(
+            std::fs::symlink_metadata(&self.nonempty)
+                .unwrap()
+                .file_attributes()
+                & FILE_ATTRIBUTE_REPARSE_POINT,
+            0
+        );
+        assert_eq!(
+            std::fs::read(self.nonempty.join("protected-child/canary.txt")).unwrap(),
+            b"protected child fixture"
+        );
+        assert!(!self.nonempty.join("moved-child").exists());
         for (probe, changed) in self.cases.iter().zip(results) {
             assert_eq!(
                 std::fs::symlink_metadata(&probe.directory)
@@ -138,6 +223,31 @@ impl Fixture {
             "::notice title=Windows ancestor reparse mutation::temporary standard user installed a junction in a permissive control; read-only ancestor refused mutation; extra rights measured individually; actual reparse state and target preservation checked"
         );
     }
+}
+
+fn granted_access(file: &File) -> u32 {
+    let mut information = FILE_ACCESS_INFORMATION::default();
+    let mut status_block = IO_STATUS_BLOCK::default();
+    // SAFETY: live synchronous handle, correctly aligned/initialized fixed-size
+    // SDK output and status structures; no paths or caller-controlled pointers.
+    let status = unsafe {
+        NtQueryInformationFile(
+            file.as_raw_handle(),
+            &mut status_block,
+            (&mut information as *mut FILE_ACCESS_INFORMATION).cast(),
+            size_of::<FILE_ACCESS_INFORMATION>() as u32,
+            FileAccessInformation,
+        )
+    };
+    assert!(
+        status >= 0,
+        "query granted access failed with NTSTATUS {status}"
+    );
+    assert_eq!(
+        status_block.Information,
+        size_of::<FILE_ACCESS_INFORMATION>()
+    );
+    information.AccessFlags
 }
 
 fn open_directory(path: &Path, access: u32) -> io::Result<File> {

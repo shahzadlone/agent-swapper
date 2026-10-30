@@ -209,7 +209,7 @@ fn separate_identity_cannot_access_private_objects() {
     let (account, token) = FixtureAccount::create().unwrap();
     let root = tempfile::tempdir().unwrap();
     let policy = SecurityPolicy::for_current_process().unwrap();
-    let reparse = reparse::Fixture::prepare(root.path(), &policy);
+    let (reparse, _reparse_custody) = reparse::Fixture::prepare(root.path(), &policy);
     let reparse_for_thread = reparse.clone();
     // Everyone can read/traverse this parent, but cannot delete children. A
     // permissive control file proves the new user can actually reach the tree.
