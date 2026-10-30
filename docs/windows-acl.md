@@ -124,8 +124,8 @@ account explicitly after the test, and also attempts cleanup on error/unwind.
 The other identity must first read and write a permissive control file. The
 fixture then requires Windows `ERROR_ACCESS_DENIED` for private reads, writes,
 security/delete access, removal, rename, listing and child creation; it finally
-checks original file bytes and cleanup. All owner-held file handles are closed
-before probing, so a sharing violation cannot masquerade as an ACL denial. The
+checks original file bytes and cleanup. For these ACL-only probes, owner-held
+file handles are closed first, so a sharing violation cannot masquerade as an ACL denial. The
 control parent grants others read/traverse, **not delete-child** access. A
 permissive ancestor with deletion rights remains a separate custody problem.
 The fixture also exercises that case explicitly: under an additional parent
@@ -148,7 +148,7 @@ This is not yet a private-path API. Creation is anchored to the supplied parent
 object, but the caller must still establish that parent's identity and custody.
 The candidate does not pin or validate the full ancestor chain, establish custody
 against parent deletion rights, validate remote/mapped-drive behavior, protect
-future vendor-created descendants, or prove denial to a separate user. A handle
+future vendor-created descendants, or qualify real vendor credential layouts. A handle
 snapshot also cannot prevent later changes by trusted principals. Those gaps
 must be resolved before storage integration or a privacy claim.
 
@@ -157,8 +157,17 @@ must be resolved before storage integration or a privacy claim.
 The initial candidate's seven native fixtures and portable parser tests passed
 at `54c7b19` in [CI run 40999147184](https://github.com/shahzadlone/agent-swapper/actions/runs/40999147184),
 including the complete candidate/rebuild/provenance pipeline. This is evidence
-for the initial snapshot/creation implementation only; later relative-creation
-and separate-identity changes require their own execution results.
+for the initial snapshot/creation implementation only. At `444cd71`, the expanded
+eleven native fixtures, twelve portable parser tests and full pipeline passed
+in [CI run 40999776258](https://github.com/shahzadlone/agent-swapper/actions/runs/40999776258).
+That run covers parent-handle creation, replacement, reparse and impersonation
+refusal. At `515e519`, the native separate-identity fixture passed in
+[CI run 41000440257](https://github.com/shahzadlone/agent-swapper/actions/runs/41000440257):
+the temporary standard user read/wrote the permissive control and received
+access-denied errors for the protected operations; original bytes and account
+removal were checked. That result predates the parent-delete-child experiment
+and does not itself establish packaging/rebuild success or production privacy.
+Later parent-custody and parser changes need their own results.
 
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle

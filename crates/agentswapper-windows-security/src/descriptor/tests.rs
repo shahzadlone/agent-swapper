@@ -232,6 +232,53 @@ fn accepts_reordered_descriptor_regions_but_refuses_absolute_format() {
     ));
 }
 
+#[test]
+fn every_single_bit_change_to_owner_or_permissions_is_refused() {
+    // The exact policy must not accept a changed SID, right, ACE form, flag,
+    // ACL length/count or reserved field after otherwise-valid framing.
+    for kind in [ObjectKind::File, ObjectKind::Directory] {
+        let original = valid(kind);
+        for index in 20..original.len() {
+            for bit in 0..8 {
+                let mut changed = original.clone();
+                changed[index] ^= 1 << bit;
+                assert!(
+                    policy().validate_descriptor(&changed, kind).is_err(),
+                    "accepted changed byte {index}, bit {bit}, kind {kind:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn refuses_oversized_descriptors_and_unrecognized_revisions() {
+    let mut oversized = valid(ObjectKind::File);
+    oversized.resize(MAX_DESCRIPTOR + 1, 0);
+    assert!(matches!(
+        policy().validate_descriptor(&oversized, ObjectKind::File),
+        Err(Error::InvalidDescriptor)
+    ));
+    for revision in [0, 2, 3, 4, 255] {
+        let mut bytes = valid(ObjectKind::File);
+        bytes[0] = revision;
+        assert!(
+            policy()
+                .validate_descriptor(&bytes, ObjectKind::File)
+                .is_err()
+        );
+    }
+    for revision in [0, 1, 3, 4, 255] {
+        let mut bytes = valid(ObjectKind::File);
+        bytes[20 + USER.len()] = revision;
+        assert!(
+            policy()
+                .validate_descriptor(&bytes, ObjectKind::File)
+                .is_err()
+        );
+    }
+}
+
 proptest! {
     #[test]
     fn arbitrary_descriptor_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
