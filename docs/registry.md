@@ -71,7 +71,12 @@ handle remained open. The corrected experiment also records name existence and
 does not claim access-denied coverage when that state is absent. Separate error-injection
 checks require persistent denial to fail and recheck an actual missing or
 hardlinked replacement after an initial denial. Whether the recheck resolves
-the original concurrency failure remains pending.
+the original concurrency failure is addressed remains under observation. The
+corrected tests and all 100 initialization stress iterations passed at `e710461`
+in [CI run 40994977116](https://github.com/shahzadlone/agent-swapper/actions/runs/40994977116).
+That runner reported `name present=false` after `DeleteFileW`, so the experiment
+does not reproduce the earlier access-denied state. Error-injection coverage
+establishes the recheck's refusal rules separately.
 
 Migration backups use a distinct required read-only open and a second fingerprint
 check of the published snapshot. Absence cannot create a new empty backup or be

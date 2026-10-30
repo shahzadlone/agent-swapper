@@ -44,6 +44,10 @@ discard unread secret input before re-raising the original signal. Signal
 handling remains active through cryptography; cancellation is checked before
 publishing a new pack or printing decrypted content. Cancelled entry creates no
 pack. Pipe-based input keeps its existing noninteractive behavior.
+Losing the terminal peer during hidden entry also aborts without creating a
+pack, including when no hangup signal is delivered. A non-consuming POSIX poll
+checks for disconnect before and after event polling; an idle or incomplete
+input sequence is not treated as end-of-file.
 
 On Windows, hidden entry captures the original console modes through owned
 handles and restores and verifies them on success, cancellation and input

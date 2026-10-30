@@ -1,6 +1,46 @@
 //! Keep incomplete terminal input from blocking signal-aware event loops.
 use std::io;
 
+/// Crossterm's bounded TTY backend can return an empty poll after hangup.
+/// Distinguish that from an idle terminal without consuming any input bytes.
+pub(crate) fn poll(timeout: std::time::Duration) -> io::Result<bool> {
+    #[cfg(unix)]
+    check_connected()?;
+    let ready = crossterm::event::poll(timeout)?;
+    #[cfg(unix)]
+    check_connected()?;
+    Ok(ready)
+}
+
+#[cfg(unix)]
+fn check_connected() -> io::Result<()> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let stdin = io::stdin();
+    let mut descriptors = [PollFd::new(&stdin, PollFlags::IN)];
+    match poll(
+        &mut descriptors,
+        Some(&Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        }),
+    ) {
+        Ok(_) => {}
+        // Let the caller's signal guard decide how to handle interruption.
+        Err(rustix::io::Errno::INTR) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    if descriptors[0]
+        .revents()
+        .intersects(PollFlags::HUP | PollFlags::ERR | PollFlags::NVAL)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "terminal input disconnected",
+        ));
+    }
+    Ok(())
+}
+
 /// The caller must install its restoration guard before invoking this function.
 pub(crate) fn enable_raw_mode() -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()?;

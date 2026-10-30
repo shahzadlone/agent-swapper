@@ -118,6 +118,10 @@ trip. It verifies exact terminal settings, original signal termination, no echoe
 canaries and no ciphertext publication on cancelled entry. It also checks
 incomplete UTF-8/escape sequences and delayed valid Unicode. CI runs these cases
 on Linux and macOS. These tests do not read native credentials.
+Six additional cases close a non-controlling PTY peer at either password prompt,
+with empty, incomplete UTF-8 or incomplete escape input. No signal is sent;
+the command must exit with failure within three seconds and publish no pack.
+This reproduced an indefinite wait before the disconnect check was added.
 
 `check_windows_handover_conpty.py` adds hidden-entry checks in a disposable
 Windows pseudoconsole, using a deliberately nondefault initial input mode.

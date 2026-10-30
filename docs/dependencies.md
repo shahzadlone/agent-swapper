@@ -5,6 +5,14 @@ save and restore foreground terminal attributes after an observed child exit.
 This uses an already locked dependency and adds no new package. It does not
 restore a terminal after supervisor termination or establish descendant custody.
 
+The CLI also enables rustix's existing `event` feature for a zero-timeout,
+borrowed-descriptor `poll` around interactive event reads. Review covered
+`PollFd` borrowing, timeout conversion and returned HUP/ERR/NVAL flags. It reads
+no input bytes and ignores an interrupted probe so the caller's signal guard
+can decide termination. This closes a reproduced non-controlling-PTY hang:
+crossterm's bounded TTY poll can repeatedly return empty after its peer closes.
+The check is shared by dashboard and hidden entry and adds no package.
+
 Windows native launch uses the already-locked `winapi-util 0.1.11` safe console
 mode APIs and standard-library owned handle clones. Review covered its
 GetConsoleMode/SetConsoleMode wrappers; no raw handle construction or unsafe

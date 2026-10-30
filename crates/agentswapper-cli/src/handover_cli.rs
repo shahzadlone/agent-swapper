@@ -170,7 +170,7 @@ fn hidden_passphrase(prompt: &str, interrupted: &impl Fn() -> bool) -> Result<Se
     let mut value = Zeroizing::new(String::new());
     loop {
         check_interrupted(interrupted)?;
-        if !event::poll(Duration::from_millis(100))? {
+        if !crate::terminal_input::poll(Duration::from_millis(100))? {
             continue;
         }
         let key = match event::read()? {

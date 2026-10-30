@@ -37,6 +37,38 @@ class Sandbox:
         subprocess.run(self.base + ["profile", "add", "claude", "--alias", "fixture"],
                        env=self.env, check=True, capture_output=True, timeout=10)
 
+    def disconnect(self, confirmation, partial):
+        """A non-controlling PTY sends no SIGHUP when its peer disappears."""
+        destination = self.root / "disconnected.age"
+        command = self.base + ["handover", "pack", "--from", "fixture", "--input", str(self.note),
+                               "--output", str(destination)]
+        master, slave = pty.openpty()
+        process = None
+        try:
+            process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
+                                       cwd=self.workspace, env=self.env, start_new_session=True)
+            output = bytearray()
+            drain(master, process, output, b"Handover passphrase:")
+            if confirmation:
+                os.write(master, PASSPHRASE + b"\r")
+                drain(master, process, output, b"Confirm passphrase:")
+            if partial:
+                os.write(master, PARTIAL + partial)
+                wait_for_consumed_input(slave, master, process, output)
+            os.close(master)
+            master = None
+            assert process.wait(timeout=3) == 125, "disconnected prompt did not fail cleanly"
+            assert not destination.exists(), "disconnected entry published ciphertext"
+            assert PASSPHRASE not in output and PARTIAL not in output
+            print(f"peer-disconnect confirm={confirmation} partial={partial!r}: pass", flush=True)
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
+            if master is not None:
+                os.close(master)
+            os.close(slave)
+
     def check(self, name, action, confirmation=False, passphrase=PASSPHRASE):
         output_path = self.root / f"{name}.age"
         command = self.base + ["handover", "pack", "--from", "fixture", "--input", str(self.note),
@@ -171,6 +203,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="aswp-handover-pty-") as directory:
         sandbox = Sandbox(binary, Path(directory))
         for confirmation in [False, True]:
+            for partial in [b"", b"\xc3", b"\x1b["]:
+                sandbox.disconnect(confirmation, partial)
             phase = "confirm" if confirmation else "first"
             for quit_signal in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
                 sandbox.check(f"{phase}-{quit_signal.name}", quit_signal, confirmation)

@@ -273,7 +273,7 @@ fn run_terminal(
             break;
         }
         terminal.draw(|frame| draw(frame, app))?;
-        if !event::poll(Duration::from_millis(250))? {
+        if !crate::terminal_input::poll(Duration::from_millis(250))? {
             continue;
         }
         let Event::Key(key) = event::read()? else {

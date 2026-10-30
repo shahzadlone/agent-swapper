@@ -36,7 +36,7 @@ insta = "1"
 [target.'cfg(unix)'.dependencies]
 crossterm = { version = "=0.29.0", features = ["use-dev-tty"] }
 signal-hook = { version = "=0.3.18", default-features = false }
-rustix = { version = "1", features = ["termios"] }
+rustix = { version = "1", features = ["termios", "event"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1", features = ["process"] }
