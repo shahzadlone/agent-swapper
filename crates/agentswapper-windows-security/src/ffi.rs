@@ -611,7 +611,7 @@ impl SecurityPolicy {
 
     /// Reopen one existing inherited directory under a protected or strictly
     /// inherited private parent. Retain every returned handle back to a guarded
-    /// root. Excludes write/delete sharing and never creates, follows reparses,
+    /// root. Excludes deletion sharing and never creates, follows reparses,
     /// or changes permissions. Inheritance flags alone do not prove ancestry.
     pub fn open_existing_inherited_directory_at(
         &self,
@@ -625,7 +625,7 @@ impl SecurityPolicy {
             name,
             ObjectKind::Directory,
             OpenMode::Existing(FileAccess::ReadOnly),
-            FILE_SHARE_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
         )?;
         validate_object(&directory, ObjectKind::Directory)?;
         let descriptor = LocalDescriptor::from_file(&directory)?;

@@ -305,6 +305,13 @@ fn write_custody_rejects_preexisting_and_later_writers_but_metadata_only_opens_d
     let policy = SecurityPolicy::for_current_process().unwrap();
     let parent = fixture.path().join("parent");
     let leaf = parent.join("private");
+    let public = LocalDescriptor::from_sddl(&format!(
+        "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x001200ad;;;WD)",
+        policy.owner.sddl(),
+        policy.owner.sddl()
+    ))
+    .unwrap();
+    drop(create(&parent, ObjectKind::Directory, &public).unwrap());
     drop(policy.open_or_create_private_root(&leaf).unwrap());
     let open = |access, sharing| {
         std::fs::OpenOptions::new()
@@ -322,6 +329,11 @@ fn write_custody_rejects_preexisting_and_later_writers_but_metadata_only_opens_d
     assert!(
         matches!(policy.open_or_create_private_root(&leaf), Err(Error::Io(error)) if error.raw_os_error() == Some(32))
     );
+    let blocked = parent.join("blocked");
+    assert!(
+        matches!(policy.open_or_create_private_root(&blocked), Err(Error::Io(error)) if error.raw_os_error() == Some(32))
+    );
+    assert!(!blocked.exists());
     drop(writer);
     let guard = policy.open_or_create_private_root(&leaf).unwrap();
     assert_eq!(
@@ -337,6 +349,33 @@ fn write_custody_rejects_preexisting_and_later_writers_but_metadata_only_opens_d
     drop(open(FILE_ADD_SUBDIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE).unwrap());
     println!(
         "::notice title=Windows directory write custody::metadata-only control allowed an AD4 writer; retained root refused preexisting/later AD4 handles with sharing violation, allowed child creation, and released exclusion on drop"
+    );
+}
+
+#[test]
+fn exact_private_directories_allow_owner_updates_while_names_remain_retained() {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY};
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let path = fixture.path().join("private");
+    let root = policy.open_or_create_private_root(&path).unwrap();
+    let writer = std::fs::OpenOptions::new()
+        .access_mode(FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE | SYNCHRONIZE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(root.path())
+        .unwrap();
+    let peer = policy.open_existing_private_root(root.path()).unwrap();
+    std::fs::write(root.path().join("pending"), b"private update").unwrap();
+    std::fs::rename(root.path().join("pending"), root.path().join("published")).unwrap();
+    assert_eq!(
+        std::fs::read(peer.path().join("published")).unwrap(),
+        b"private update"
+    );
+    assert!(std::fs::rename(&path, path.with_extension("moved")).is_err());
+    drop(writer);
+    println!(
+        "::notice title=Windows private directory compatibility::exact private root allowed owner ADD_FILE/ADD_SUBDIRECTORY handle, concurrent guarded reopen and child rename while retaining the directory name"
     );
 }
 

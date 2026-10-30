@@ -336,8 +336,10 @@ create-subdirectory (`0x4`) in addition to the public read-only mask. Every
 retained child is independently checked, every ancestor refuses untrusted
 DELETE and DELETE_CHILD, and the complete chain is checked again from leaf to
 volume root before returning. A nonempty chain alone is not credited as
-protection against every reparse tag: retained handles additionally exclude
-write access, including ADD_SUBDIRECTORY/APPEND_DATA. The implementation does
+protection against every reparse tag: retained public-ancestor handles additionally
+exclude write access, including ADD_SUBDIRECTORY/APPEND_DATA. Exact private
+directories use their three-principal DACL and retain deletion exclusion while
+permitting owner writes, as explained in the consumer qualification below. The implementation does
 not treat a standalone AD4 descriptor snapshot as safe. Reparse checks occur again after child acquisition;
 no sensitive data is written during construction. Failures can leave empty
 protected directories, which are not removed through uncertain pathnames.
@@ -469,7 +471,7 @@ inheritance bit is mandatory. This follows the documented
 and does not infer parentage merely from a flag.
 
 The relative inherited-directory opener validates its actual private parent,
-then opens the child without write/delete sharing and checks its type, device
+then opens the child without deletion sharing and checks its type, device
 and exact descriptor. Parents may be protected or strictly inherited; callers
 must retain every handle to the guarded root. The inherited-file opener accepts
 that same parent policy. These operations never create missing children or
@@ -523,6 +525,27 @@ then checks original application state. These additions await native results.
 the production core still does not depend on or own the guard. No new registry
 package is introduced. This fixture addresses consumer compatibility but
 does not by itself establish correct guard lifetimes throughout production.
+
+The first actual-core run at `74c1b36` failed at the initial settings save with
+sharing violation (32) in
+[CI run 41141137639](https://github.com/shahzadlone/agent-swapper/actions/runs/41141137639).
+The all-directory write-sharing exclusion is incompatible with normal settings
+replacement. The constructor now classifies each retained directory: an exact
+private DACL permits write sharing; a public ancestor requires a write-excluding
+reopen and fresh validation **before any child lookup or creation**. The original
+handle keeps deletion excluded during that reopen. Final checks use each
+handle's original policy class, so a private handle cannot silently fall back to
+the broader ancestor policy. The volume anchor still excludes writes/deletion.
+
+The public AD4 preexisting/later-writer and reparse probes remain mandatory.
+A private-directory positive control must allow an owner write handle, concurrent
+root reopening and child rename while refusing rename of the retained directory.
+Actual settings replacement and registry use must also pass. This refined
+sharing policy still needs native qualification and independent review; the
+older successful synthetic SQLite probe did not qualify this consumer behavior.
+The same run also caught a missing version on the local core test dependency;
+that dependency now has an exact workspace-version requirement and still adds
+no third-party package.
 
 The initial candidate's seven native fixtures and portable parser tests passed
 at `54c7b19` in [CI run 40999147184](https://github.com/shahzadlone/agent-swapper/actions/runs/40999147184),

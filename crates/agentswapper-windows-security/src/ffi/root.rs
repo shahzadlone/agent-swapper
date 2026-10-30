@@ -1,6 +1,7 @@
 //! Candidate full-path custody. Only this constructor can combine AD4 ancestor
 //! classification with retained, independently validated children and refusal
-//! of write/delete sharing. No caller
+//! of write/delete sharing for public ancestors. Exact private directories
+//! permit trusted writers while retaining deletion exclusion. No caller
 //! can obtain an accepted ancestor snapshot using that exception.
 
 use super::*;
@@ -11,6 +12,17 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 const MAX_COMPONENTS: usize = 128;
 const MAX_PATH_UNITS: usize = 32767;
+
+#[derive(Clone, Copy)]
+enum DirectoryPolicy {
+    Private,
+    Ancestor,
+}
+
+struct RetainedDirectory {
+    file: File,
+    policy: DirectoryPolicy,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RootOpen {
@@ -27,7 +39,7 @@ enum RootOpen {
 #[must_use = "keep the full ancestor chain alive while using the private path"]
 pub struct PrivateRoot {
     root: File,
-    _ancestors: Vec<File>,
+    _ancestors: Vec<RetainedDirectory>,
     path: PathBuf,
 }
 
@@ -90,19 +102,22 @@ impl SecurityPolicy {
             return Err(Error::UnsupportedPath);
         }
         let descriptor = self.creation_descriptor(ObjectKind::Directory)?;
-        let mut directory = open_volume_root(letter)?;
+        let mut directory = RetainedDirectory {
+            file: open_volume_root(letter)?,
+            policy: DirectoryPolicy::Ancestor,
+        };
         let mut ancestors = Vec::with_capacity(names.len());
         for name in names {
             // Precheck before creating even an empty child. AD4 is provisional
             // here: no guard or pathname reaches the caller until the complete
             // retained chain has passed the bottom-up checks below.
-            self.validate_traversed_directory(&directory)?;
+            self.validate_retained_directory(&directory)?;
             let child = match open_at_with_sharing(
-                &directory,
+                &directory.file,
                 name,
                 ObjectKind::Directory,
                 OpenMode::Existing(FileAccess::ReadOnly),
-                FILE_SHARE_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
             ) {
                 Ok(child) => child,
                 Err(Error::Io(error))
@@ -110,22 +125,22 @@ impl SecurityPolicy {
                         && error.kind() == io::ErrorKind::NotFound =>
                 {
                     match open_at_with_sharing(
-                        &directory,
+                        &directory.file,
                         name,
                         ObjectKind::Directory,
                         OpenMode::Create(&descriptor),
-                        FILE_SHARE_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
                     ) {
                         Ok(child) => child,
                         // A peer may have won exclusive creation. Reopen once
                         // and subject that actual object to the same policy.
                         Err(Error::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists => {
                             open_at_with_sharing(
-                                &directory,
+                                &directory.file,
                                 name,
                                 ObjectKind::Directory,
                                 OpenMode::Existing(FileAccess::ReadOnly),
-                                FILE_SHARE_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE,
                             )?
                         }
                         Err(error) => return Err(error),
@@ -133,32 +148,67 @@ impl SecurityPolicy {
                 }
                 Err(error) => return Err(error),
             };
-            validate_object(&child, ObjectKind::Directory)?;
+            // A private DACL grants no ordinary other user mutation rights.
+            // Its directory must permit owner writes: Windows replacement APIs
+            // may open the target parent for writing. Otherwise, upgrade to a
+            // write-excluding handle and revalidate before any child lookup.
+            let child = if self.validate_private_parent(&child).is_ok() {
+                RetainedDirectory {
+                    file: child,
+                    policy: DirectoryPolicy::Private,
+                }
+            } else {
+                self.validate_traversed_directory(&child)?;
+                let guarded = open_at_with_sharing(
+                    &directory.file,
+                    name,
+                    ObjectKind::Directory,
+                    OpenMode::Existing(FileAccess::ReadOnly),
+                    FILE_SHARE_READ,
+                )?;
+                self.validate_traversed_directory(&guarded)?;
+                // The original handle excluded deletion throughout the reopen.
+                drop(child);
+                RetainedDirectory {
+                    file: guarded,
+                    policy: DirectoryPolicy::Ancestor,
+                }
+            };
             ancestors.push(directory);
             directory = child;
         }
         // The final child cannot grant untrusted deletion rights. Every
-        // ancestor likewise denies DELETE/DELETE_CHILD. Write sharing is also
-        // excluded: nonemptiness alone does not qualify every reparse tag.
-        // Recheck every actual handle before publishing any usable pathname.
+        // ancestor likewise denies DELETE/DELETE_CHILD. Public ancestors also
+        // exclude write sharing; exact private directories rely on their DACL.
+        // Recheck each handle using the policy that selected its sharing mode
+        // before publishing any usable pathname.
         match mode {
-            RootOpen::CreateProtected => self.validate_handle(&directory, ObjectKind::Directory)?,
-            RootOpen::ExistingPrivate => self.validate_private_parent(&directory)?,
+            RootOpen::CreateProtected => {
+                self.validate_handle(&directory.file, ObjectKind::Directory)?
+            }
+            RootOpen::ExistingPrivate => self.validate_private_parent(&directory.file)?,
         }
         for ancestor in ancestors.iter().rev() {
-            self.validate_traversed_directory(ancestor)?;
+            self.validate_retained_directory(ancestor)?;
         }
-        let path = final_path(&directory, VOLUME_NAME_DOS)?;
+        let path = final_path(&directory.file, VOLUME_NAME_DOS)?;
         wide_path(&path)?;
         if !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(actual) if actual.eq_ignore_ascii_case(&letter)))
         {
             return Err(Error::UnsupportedPath);
         }
         Ok(PrivateRoot {
-            root: directory,
+            root: directory.file,
             _ancestors: ancestors,
             path,
         })
+    }
+
+    fn validate_retained_directory(&self, directory: &RetainedDirectory) -> Result<()> {
+        match directory.policy {
+            DirectoryPolicy::Private => self.validate_private_parent(&directory.file),
+            DirectoryPolicy::Ancestor => self.validate_traversed_directory(&directory.file),
+        }
     }
 
     fn validate_traversed_directory(&self, directory: &File) -> Result<()> {
