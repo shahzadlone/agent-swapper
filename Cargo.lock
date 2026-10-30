@@ -111,6 +111,7 @@ dependencies = [
 name = "agentswapper-windows-security"
 version = "0.1.0-dev"
 dependencies = [
+ "agentswapper-core",
  "getrandom 0.4.3",
  "proptest",
  "rusqlite",

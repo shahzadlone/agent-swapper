@@ -18,6 +18,7 @@ proptest.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
+agentswapper-core = { path = "../agentswapper-core" }
 rusqlite = { version = "0.41", features = ["bundled"] }
 getrandom = "=0.4.3"
 zeroize.workspace = true

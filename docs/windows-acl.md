@@ -497,6 +497,19 @@ review. They qualify filesystem behavior, not real vendor credential layouts.
 
 ## Required before a privacy claim
 
+A consumer-compatibility fixture now wraps the actual core `Store`,
+`ConfigStore` and `ProfileLease` in an externally retained candidate root. It
+creates only fictional profiles and data, verifies every registry/sidecar,
+configuration, lock and profile-file descriptor, replaces settings twice,
+and checks registry replay plus a concurrent reopen. The separate-user probe
+must reach a public control in that exact profile directory while private
+reads/writes/deletes, child injection and directory renames fail. The owner
+then checks original application state. These additions await native results.
+`agentswapper-core` is a Windows-only **test dependency of the candidate**;
+the production core still does not depend on or own the guard. No new registry
+package is introduced. This fixture addresses consumer compatibility but
+does not by itself establish correct guard lifetimes throughout production.
+
 The initial candidate's seven native fixtures and portable parser tests passed
 at `54c7b19` in [CI run 40999147184](https://github.com/shahzadlone/agent-swapper/actions/runs/40999147184),
 including the complete candidate/rebuild/provenance pipeline. This is evidence
