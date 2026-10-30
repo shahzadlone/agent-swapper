@@ -7,6 +7,7 @@ use agentswapper_core::{
     config::{ConfigKey, ConfigStore},
     store::ProfileLease,
 };
+use std::io::Read;
 use std::path::PathBuf;
 
 pub(super) struct Fixture {
@@ -41,7 +42,14 @@ impl Fixture {
         let lease = store.lease(profile.id).unwrap();
         let config = ConfigStore::new(root.path()).unwrap();
         config.set(ConfigKey::UiMask, "true").unwrap();
+        let original = std::fs::read(config.path()).unwrap();
+        let mut snapshot = File::open(config.path()).unwrap();
         config.set(ConfigKey::HistoryLimit, "23").unwrap();
+        policy.validate_private_file_snapshot(&snapshot).unwrap();
+        let mut bytes = Vec::new();
+        snapshot.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, original);
+        drop(snapshot);
         let profile_name = profile.id.to_string();
         let profiles = policy
             .open_existing_inherited_directory_at(root.directory(), OsStr::new("profiles"))

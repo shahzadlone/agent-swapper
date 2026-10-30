@@ -422,6 +422,10 @@ fn open_at_with_sharing(
 }
 
 fn validate_object(file: &File, kind: ObjectKind) -> Result<()> {
+    validate_object_with_links(file, kind, false)
+}
+
+fn validate_object_with_links(file: &File, kind: ObjectKind, allow_detached: bool) -> Result<()> {
     validate_local_device(file)?;
     let metadata = file.metadata()?;
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
@@ -436,7 +440,9 @@ fn validate_object(file: &File, kind: ObjectKind) -> Result<()> {
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
         return Err(io::Error::last_os_error().into());
     }
-    if kind == ObjectKind::File && information.nNumberOfLinks != 1 {
+    if kind == ObjectKind::File
+        && (information.nNumberOfLinks > 1 || (!allow_detached && information.nNumberOfLinks == 0))
+    {
         return Err(Error::UnsupportedObject);
     }
     let mut flags = 0;
@@ -555,6 +561,25 @@ impl SecurityPolicy {
         self.open_existing_at(parent, name, ObjectKind::File, access)
     }
 
+    /// Reopen one existing file with either the exact protected or inherited
+    /// private policy, beneath a validated private parent. Required files must
+    /// have exactly one link; this never creates, truncates or shares deletion.
+    /// The caller must retain the parent and its complete guarded ancestry.
+    pub fn open_existing_private_file_at(
+        &self,
+        parent: &File,
+        name: &OsStr,
+        access: FileAccess,
+    ) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_private_parent(parent)?;
+        let file = open_at(parent, name, ObjectKind::File, OpenMode::Existing(access))?;
+        validate_object(&file, ObjectKind::File)?;
+        let descriptor = LocalDescriptor::from_file(&file)?;
+        self.validate_private_descriptor(descriptor.bytes()?, ObjectKind::File)?;
+        Ok(file)
+    }
+
     /// Reopen one existing private directory relative to its owned private
     /// parent. Requests traversal and inspection rights, not child enumeration
     /// or modification. Retain the returned handle while relying on its name;
@@ -611,11 +636,28 @@ impl SecurityPolicy {
     fn validate_private_parent(&self, parent: &File) -> Result<()> {
         validate_object(parent, ObjectKind::Directory)?;
         let descriptor = LocalDescriptor::from_file(parent)?;
-        let bytes = descriptor.bytes()?;
-        match self.validate_descriptor(bytes, ObjectKind::Directory) {
-            Err(Error::UnprotectedDacl) => self.validate_inherited_directory_descriptor(bytes),
+        self.validate_private_descriptor(descriptor.bytes()?, ObjectKind::Directory)
+    }
+
+    fn validate_private_descriptor(&self, bytes: &[u8], kind: ObjectKind) -> Result<()> {
+        match self.validate_descriptor(bytes, kind) {
+            Err(Error::UnprotectedDacl) => match kind {
+                ObjectKind::Directory => self.validate_inherited_directory_descriptor(bytes),
+                ObjectKind::File => self.validate_inherited_file_descriptor(bytes),
+            },
             result => result,
         }
+    }
+
+    /// Validate an already-open private read snapshot, including one detached
+    /// by atomic replacement or SQLite sidecar retirement. Zero or one links
+    /// qualify; multiple links, reparses, remote devices and broader ACLs do not.
+    /// This deliberately does not prove that a pathname still names this file.
+    /// Never use it for required files or locks; retain parent custody separately.
+    pub fn validate_private_file_snapshot(&self, file: &File) -> Result<()> {
+        validate_object_with_links(file, ObjectKind::File, true)?;
+        let descriptor = LocalDescriptor::from_file(file)?;
+        self.validate_private_descriptor(descriptor.bytes()?, ObjectKind::File)
     }
 
     fn open_existing_at(

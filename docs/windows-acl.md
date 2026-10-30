@@ -497,6 +497,20 @@ review. They qualify filesystem behavior, not real vendor credential layouts.
 
 ## Required before a privacy claim
 
+Required files and replaceable read snapshots have different link semantics.
+The candidate's `open_existing_private_file_at` accepts protected or strictly
+inherited files only after validating their actual private parent, and keeps
+the exactly-one-link/no-delete-sharing rule. A separate
+`validate_private_file_snapshot` checks an already-open file with zero or one
+links, for configuration replacement or SQLite retirement. It still checks
+the actual device, reparse status and exact private ACL. It never establishes
+that a name still references the snapshot and must not validate required locks.
+Native fixtures retire both protected and inherited files, preserve original
+bytes, reject multiple links and reject broad ACLs even after unlinking.
+The actual core fixture retains an old config read handle across replacement
+and requires both a private old snapshot and the new saved preferences. These
+snapshot additions need native results; the core is not yet wired to them.
+
 A consumer-compatibility fixture now wraps the actual core `Store`,
 `ConfigStore` and `ProfileLease` in an externally retained candidate root. It
 creates only fictional profiles and data, verifies every registry/sidecar,

@@ -7,6 +7,7 @@ use std::{
 };
 
 mod root;
+mod snapshots;
 
 #[test]
 fn creates_protected_files_and_directories_and_checks_the_actual_handles() {
