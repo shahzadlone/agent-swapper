@@ -614,6 +614,7 @@ fn sqlite_database_and_live_sidecars_inherit_only_the_private_parent_grants() {
     ] {
         let file = policy
             .open_existing_inherited_file_at(&parent, OsStr::new(name), FileAccess::ReadOnly)
+            .inspect_err(|_| inherited_fixture_diagnostic(&policy, &path.join(name)))
             .unwrap();
         assert!(file.metadata().unwrap().len() > 0);
         assert!(matches!(
@@ -645,6 +646,7 @@ fn inherited_reopen_refuses_broad_or_protected_files_and_preserves_nonmatching_a
     std::fs::write(path.join("inherited"), b"inherited canary").unwrap();
     let mut file = policy
         .open_existing_inherited_file_at(&parent, OsStr::new("inherited"), FileAccess::ReadWrite)
+        .inspect_err(|_| inherited_fixture_diagnostic(&policy, &path.join("inherited")))
         .unwrap();
     file.seek(SeekFrom::End(0)).unwrap();
     file.write_all(b" preserved").unwrap();
@@ -725,4 +727,44 @@ fn inherited_reopen_refuses_broad_or_protected_files_and_preserves_nonmatching_a
             .open_existing_inherited_file_at(&parent, OsStr::new("link"), FileAccess::ReadOnly)
             .is_err()
     );
+}
+
+fn inherited_fixture_diagnostic(policy: &SecurityPolicy, path: &Path) {
+    // Owned disposable fixtures only. Print permission metadata, never file
+    // bytes, paths, account names or numeric user SIDs. No production logging.
+    let file = File::open(path).unwrap();
+    let descriptor = LocalDescriptor::from_file(&file).unwrap();
+    let bytes = descriptor.bytes().unwrap();
+    let control = u16::from_le_bytes(bytes[2..4].try_into().unwrap());
+    let owner_start = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let owner = Sid::parse(sid_prefix(&bytes[owner_start..]).unwrap())
+        .unwrap()
+        .sddl();
+    let classify = |sid: &str| match sid {
+        "S-1-5-18" => "system",
+        "S-1-5-32-544" => "administrators",
+        value if value == policy.owner.sddl() => "process-user",
+        _ => "other",
+    };
+    let acl_start = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+    let acl = &bytes[acl_start..];
+    let count = u16::from_le_bytes(acl[4..6].try_into().unwrap());
+    eprintln!(
+        "inherited fixture metadata: control=0x{control:04x}, owner={}, ace_count={count}",
+        classify(&owner)
+    );
+    let mut offset = 8;
+    for _ in 0..count.min(8) {
+        let length = u16::from_le_bytes(acl[offset + 2..offset + 4].try_into().unwrap()) as usize;
+        let ace = &acl[offset..offset + length];
+        let mask = u32::from_le_bytes(ace[4..8].try_into().unwrap());
+        let trustee = Sid::parse(&ace[8..]).unwrap().sddl();
+        eprintln!(
+            "inherited fixture ACE: type={}, flags=0x{:02x}, mask=0x{mask:08x}, trustee={}",
+            ace[0],
+            ace[1],
+            classify(&trustee)
+        );
+        offset += length;
+    }
 }

@@ -20,6 +20,8 @@ use windows_sys::Win32::{
 };
 use zeroize::Zeroizing;
 
+mod reparse;
+
 struct FixtureAccount {
     name: Vec<u16>,
     active: bool,
@@ -207,6 +209,8 @@ fn separate_identity_cannot_access_private_objects() {
     let (account, token) = FixtureAccount::create().unwrap();
     let root = tempfile::tempdir().unwrap();
     let policy = SecurityPolicy::for_current_process().unwrap();
+    let reparse = reparse::Fixture::prepare(root.path(), &policy);
+    let reparse_for_thread = reparse.clone();
     // Everyone can read/traverse this parent, but cannot delete children. A
     // permissive control file proves the new user can actually reach the tree.
     let parent_sd = LocalDescriptor::from_sddl(&format!(
@@ -318,6 +322,7 @@ fn separate_identity_cannot_access_private_objects() {
         // thread-bound restoration. No privileged handle is passed to probes.
         assert_ne!(unsafe { ImpersonateLoggedOnUser(token.as_raw_handle()) }, 0);
         let restore = RestoreIdentity(PhantomData);
+        reparse_for_thread.probe_as_other_user();
         assert_eq!(
             std::fs::read(&control_for_thread).unwrap(),
             b"public fixture control"
@@ -408,6 +413,7 @@ fn separate_identity_cannot_access_private_objects() {
     // and impersonation guard are gone before this explicit cleanup.
     account.remove().unwrap();
     let private_directory_removed = checked.unwrap();
+    reparse.verify_and_remove_junction();
     policy
         .validate_handle(&held_file, ObjectKind::File)
         .unwrap();

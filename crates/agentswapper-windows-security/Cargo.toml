@@ -21,7 +21,7 @@ tempfile.workspace = true
 rusqlite = { version = "0.41", features = ["bundled"] }
 getrandom = "=0.4.3"
 zeroize.workspace = true
-windows-sys = { version = "=0.61.2", features = ["Win32_NetworkManagement_NetManagement"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_NetworkManagement_NetManagement", "Win32_System_Ioctl"] }
 
 # The only exception to the workspace's forbid rule is ffi.rs. The core,
 # CLI, descriptor parser and policy remain entirely safe Rust.
