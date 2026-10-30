@@ -96,6 +96,10 @@ jobs:
         run: |
           cargo +1.98.0 build --locked -p agentswapper-core --example windows_dashboard_probe
           python tools/check_windows_dashboard_conpty.py target/debug/aswp.exe target/debug/examples/windows_dashboard_probe.exe
+      - name: Windows hidden handover entry and exact console restoration
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python tools/check_windows_handover_conpty.py target/debug/aswp.exe target/debug/examples/windows_dashboard_probe.exe
       - name: Native launch terminal restoration
         if: runner.os != 'Windows'
         timeout-minutes: 2

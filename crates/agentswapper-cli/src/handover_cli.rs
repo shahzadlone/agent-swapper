@@ -89,28 +89,67 @@ impl PassphraseInput {
         if !io::stdin().is_terminal() {
             return Err(Error::PassphraseInput);
         }
-        let _restore = RestoreEcho;
-        crate::terminal_input::enable_raw_mode()?;
-        let first = hidden_passphrase("Handover passphrase: ", interrupted)?;
-        if confirm {
-            handover::validate_new_passphrase(&first)?;
-            let second = hidden_passphrase("Confirm passphrase: ", interrupted)?;
-            if first.expose_secret() != second.expose_secret() {
-                return Err(Error::PassphraseMismatch);
+        let mut restore = RestoreEcho::capture()?;
+        let result = (|| {
+            crate::terminal_input::enable_raw_mode()?;
+            let first = hidden_passphrase("Handover passphrase: ", interrupted)?;
+            if confirm {
+                handover::validate_new_passphrase(&first)?;
+                let second = hidden_passphrase("Confirm passphrase: ", interrupted)?;
+                if first.expose_secret() != second.expose_secret() {
+                    return Err(Error::PassphraseMismatch);
+                }
             }
-        }
-        Ok(first)
+            Ok(first)
+        })();
+        restore.restore().map_err(|_| Error::TerminalRestore)?;
+        result
     }
 }
 
-struct RestoreEcho;
-impl Drop for RestoreEcho {
-    fn drop(&mut self) {
+struct RestoreEcho {
+    active: bool,
+    #[cfg(windows)]
+    console: Option<agentswapper_core::windows_console::ConsoleSnapshot>,
+}
+
+impl RestoreEcho {
+    fn capture() -> io::Result<Self> {
+        Ok(Self {
+            active: true,
+            #[cfg(windows)]
+            console: agentswapper_core::windows_console::ConsoleSnapshot::capture()?,
+        })
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        self.active = false;
         // Discard unread secret input before re-enabling terminal echo.
         #[cfg(unix)]
         let _ = rustix::termios::tcflush(io::stdin(), rustix::termios::QueueSelector::IFlush);
-        let _ = crossterm::terminal::disable_raw_mode();
+        let result = crossterm::terminal::disable_raw_mode();
+        #[cfg(windows)]
+        let result = {
+            // Windows crossterm toggles a fixed mask instead of preserving the
+            // caller's exact flags. Always attempt the owned snapshot restore,
+            // including when disable_raw_mode failed.
+            let exact = self
+                .console
+                .take()
+                .map_or(Ok(()), |console| console.restore());
+            result.and(exact)
+        };
         let _ = io::stderr().write_all(b"\r\n");
+        result
+    }
+}
+
+impl Drop for RestoreEcho {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 

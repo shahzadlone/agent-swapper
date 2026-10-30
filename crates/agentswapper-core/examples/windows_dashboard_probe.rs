@@ -29,7 +29,7 @@ mod probe {
     };
     use winapi_util::console;
     use windows_sys::Win32::System::Console::{
-        ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_WRAP_AT_EOL_OUTPUT,
+        ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_WRAP_AT_EOL_OUTPUT,
     };
 
     fn require(condition: bool, message: &str) -> io::Result<()> {
@@ -109,7 +109,7 @@ mod probe {
         })
     }
 
-    fn host(cli: &Path, root: &Path) -> io::Result<i32> {
+    fn host(cli: &Path, root: &Path, handover: bool) -> io::Result<i32> {
         require(
             std::env::var("ASWP_CONPTY_FIXTURE").as_deref() == Ok("1"),
             "host role requires the isolated ConPTY fixture",
@@ -123,10 +123,22 @@ mod probe {
         ctrlc::set_handler(|| {}).map_err(io::Error::other)?;
         let input = device(r"\\.\CONIN$")?;
         let output = device(r"\\.\CONOUT$")?;
+        // Deliberately retain line/echo while disabling processed input. A
+        // generic disable_raw_mode would incorrectly turn processed input on.
+        if handover {
+            console::set_mode(&input, console::mode(&input)? & !ENABLE_PROCESSED_INPUT)?;
+        }
         let before = (console::mode(&input)?, console::mode(&output)?);
+        let (arguments, expected): (Vec<String>, i32) = if handover {
+            serde_json::from_slice(&fs::read(root.join("fixture-command.json"))?)
+                .map_err(io::Error::other)?
+        } else {
+            (Vec::new(), 0)
+        };
         let mut child = Command::new(cli)
             .arg("--state-dir")
             .arg(root.join("state"))
+            .args(arguments)
             .current_dir(root.join("workspace"))
             .stdin(Stdio::from(input.try_clone()?))
             .stdout(Stdio::from(output.try_clone()?))
@@ -175,8 +187,8 @@ mod probe {
             .map_err(io::Error::other)?,
         )?;
         require(
-            status.success() && before == after,
-            "dashboard exit did not restore exact console modes",
+            status.code() == Some(expected) && before == after,
+            "CLI exit status or exact console restoration did not match",
         )?;
         Ok(0)
     }
@@ -192,9 +204,13 @@ mod probe {
         }
         let args: Vec<_> = std::env::args_os().skip(1).collect();
         require(
-            args.len() == 3 && args[0] == "__fixture_host",
+            args.len() == 3 && (args[0] == "__fixture_host" || args[0] == "__handover_host"),
             "use tools/check_windows_dashboard_conpty.py to run this fixture",
         )?;
-        host(Path::new(&args[1]), Path::new(&args[2]))
+        host(
+            Path::new(&args[1]),
+            Path::new(&args[2]),
+            args[0] == "__handover_host",
+        )
     }
 }
