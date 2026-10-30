@@ -44,6 +44,24 @@ mod probe {
         OpenOptions::new().read(true).write(true).open(name)
     }
 
+    fn queue_helper(root: &Path, input: &File, phase: &str) -> io::Result<()> {
+        let request = root.join("fixture-queue.json");
+        if request.exists() {
+            let args: Vec<String> =
+                serde_json::from_slice(&fs::read(request)?).map_err(io::Error::other)?;
+            require(args.len() == 3, "invalid queue helper command")?;
+            let status = Command::new(&args[0])
+                .arg(&args[1])
+                .arg(phase)
+                .arg(root)
+                .arg(&args[2])
+                .stdin(Stdio::from(input.try_clone()?))
+                .status()?;
+            require(status.success(), "queued-input helper failed")?;
+        }
+        Ok(())
+    }
+
     fn agent(name: &str) -> io::Result<i32> {
         let root =
             std::env::var_os("HOME").ok_or_else(|| io::Error::other("fixture HOME missing"))?;
@@ -135,6 +153,9 @@ mod probe {
         } else {
             (Vec::new(), 0)
         };
+        if handover {
+            queue_helper(root, &input, "__queue")?;
+        }
         let mut child = Command::new(cli)
             .arg("--state-dir")
             .arg(root.join("state"))
@@ -178,6 +199,9 @@ mod probe {
             std::thread::sleep(Duration::from_millis(5));
         };
         let after = (console::mode(&input)?, console::mode(&output)?);
+        if handover {
+            queue_helper(root, &input, "__inspect_queue")?;
+        }
         fs::write(
             root.join("console-result.json"),
             serde_json::to_vec(&json!({

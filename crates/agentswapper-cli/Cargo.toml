@@ -41,5 +41,8 @@ rustix = { version = "1", features = ["termios"] }
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1", features = ["process"] }
 
+[target.'cfg(windows)'.dependencies]
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
+
 [lints]
 workspace = true

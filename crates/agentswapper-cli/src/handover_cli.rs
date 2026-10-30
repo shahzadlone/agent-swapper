@@ -130,17 +130,24 @@ impl RestoreEcho {
         // Discard unread secret input before re-enabling terminal echo.
         #[cfg(unix)]
         let _ = rustix::termios::tcflush(io::stdin(), rustix::termios::QueueSelector::IFlush);
+        #[cfg(not(windows))]
         let result = crossterm::terminal::disable_raw_mode();
         #[cfg(windows)]
         let result = {
+            // A one-shot discard cannot block behind another console reader.
+            // GetStdHandle returns a process-owned handle. Disarm winsafe's
+            // close guard immediately; closing stdin here breaks later users.
+            let flushed = winsafe::HSTD::GetStdHandle(winsafe::co::STD_HANDLE::INPUT)
+                .and_then(|mut guard| guard.leak().FlushConsoleInputBuffer())
+                .map_err(io::Error::other);
             // Windows crossterm toggles a fixed mask instead of preserving the
-            // caller's exact flags. Always attempt the owned snapshot restore,
-            // including when disable_raw_mode failed.
+            // caller's exact flags and keeps no saved raw-mode state. Restore
+            // directly, without briefly enabling flags the caller had cleared.
             let exact = self
                 .console
                 .take()
                 .map_or(Ok(()), |console| console.restore());
-            result.and(exact)
+            flushed.and(exact)
         };
         let _ = io::stderr().write_all(b"\r\n");
         result

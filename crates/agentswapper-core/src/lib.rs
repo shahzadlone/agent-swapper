@@ -212,9 +212,7 @@ pub enum Error {
     Database(#[from] rusqlite::Error),
     #[error("filesystem or process operation failed")]
     Io(#[from] std::io::Error),
-    #[error(
-        "the agent exited, but terminal settings could not be restored; inspect run history and restore your terminal"
-    )]
+    #[error("terminal settings could not be restored; restore your terminal before continuing")]
     TerminalRestore,
     #[error("serialization failed")]
     Json(#[from] serde_json::Error),

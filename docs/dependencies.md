@@ -25,6 +25,27 @@ on later entries. Its Windows raw-mode helper also toggles three bits rather
 than saving every original input flag, so the owned snapshot preserves the full
 input mode independently. Final cursor output happens before that restoration.
 
+Hidden Windows passphrase entry uses the same owned snapshot and restores it
+directly, avoiding a transient change to crossterm's fixed input mask. Its
+queued-input discard uses **winsafe 0.0.29**, pinned with only `kernel` enabled.
+This adds one MIT package with no dependencies or build script. Source review
+covered `HSTD::GetStdHandle`, `CloseHandleGuard::leak`, the handle representation,
+the `FlushConsoleInputBuffer` FFI signature and BOOL/error conversion. The
+standard handle belongs to the process: the close guard is disarmed immediately
+before flushing, so cleanup cannot close stdin. No raw handle construction or
+unsafe application code is introduced. Unused winsafe APIs are outside this
+review's scope; dependency-policy checks still apply to the complete package.
+
+[Microsoft documents](https://learn.microsoft.com/en-us/windows/console/flushconsoleinputbuffer)
+that flushing discards queued events and can disrupt input state. This use is
+restricted to leaving a hidden secret prompt, where retaining unread secret
+keystrokes is undesirable; it is never used for dashboard input or pipe input.
+Flush failure still attempts exact mode restoration and reports failure before
+cryptography or plaintext output. It cannot remove input arriving after the
+flush or protect a console shared with another reader. The ConPTY regression
+preloads cancellation and a fictional secret into the actual console queue
+before launching the CLI, then peeks for leftovers after observed exit.
+
 The Windows ConPTY test uses Python's standard ctypes interface to the
 [documented pseudoconsole startup and teardown APIs](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session).
 Review covers structure layouts, non-inherited communication handles, attribute
