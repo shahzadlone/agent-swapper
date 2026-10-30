@@ -35,6 +35,7 @@ impl StateStamp {
 }
 
 pub(super) fn configure(db: &Connection) -> Result<()> {
+    configure_temp_storage(db)?;
     for (name, value) in [
         ("foreign_keys", true),
         ("recursive_triggers", true),
@@ -46,7 +47,29 @@ pub(super) fn configure(db: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn configure_temp_storage(db: &Connection) -> Result<()> {
+    // Per connection: never change SQLite's process-global temporary directory.
+    // Keep temporary tables, sort work and statement subjournals in memory;
+    // durable WAL/rollback journals continue to use the database directory.
+    db.pragma_update(None, "temp_store", "MEMORY")?;
+    check_temp_storage(db)
+}
+
+fn check_temp_storage(db: &Connection) -> Result<()> {
+    let mode: i64 = db.pragma_query_value(None, "temp_store", |row| row.get(0))?;
+    let forced_disk: bool = db.query_row(
+        "SELECT sqlite_compileoption_used('TEMP_STORE=0')",
+        [],
+        |row| row.get(0),
+    )?;
+    if mode != 2 || forced_disk {
+        return Err(Error::RegistryConnectionChanged);
+    }
+    Ok(())
+}
+
 fn check_semantics(db: &Connection) -> Result<()> {
+    check_temp_storage(db)?;
     for (name, expected) in [
         ("foreign_keys", true),
         ("recursive_triggers", true),

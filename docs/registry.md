@@ -20,6 +20,17 @@ new baseline only after commit succeeds. A peer write or local edit forces a
 full replay. Changed connection settings and temporary schema objects are
 refused. Every new connection starts without a baseline.
 
+Each registry connection, including the read-only migration backup connection,
+selects `temp_store=MEMORY` before queries. Verification and writes refuse a
+changed setting or a SQLite build that forces temporary storage to disk.
+This keeps temporary query work in memory without changing SQLite's global
+temporary directory. Durable WAL and rollback journals still use the database
+directory. Large transient results can therefore require more memory. See
+SQLite's [temporary storage policy](https://www.sqlite.org/pragma.html#pragma_temp_store).
+The pinned bundled SQLite source also passes this setting to statement
+subjournals (`sqlite3PagerBegin` / `subjournal_open`); this needs review when
+updating SQLite and does not establish a general filesystem sandbox.
+
 Registry initialization is serialized by the private bootstrap lock. Openers
 wait up to ten seconds for schema initialization or migration to finish before
 returning `Busy`; ordinary SQLite busy waits remain three seconds. The previous

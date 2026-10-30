@@ -615,17 +615,22 @@ impl Store {
 }
 
 fn open_registry(path: &Path) -> Result<Connection> {
-    Ok(Connection::open_with_flags(
-        path,
-        OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?)
+    open_registry_with_flags(path, OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW)
 }
 
 fn open_registry_read_only(path: &Path) -> Result<Connection> {
-    Ok(Connection::open_with_flags(
+    open_registry_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?)
+    )
+}
+
+fn open_registry_with_flags(path: &Path, flags: OpenFlags) -> Result<Connection> {
+    let db = Connection::open_with_flags(path, flags)?;
+    // Covers the separate read-only migration backup connection too, before
+    // queries or VACUUM INTO can create transient work outside the state root.
+    journal::configure_temp_storage(&db)?;
+    Ok(db)
 }
 
 fn canonical_directory(path: &Path) -> Result<String> {

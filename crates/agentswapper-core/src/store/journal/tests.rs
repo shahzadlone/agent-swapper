@@ -401,6 +401,27 @@ fn cached_writes_refuse_temporary_shadows_and_changed_connection_semantics() {
 }
 
 #[test]
+fn changing_temporary_storage_refuses_verification_and_writes_without_new_events() {
+    for mode in ["DEFAULT", "FILE"] {
+        let (_temp, mut store) = setup();
+        store
+            .register(Harness::Claude, "work".parse().unwrap())
+            .unwrap();
+        let before = event_count(&store.db);
+        store.db.pragma_update(None, "temp_store", mode).unwrap();
+        assert!(matches!(
+            store.verify(),
+            Err(Error::RegistryConnectionChanged)
+        ));
+        assert!(matches!(
+            store.register(Harness::Codex, "refused".parse().unwrap()),
+            Err(Error::RegistryConnectionChanged)
+        ));
+        assert_eq!(event_count(&store.db), before);
+    }
+}
+
+#[test]
 fn baseline_reuse_and_invalidation_are_exercised_including_commit_failure() {
     let (_temp, mut s) = setup();
     let p = s
