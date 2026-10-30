@@ -26,13 +26,6 @@ pub(crate) fn normalize_root(path: &Path) -> Result<std::path::PathBuf> {
         if meta.file_type().is_symlink() {
             return Err(Error::UnsafePath);
         }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if meta.file_attributes() & 0x400 != 0 {
-                return Err(Error::UnsafePath);
-            }
-        }
     }
     let mut tail = vec![path.file_name().ok_or(Error::UnsafePath)?.to_owned()];
     let mut parent = path.parent().ok_or(Error::UnsafePath)?;
@@ -108,16 +101,6 @@ pub(crate) fn directory(path: &Path, create: bool) -> Result<()> {
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return Err(Error::UnsafePath);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if meta.file_attributes()
-            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-            != 0
-        {
-            return Err(Error::UnsafePath);
-        }
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -161,23 +144,9 @@ fn open_private_file(path: &Path, writable: bool) -> Result<File> {
             (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
         );
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
-    }
     let file = options.open(path)?;
     let metadata = file.metadata()?;
     validate_file_metadata(&metadata)?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0
-            || winapi_util::file::information(&file)?.number_of_links() != 1
-        {
-            return Err(Error::UnsafePath);
-        }
-    }
     Ok(file)
 }
 
