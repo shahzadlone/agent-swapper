@@ -337,11 +337,13 @@ It opens an actual fixed NTFS volume root, then opens each directory relative
 to the preceding retained handle. Missing directories use exclusive creation
 with the protected policy at creation time; a competing creator is handled by
 one reopen and validation, never by adoption without inspection or ACL repair.
-All handles exclude write/delete sharing and inheritance. Directory handles
+All handles exclude deletion sharing and inheritance. Public ancestors also
+exclude write sharing; exact private directories permit trusted writes. Directory handles
 retain TRAVERSE/EXECUTE access so that their sharing restrictions participate
 in the filesystem's share accounting. The final directory must
-match the exact protected three-principal policy. Existing inherited roots are
-refused, not automatically migrated.
+match the exact protected three-principal policy. The separate existing-root
+operation described below also admits strictly inherited private leaves;
+neither operation migrates broader ACLs.
 
 Only this constructor uses an internal ancestor policy allowing
 create-subdirectory (`0x4`) in addition to the public read-only mask. Every
@@ -472,6 +474,17 @@ these follow-up implementations automatically.
 
 ## Inherited descendants
 
+CPython 3.13's [private-directory creation](https://github.com/python/cpython/blob/v3.13.9/Modules/posixmodule.c#L5284)
+uses `OW` (Owner Rights), alongside SYSTEM and Administrators, for temporary
+directories. The ancestor policy recognizes this SID only after independently
+requiring a trusted actual owner. Microsoft defines it as the
+[current object's owner](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-special-identities-groups#owner-rights),
+not its creator or group. This does not add `OW` to the exact private-leaf/file
+policies, remove ancestor handle retention, or repair any ACL. Portable tests
+reject untrusted owners and neighboring creator/group SIDs; native regressions
+cover the exact Python creation descriptor and other-user refusal through that
+ancestor. Those new regressions require their own native run.
+
 Vendor-created subdirectories need a separate descriptor policy. The candidate
 now recognizes only the same exact user/SYSTEM/Administrators full-control
 entries, each effective and inherited with both object and container propagation
@@ -498,7 +511,10 @@ errors, with no automatic repair or credential copying. The creation constructor
 still requires a protected leaf. Native tests compare descriptors and canary
 bytes before and after admission and require missing paths to remain absent.
 The separate-user fixture retains an inherited root through this full constructor
-while probing nested privacy. These new root-admission checks need native results.
+while probing nested privacy. Root admission and inherited-directory checks
+passed in the complete pipeline at `7808e17`
+([CI run 41140805249](https://github.com/shahzadlone/agent-swapper/actions/runs/41140805249))
+and again at `07c35cb`.
 
 Portable tests cover all flags, changed permissions/trustees, owner choices,
 truncation and randomized offsets. Native fixtures cover ordinary multilevel
@@ -506,8 +522,8 @@ creation, unchanged descriptors, relative reopen, retained rename refusal,
 missing/reparse/traversal refusal and a broad-parent negative control. The
 separate-user chain fixture adds a readable nested public control alongside
 private inherited data and checks read/write/delete, injection and directory
-rename refusal. These additions still require their own native results and
-review. They qualify filesystem behavior, not real vendor credential layouts.
+rename refusal. These qualify the measured filesystem behavior, not real vendor
+credential layouts. Independent review of later integration changes remains required.
 
 ## Required before a privacy claim
 
@@ -523,8 +539,9 @@ Native fixtures retire both protected and inherited files, preserve original
 bytes, reject multiple links and reject broad ACLs even after unlinking.
 The actual core fixture retains an old config read handle while a writer starts,
 then releases it within the existing bounded replacement retry and requires both
-a private original read and the new saved preferences. These
-snapshot additions and their core integration need native results.
+a private original read and the new saved preferences. These snapshot and
+consumer checks passed at `07c35cb`; linking the boundary into production core
+requires separate qualification.
 
 The first snapshot run at `4aee481` passed the protected-file case but refused
 the detached inherited-file descriptor in
@@ -537,8 +554,8 @@ The zero-link snapshot path now accepts either uniformly explicit or uniformly
 inherited file ACEs, with the same exact trustees, owner set and rights. The
 handle's link count is read after the ACL snapshot; named files and required
 opens do not use this detached-only policy. Broad/mixed/unknown grants remain
-refusals. Portable mutation tests cover the additional layout; native hosted
-qualification remains required.
+refusals. Portable mutation tests cover the additional layout. The native
+protected/inherited retirement and broad-ACL refusal fixtures passed at `07c35cb`.
 
 The attempted settings replacement while retaining the old reader failed with
 access denied (5) at `173e982`. A local four-case control measured `MoveFileEx`
@@ -556,7 +573,8 @@ configuration, lock and profile-file descriptor, replaces settings twice,
 and checks registry replay plus a concurrent reopen. The separate-user probe
 must reach a public control in that exact profile directory while private
 reads/writes/deletes, child injection and directory renames fail. The owner
-then checks original application state. These additions await native results.
+then checks original application state. This externally guarded consumer fixture
+passed both Windows ACL steps in the complete `07c35cb` pipeline.
 `agentswapper-core` is a Windows-only **test dependency of the boundary crate**;
 the core's normal dependency now supplies its own guard too. This creates no
 production dependency cycle or new third-party package. The fixture addresses
@@ -578,9 +596,10 @@ the broader ancestor policy. The volume anchor still excludes writes/deletion.
 The public AD4 preexisting/later-writer and reparse probes remain mandatory.
 A private-directory positive control must allow an owner write handle, concurrent
 root reopening and child rename while refusing rename of the retained directory.
-Actual settings replacement and registry use must also pass. This refined
-sharing policy still needs native qualification and independent review; the
-older successful synthetic SQLite probe did not qualify this consumer behavior.
+Actual settings replacement and registry use passed with this refined sharing
+policy at `07c35cb`, including the public AD4 and private-directory controls.
+Independent review and production integration qualification remain separate;
+the older successful synthetic SQLite probe did not qualify this consumer behavior.
 The same run also caught a missing version on the local core test dependency;
 that dependency now has an exact workspace-version requirement and still adds
 no third-party package.
