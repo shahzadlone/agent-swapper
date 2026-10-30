@@ -2,8 +2,9 @@
 //!
 //! No production AgentSwapper crate depends on this qualification candidate.
 //! Handle validation is a snapshot, not a guarantee against later ACL changes.
-//! Creation requires a trusted, stable parent: ancestor custody, vendor-created
-//! descendants and production storage integration remain qualification gates.
+//! Single-object APIs require a trusted, stable parent. A separate retained
+//! root candidate now acquires the full directory chain; its native qualification,
+//! vendor-created descendants and production storage integration remain gates.
 
 mod descriptor;
 #[cfg(windows)]
@@ -12,6 +13,8 @@ mod descriptor;
     reason = "audited Win32 ownership boundary; see docs/windows-acl.md"
 )]
 mod ffi;
+#[cfg(windows)]
+pub use ffi::PrivateRoot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {

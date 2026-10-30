@@ -96,14 +96,40 @@ pub(crate) fn validate_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
     validate_layout(bytes, owner, ObjectKind::Directory, Layout::Ancestor)
 }
 
+// Only the full path constructor may use this classification. Its retained,
+// independently validated child is what prevents an AD4 ancestor becoming an
+// empty junction target. This parser alone cannot establish that invariant.
+#[cfg(any(windows, test))]
+pub(crate) fn validate_traversed_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
+    validate_layout(
+        bytes,
+        owner,
+        ObjectKind::Directory,
+        Layout::TraversedAncestor,
+    )
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
     Protected,
     InheritedFile,
     Ancestor,
+    #[cfg(any(windows, test))]
+    TraversedAncestor,
 }
 
 fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) -> Result<()> {
+    let is_ancestor = match layout {
+        Layout::Ancestor => true,
+        #[cfg(any(windows, test))]
+        Layout::TraversedAncestor => true,
+        _ => false,
+    };
+    let ancestor_rights = match layout {
+        #[cfg(any(windows, test))]
+        Layout::TraversedAncestor => GUARDED_ANCESTOR_RIGHTS | 4, // FILE_ADD_SUBDIRECTORY
+        _ => GUARDED_ANCESTOR_RIGHTS,
+    };
     if !(HEADER..=MAX_DESCRIPTOR).contains(&bytes.len()) || bytes[0] != 1 || bytes[1] != 0 {
         return Err(Error::InvalidDescriptor);
     }
@@ -157,7 +183,7 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
     if actual_owner != owner.0
         && !(layout != Layout::Protected
             && (actual_owner == SYSTEM || actual_owner == ADMINISTRATORS))
-        && !(layout == Layout::Ancestor && actual_owner == TRUSTED_INSTALLER)
+        && !(is_ancestor && actual_owner == TRUSTED_INSTALLER)
     {
         return Err(Error::OwnerMismatch);
     }
@@ -178,8 +204,7 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
             return Err(Error::InvalidDescriptor);
         }
     }
-    if (layout != Layout::Ancestor && count != 3) || owner.0 == SYSTEM || owner.0 == ADMINISTRATORS
-    {
+    if (!is_ancestor && count != 3) || owner.0 == SYSTEM || owner.0 == ADMINISTRATORS {
         return Err(Error::UnexpectedDacl);
     }
     let trustees = [owner.0.as_slice(), SYSTEM, ADMINISTRATORS];
@@ -197,12 +222,12 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
         }
         let sid = Sid::parse(&ace[8..])?;
         let mask = dword(ace, 4)?;
-        if layout == Layout::Ancestor {
+        if is_ancestor {
             let trusted = trustees.contains(&sid.0.as_slice()) || sid.0 == TRUSTED_INSTALLER;
             // Inherit-only entries grant nothing on this directory. Each
             // descendant must be independently validated before it is used.
             if ace[1] & !0x1f != 0
-                || (!trusted && ace[1] & 0x08 == 0 && mask & !GUARDED_ANCESTOR_RIGHTS != 0)
+                || (!trusted && ace[1] & 0x08 == 0 && mask & !ancestor_rights != 0)
             {
                 return Err(Error::UnexpectedDacl);
             }

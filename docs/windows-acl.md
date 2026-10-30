@@ -174,10 +174,10 @@ Impersonation failure stops the probe, and failure to restore the thread's
 identity aborts the owned test process. A killed CI job relies on destruction
 of its disposable runner; it is not a supported local-machine test procedure.
 
-This is not yet a private-path API. Creation is anchored to the supplied parent
-object, but the caller must still establish that parent's identity and custody.
-The candidate does not pin or validate the full ancestor chain, establish custody
-against parent deletion rights, validate remote/mapped-drive behavior, protect
+The single-object APIs are not private-path APIs. Creation is anchored to the
+supplied parent object, but the caller must still establish that parent's
+identity and custody. They do not pin or validate the full ancestor chain,
+establish custody against parent deletion rights, validate remote/mapped-drive behavior, protect
 future vendor-created descendants, or qualify real vendor credential layouts. A handle
 snapshot also cannot prevent later changes by trusted principals. Those gaps
 must be resolved before storage integration or a privacy claim.
@@ -303,7 +303,7 @@ write-attributes rights. The matched nonempty parent refused junction creation
 with error 145, and the protected child refused deletion access, removal and
 rename. These measurements cover that disposable NTFS fixture and mount-point
 operation; they do not establish a full-path guard or every reparse operation.
-No conditional exception for create-subdirectory rights is implemented yet.
+The public ancestor snapshot policy continues to refuse create-subdirectory rights.
 No actual system-drive root is mutated.
 
 The follow-up fixture also exercises `FSCTL_SET_REPARSE_POINT_EX` with its own
@@ -312,6 +312,46 @@ fresh empty control and the same nonempty parent. It constructs the documented
 with no existing tag and verifies the control's actual redirection before
 requiring error 145 from the nonempty case. This needs its own native result;
 passing the older operation does not qualify the extended one.
+
+## Retained root candidate
+
+`open_or_create_private_root` now constructs a separate `PrivateRoot` candidate.
+It opens an actual fixed NTFS volume root, then opens each directory relative
+to the preceding retained handle. Missing directories use exclusive creation
+with the protected policy at creation time; a competing creator is handled by
+one reopen and validation, never by adoption without inspection or ACL repair.
+All handles exclude deletion sharing and inheritance. The final directory must
+match the exact protected three-principal policy. Existing inherited roots are
+refused, not automatically migrated.
+
+Only this constructor uses an internal ancestor policy allowing
+create-subdirectory (`0x4`) in addition to the public read-only mask. Every
+retained child is independently checked, every ancestor refuses untrusted
+DELETE and DELETE_CHILD, and the complete chain is checked again from leaf to
+volume root before returning. Thus the design requires a nonempty chain that
+an untrusted principal cannot remove. It does not treat a standalone AD4
+descriptor snapshot as safe. Reparse checks occur again after child acquisition;
+no sensitive data is written during construction. Failures can leave empty
+protected directories, which are not removed through uncertain pathnames.
+
+[`GetDriveTypeW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdrivetypew)
+must classify the anchor as fixed. A separate normalized, volume-relative
+[`GetFinalPathNameByHandleW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)
+result must identify only the volume root, so a SUBST alias to a subdirectory
+cannot silently omit its ancestors. The leaf path comes from its actual handle
+in normalized DOS form. UNC, device and removable roots are unsupported;
+path length and component count are bounded. Drive namespace changes and
+changes by the user, SYSTEM, Administrators and TrustedInstaller are trusted.
+Previously acquired mutation rights are not revoked by a descriptor snapshot.
+
+The guard must outlive every pathname-based user, especially SQLite connections.
+Native fixtures cover protected creation/reopen, ancestor rename attempts,
+concurrent constructors, long paths, reparse/broad-ACL refusal and impersonation.
+They still need a successful native run for this implementation. A combined
+separate-user chain test, drive-alias qualification, additional reparse forms,
+independent code review, migration and storage integration remain gates. Neither
+the core nor CLI links this candidate, and `doctor` still reports Windows ACL
+privacy as unverified.
 
 ## Required before a privacy claim
 

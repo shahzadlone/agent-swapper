@@ -569,5 +569,7 @@ impl SecurityPolicy {
 
 #[cfg(test)]
 mod identity_tests;
+mod root;
+pub use root::PrivateRoot;
 #[cfg(test)]
 mod tests;

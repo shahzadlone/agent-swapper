@@ -444,6 +444,37 @@ fn ancestor_policy_distinguishes_name_custody_from_in_place_mutation() {
 }
 
 #[test]
+fn traversed_ancestor_exception_adds_only_directory_creation_and_stays_internal() {
+    let policy = policy();
+    for bit in 0..32 {
+        let mask = 1 << bit;
+        let bytes = ancestor(USER, 0, mask);
+        assert_eq!(
+            validate_traversed_ancestor(&bytes, &policy.owner).is_ok(),
+            mask & !(GUARDED_ANCESTOR_RIGHTS | 4) == 0,
+            "right {mask:08x}"
+        );
+    }
+    let bytes = ancestor(TRUSTED_INSTALLER, 0, GUARDED_ANCESTOR_RIGHTS | 4);
+    validate_traversed_ancestor(&bytes, &policy.owner).unwrap();
+    assert!(policy.validate_ancestor_descriptor(&bytes).is_err());
+    assert!(
+        policy
+            .validate_descriptor(&bytes, ObjectKind::Directory)
+            .is_err()
+    );
+    assert!(policy.validate_inherited_file_descriptor(&bytes).is_err());
+    assert!(validate_traversed_ancestor(&ancestor(EVERYONE, 0, 1), &policy.owner).is_err());
+    for flag in 0..=255 {
+        assert_eq!(
+            validate_traversed_ancestor(&ancestor(USER, flag, FILE_ALL_ACCESS), &policy.owner)
+                .is_ok(),
+            flag & !0x1f == 0 && flag & 8 != 0
+        );
+    }
+}
+
+#[test]
 fn ancestor_policy_trusts_only_the_exact_system_service_and_refuses_unrecognized_aces() {
     let mut bytes = descriptor_with_owner(ObjectKind::Directory, &[TRUSTED_INSTALLER], USER);
     policy().validate_ancestor_descriptor(&bytes).unwrap();
@@ -480,6 +511,7 @@ proptest! {
         let _ = policy().validate_descriptor(&bytes, ObjectKind::Directory);
         let _ = policy().validate_inherited_file_descriptor(&bytes);
         let _ = policy().validate_ancestor_descriptor(&bytes);
+        let _ = validate_traversed_ancestor(&bytes, &policy().owner);
     }
 
     #[test]
@@ -499,5 +531,6 @@ proptest! {
             ancestor[field..field+4].copy_from_slice(&value.to_le_bytes());
         }
         let _ = policy().validate_ancestor_descriptor(&ancestor);
+        let _ = validate_traversed_ancestor(&ancestor, &policy().owner);
     }
 }

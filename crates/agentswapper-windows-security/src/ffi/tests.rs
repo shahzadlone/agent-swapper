@@ -6,6 +6,8 @@ use std::{
     os::windows::fs::OpenOptionsExt,
 };
 
+mod root;
+
 #[test]
 fn creates_protected_files_and_directories_and_checks_the_actual_handles() {
     let root = tempfile::tempdir().unwrap();
@@ -578,6 +580,10 @@ fn thread_impersonation_refuses_identity_selection_and_creation() {
             Err(Error::Impersonation)
         ));
         assert!(matches!(
+            policy.open_or_create_private_root(&root.path().join("refused-root")),
+            Err(Error::Impersonation)
+        ));
+        assert!(matches!(
             policy.open_existing_inherited_file_at(
                 &parent,
                 OsStr::new("refused"),
@@ -588,6 +594,7 @@ fn thread_impersonation_refuses_identity_selection_and_creation() {
         drop(restore);
         assert!(!root.path().join("refused.txt").exists());
         assert!(!root.path().join("parent/refused.txt").exists());
+        assert!(!root.path().join("refused-root").exists());
         SecurityPolicy::for_current_process().unwrap();
     })
     .join()
