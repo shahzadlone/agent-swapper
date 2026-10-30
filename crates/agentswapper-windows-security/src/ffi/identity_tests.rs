@@ -322,7 +322,7 @@ fn separate_identity_cannot_access_private_objects() {
         // thread-bound restoration. No privileged handle is passed to probes.
         assert_ne!(unsafe { ImpersonateLoggedOnUser(token.as_raw_handle()) }, 0);
         let restore = RestoreIdentity(PhantomData);
-        reparse_for_thread.probe_as_other_user();
+        let reparse_results = reparse_for_thread.probe_as_other_user();
         assert_eq!(
             std::fs::read(&control_for_thread).unwrap(),
             b"public fixture control"
@@ -406,14 +406,14 @@ fn separate_identity_cannot_access_private_objects() {
         );
         drop(restore);
         drop(token);
-        private_directory_removed
+        (private_directory_removed, reparse_results)
     })
     .join();
     // Delete the account even if an access assertion failed. The logon token
     // and impersonation guard are gone before this explicit cleanup.
     account.remove().unwrap();
-    let private_directory_removed = checked.unwrap();
-    reparse.verify_and_remove_junction();
+    let (private_directory_removed, reparse_results) = checked.unwrap();
+    reparse.verify_and_remove_junction(&reparse_results);
     policy
         .validate_handle(&held_file, ObjectKind::File)
         .unwrap();

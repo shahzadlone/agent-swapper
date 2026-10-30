@@ -80,10 +80,10 @@ impl SecurityPolicy {
     }
 
     /// Candidate permission classification for a retained ancestor directory.
-    /// This is NOT a privacy or pathname-custody check: it allows reads, new
-    /// subdirectories and deletion by other users, which requires retaining the
-    /// entire no-delete-shared handle chain. It refuses untrusted in-place
-    /// mutation grants and unknown ACE forms. Ancestor owners may additionally
+    /// This is NOT a privacy or pathname-custody check. It allows only read,
+    /// list, traverse and synchronize grants to other users. Creation/deletion
+    /// rights are refused pending separate junction qualification. Complete
+    /// ancestor custody is still required. Ancestor owners may additionally
     /// be the Windows TrustedInstaller service. Private root policy is separate.
     pub fn validate_ancestor_descriptor(&self, bytes: &[u8]) -> Result<()> {
         descriptor::validate_ancestor(bytes, &self.owner)

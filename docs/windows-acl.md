@@ -237,12 +237,11 @@ a Linux-only Rust check is not execution evidence.
 ## Ancestor mutation classification
 
 `validate_ancestor_descriptor` and its handle form are a separate candidate
-classification, **not a private-directory or custody API**. They permit
-read/list/traverse, synchronization, new subdirectories, deletion and deletion
-of children for untrusted principals (`0x001300ed`). Deletion rights require
-the eventual path guard to retain every component without delete sharing.
-In-place data/EA/attribute writes and ACL/owner changes by other principals
-are refused, as are unknown ACE forms and flags. Inherit-only grants apply to
+classification, **not a private-directory or custody API**. They currently
+permit only read/list/traverse and synchronization for untrusted principals
+(`0x001200a9`). Creation/deletion rights are refused pending separate
+qualification. Data/EA/attribute writes and ACL/owner changes by other principals
+are also refused, as are unknown ACE forms and flags. Inherit-only grants apply to
 future children, so they do not qualify or disqualify the current ancestor;
 every child must be independently validated. No deny ACE is used to explain
 away an otherwise broad grant: this conservative candidate refuses deny ACEs.
@@ -254,20 +253,29 @@ ancestor classification: it is not added to private file/directory owners or
 their three-principal DACL. Microsoft describes TrustedInstaller's OS role in
 [Windows Resource Protection](https://learn.microsoft.com/en-us/windows/win32/wfp/about-windows-file-protection).
 The local Windows temp ancestry was inspected read-only to identify actual
-permission forms; native Rust fixtures also check the disposable runner's temp
-ancestry. Neither establishes a retained full path on its own.
+permission forms. Its drive root grants create-subdirectory rights, so the
+narrowed ordinary-directory policy does not yet qualify that system anchor.
+Native Rust fixtures classify disposable directories; they do not establish a
+retained full path.
 
 The ignored identity fixture additionally attempts a mount-point junction
 mutation through [FSCTL_SET_REPARSE_POINT](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_set_reparse_point).
 Its bounded byte payload follows the documented
 [REPARSE_DATA_BUFFER layout](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_reparse_data_buffer).
 The temporary standard user must successfully convert a permissive control
-directory and read a fictional target through it. It must then be refused
-mutation rights and junction installation through an opened limited-rights
-directory. A bad payload or missing privilege cannot count as a successful
-negative test. Junction cleanup verifies the target remains intact. Until this
-fixture and actual component-by-component custody pass, ancestor privacy is
-unqualified.
+directory and read a fictional target through it. At `aa49c73`, the initially
+limited mask `0x001300ed` also allowed `FSCTL_SET_REPARSE_POINT` to succeed in
+[CI run 41005926230](https://github.com/shahzadlone/agent-swapper/actions/runs/41005926230).
+The fixture failed and disproved that candidate permission assumption. No
+production code depended on it. The narrowed rule refuses creation/deletion
+rights while a revised fixture measures read-only, create-subdirectory,
+delete-child, delete-self and combined rights independently. The read-only
+baseline must refuse mutation; other outcomes are recorded, not counted as
+successful protection. Successful mutations must redirect to the fictional
+target and match the observed reparse attributes. A bad payload or missing
+privilege cannot count as a successful negative test. Cleanup checks that the
+target remains intact. Until these checks and component-by-component custody
+pass, ancestor privacy remains unqualified.
 
 ## Required before a privacy claim
 

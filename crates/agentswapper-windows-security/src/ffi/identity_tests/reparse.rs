@@ -15,7 +15,14 @@ use windows_sys::Win32::{
 pub(super) struct Fixture {
     target: PathBuf,
     control: PathBuf,
-    limited: PathBuf,
+    cases: Vec<Probe>,
+}
+
+#[derive(Clone)]
+struct Probe {
+    directory: PathBuf,
+    label: &'static str,
+    rights: u32,
 }
 
 impl Fixture {
@@ -23,7 +30,23 @@ impl Fixture {
         let fixture = Self {
             target: root.join("junction-target"),
             control: root.join("junction-control"),
-            limited: root.join("junction-limited"),
+            cases: [
+                ("read-only", 0),
+                ("create-subdirectory", FILE_ADD_SUBDIRECTORY),
+                ("delete-child", FILE_DELETE_CHILD),
+                ("delete-self", DELETE),
+                (
+                    "combined",
+                    FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | DELETE,
+                ),
+            ]
+            .into_iter()
+            .map(|(label, extra)| Probe {
+                directory: root.join(format!("junction-{label}")),
+                label,
+                rights: FILE_GENERIC_READ | FILE_TRAVERSE | extra,
+            })
+            .collect(),
         };
         let broad =
             LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
@@ -36,22 +59,20 @@ impl Fixture {
             b"junction target fixture",
         )
         .unwrap();
-        // Reads, traversal, new subdirectories and deletion are allowed. The
-        // candidate ancestor policy must exclude in-place data/EA/attribute
-        // writes and ACL/owner changes, not assume a retained name is enough.
-        let rights =
-            FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | DELETE;
-        let limited = LocalDescriptor::from_sddl(&format!(
-            "O:{}D:P(A;;FA;;;{})(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x{rights:08x};;;WD)",
-            policy.owner.sddl(),
-            policy.owner.sddl()
-        ))
-        .unwrap();
-        drop(create(&fixture.limited, ObjectKind::Directory, &limited).unwrap());
+        for probe in &fixture.cases {
+            let limited = LocalDescriptor::from_sddl(&format!(
+                "O:{}D:P(A;;FA;;;{})(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x{:08x};;;WD)",
+                policy.owner.sddl(),
+                policy.owner.sddl(),
+                probe.rights
+            ))
+            .unwrap();
+            drop(create(&probe.directory, ObjectKind::Directory, &limited).unwrap());
+        }
         fixture
     }
 
-    pub(super) fn probe_as_other_user(&self) {
+    pub(super) fn probe_as_other_user(&self) -> Vec<bool> {
         let payload = mount_point_payload(&self.target);
         let control = open_directory(&self.control, FILE_GENERIC_WRITE).unwrap();
         // This positive control must succeed. A missing privilege or invalid
@@ -62,32 +83,28 @@ impl Fixture {
             std::fs::read(self.control.join("canary.txt")).unwrap(),
             b"junction target fixture"
         );
-        for access in [
-            FILE_WRITE_DATA,
-            FILE_WRITE_EA,
-            FILE_WRITE_ATTRIBUTES,
-            WRITE_DAC,
-            WRITE_OWNER,
-        ] {
-            denied(
-                open_directory(&self.limited, access),
-                "open ancestor mutation rights",
-            );
-        }
-        // Use the rights actually available to this identity. DeviceIoControl
-        // must refuse even though opening the directory succeeds.
-        let limited = open_directory(
-            &self.limited,
-            FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD,
-        )
-        .unwrap();
-        denied(
-            set_junction(&limited, &payload),
-            "set junction through limited ancestor handle",
-        );
+        self.cases.iter().map(|probe| {
+            for access in [FILE_WRITE_DATA, FILE_WRITE_EA, FILE_WRITE_ATTRIBUTES, WRITE_DAC, WRITE_OWNER] {
+                denied(open_directory(&probe.directory, access), "open ancestor mutation rights");
+            }
+            let directory = open_directory(&probe.directory, probe.rights).unwrap();
+            let changed = match set_junction(&directory, &payload) {
+                Ok(()) => true,
+                Err(error) if error.raw_os_error() == Some(5) => false,
+                Err(error) => panic!("{} junction probe: {error}", probe.label),
+            };
+            if changed {
+                assert_eq!(std::fs::read(probe.directory.join("canary.txt")).unwrap(), b"junction target fixture");
+            }
+            println!("::notice title=Windows junction permission probe::{}: junction mutation succeeded={changed}", probe.label);
+            if probe.label == "read-only" {
+                assert!(!changed, "read-only directory allowed junction mutation");
+            }
+            changed
+        }).collect()
     }
 
-    pub(super) fn verify_and_remove_junction(&self) {
+    pub(super) fn verify_and_remove_junction(&self, results: &[bool]) {
         assert_ne!(
             std::fs::symlink_metadata(&self.control)
                 .unwrap()
@@ -95,14 +112,22 @@ impl Fixture {
                 & FILE_ATTRIBUTE_REPARSE_POINT,
             0
         );
-        assert_eq!(
-            std::fs::symlink_metadata(&self.limited)
-                .unwrap()
-                .file_attributes()
-                & FILE_ATTRIBUTE_REPARSE_POINT,
-            0
-        );
-        assert_eq!(std::fs::read_dir(&self.limited).unwrap().count(), 0);
+        assert_eq!(results.len(), self.cases.len());
+        for (probe, changed) in self.cases.iter().zip(results) {
+            assert_eq!(
+                std::fs::symlink_metadata(&probe.directory)
+                    .unwrap()
+                    .file_attributes()
+                    & FILE_ATTRIBUTE_REPARSE_POINT
+                    != 0,
+                *changed
+            );
+            if *changed {
+                std::fs::remove_dir(&probe.directory).unwrap();
+            } else {
+                assert_eq!(std::fs::read_dir(&probe.directory).unwrap().count(), 0);
+            }
+        }
         // Remove only the junction, then prove the owned target still exists.
         std::fs::remove_dir(&self.control).unwrap();
         assert_eq!(
@@ -110,7 +135,7 @@ impl Fixture {
             b"junction target fixture"
         );
         println!(
-            "::notice title=Windows ancestor reparse mutation::temporary standard user installed a junction in a permissive control; limited ancestor rights refused write access and junction mutation through an opened handle; target preserved during junction cleanup"
+            "::notice title=Windows ancestor reparse mutation::temporary standard user installed a junction in a permissive control; read-only ancestor refused mutation; extra rights measured individually; actual reparse state and target preservation checked"
         );
     }
 }

@@ -775,26 +775,22 @@ fn fixture_descriptor_diagnostic(policy: &SecurityPolicy, file: &File) {
 }
 
 #[test]
-fn ancestor_snapshots_accept_native_temp_ancestry_and_refuse_mutable_directories() {
+fn ancestor_snapshots_refuse_mutation_grants_without_implying_private_storage() {
     let root = tempfile::tempdir().unwrap();
     let policy = SecurityPolicy::for_current_process().unwrap();
-    let mut handles = Vec::new();
-    for path in root.path().ancestors() {
-        let directory = std::fs::OpenOptions::new()
-            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(path)
-            .unwrap();
-        policy
-            .validate_ancestor_handle(&directory)
-            .inspect_err(|_| fixture_descriptor_diagnostic(&policy, &directory))
-            .unwrap();
-        handles.push(directory);
-    }
-    assert!(handles.len() > 1);
-    // This is snapshot classification, not the future component-by-component
-    // path API: the fixture deliberately inspects its already-known temp path.
+    let directory = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(root.path())
+        .unwrap();
+    policy
+        .validate_ancestor_handle(&directory)
+        .inspect_err(|_| fixture_descriptor_diagnostic(&policy, &directory))
+        .unwrap();
+    // This is only a snapshot of the fixture directory. The system-drive root
+    // can grant create-subdirectory rights and needs a different qualification;
+    // the narrowed policy must not silently accept that earlier assumption.
     let broad =
         LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
             .unwrap();
@@ -805,7 +801,7 @@ fn ancestor_snapshots_accept_native_temp_ancestry_and_refuse_mutable_directories
         Err(Error::UnexpectedDacl)
     ));
     let limited = LocalDescriptor::from_sddl(&format!(
-        "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x001300ed;;;WD)",
+        "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x001200a9;;;WD)",
         policy.owner.sddl(),
         policy.owner.sddl()
     ))
@@ -823,6 +819,6 @@ fn ancestor_snapshots_accept_native_temp_ancestry_and_refuse_mutable_directories
             .is_err()
     );
     println!(
-        "::notice title=Windows ancestor ACL snapshots::native temp ancestors passed restricted mutation-grant classification; broad directory refused; deletion rights still require complete retained handle custody"
+        "::notice title=Windows ancestor ACL snapshots::fixture directory and read-only grants passed snapshot classification; broad directory refused; system-drive root and complete ancestor custody remain unqualified"
     );
 }

@@ -19,10 +19,10 @@ const TRUSTED_INSTALLER: &[u8] = &[
     1, 6, 0, 0, 0, 0, 0, 5, 80, 0, 0, 0, 181, 137, 251, 56, 25, 132, 194, 203, 92, 108, 35, 109,
     87, 0, 119, 110, 192, 2, 100, 135,
 ];
-// Read/list/traverse, SYNCHRONIZE, create-subdirectory, DELETE and DELETE_CHILD.
-// Deletion is safe only while the caller retains the whole no-delete-shared
-// chain. In-place data/EA/attribute writes and ACL/owner changes are excluded.
-const GUARDED_ANCESTOR_RIGHTS: u32 = 0x0013_00ed;
+// Read/list/traverse and SYNCHRONIZE only. A native junction probe disproved
+// the broader create-subdirectory/delete combination; no such rights are
+// accepted until individually qualified. This is still only a snapshot.
+const GUARDED_ANCESTOR_RIGHTS: u32 = 0x0012_00a9;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Sid(Vec<u8>);
