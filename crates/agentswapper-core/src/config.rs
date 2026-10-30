@@ -156,7 +156,11 @@ impl ConfigStore {
         }
         #[cfg(windows)]
         let _private_root = private_fs::StateRoot::open(&self.root, false)?;
-        let file = match open_checked(&self.path(), false) {
+        #[cfg(windows)]
+        let path = _private_root.path().join("config.json");
+        #[cfg(not(windows))]
+        let path = self.path();
+        let file = match open_checked(&path, false) {
             Ok(file) => file,
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Document::default());
@@ -231,8 +235,12 @@ impl ConfigStore {
     fn update(&self, edit: Edit) -> Result<Preferences> {
         #[cfg(windows)]
         let _private_root = private_fs::StateRoot::open(&self.root, true)?;
-        private_fs::directory(&self.root, true)?;
-        let lock = open_checked(&self.root.join("config.lock"), true)?;
+        #[cfg(windows)]
+        let root = _private_root.path();
+        #[cfg(not(windows))]
+        let root = self.root.as_path();
+        private_fs::directory(root, true)?;
+        let lock = open_checked(&root.join("config.lock"), true)?;
         let started = Instant::now();
         loop {
             match lock.try_lock() {
@@ -262,12 +270,12 @@ impl ConfigStore {
         if changed {
             let mut file = tempfile::Builder::new()
                 .prefix(".config-")
-                .tempfile_in(&self.root)?;
+                .tempfile_in(root)?;
             validate_handle(file.as_file(), true)?;
             serde_json::to_writer_pretty(&mut file, &document)?;
             file.write_all(b"\n")?;
             file.as_file().sync_all()?;
-            publish(file, &self.path(), &self.root, sync_directory)?;
+            publish(file, &root.join("config.json"), root, sync_directory)?;
         }
         Ok(Preferences {
             overrides: document.settings,

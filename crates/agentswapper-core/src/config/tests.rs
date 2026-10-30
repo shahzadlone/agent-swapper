@@ -31,6 +31,29 @@ fn config_defaults_and_invalid_inputs_do_not_create_state() {
     assert!(!store.root.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn config_windows_preserves_guarded_long_paths_from_first_creation_through_replacement() {
+    let fixture = tempfile::Builder::new()
+        .prefix("aswp-long-config-")
+        .tempdir_in(std::env::var_os("USERPROFILE").unwrap())
+        .unwrap();
+    let mut path = fixture.path().to_path_buf();
+    while path.as_os_str().len() < 320 {
+        path.push("private-configuration-path-component");
+    }
+    let config = ConfigStore::new(&path).unwrap();
+    assert!(!path.exists());
+    config.set(ConfigKey::UiMask, "true").unwrap();
+    config.set(ConfigKey::HistoryLimit, "33").unwrap();
+    assert!(config.load().unwrap().ui_mask());
+    let reopened = ConfigStore::new(&path).unwrap();
+    assert_eq!(reopened.load().unwrap().history_limit(), 33);
+    assert!(
+        matches!(reopened.path().components().next(), Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_)))
+    );
+}
+
 #[test]
 fn config_saved_defaults_are_distinct_from_unset_and_survive_reopen() {
     let (_temp, store) = setup();
