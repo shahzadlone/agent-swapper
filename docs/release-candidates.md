@@ -5,10 +5,11 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
-The latest completed evidence is `16053be`:
-[CI run 40975543816](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816)
+The latest completed evidence is `ffae532`:
+[CI run 40990672777](https://github.com/shahzadlone/agent-swapper/actions/runs/40990672777)
 passed Linux/macOS dashboard transitions, Windows native console restoration
 and ConPTY launches/rename/unregister, 100 Windows registry stress iterations,
+encrypted handover and explicit plaintext pickup export,
 the dependency policy, all three candidate builds, separate-runner byte
 comparisons and preview provenance verification. Subsequent changes need their
 own completed run. Real-provider qualification, automated
