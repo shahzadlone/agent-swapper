@@ -21,7 +21,7 @@ pub(super) struct Fixture {
 // then remove the owned fixture. No privileged handle enters the probe thread.
 pub(super) struct Custody {
     db: rusqlite::Connection,
-    _descendants: Vec<File>,
+    _inherited_root: PrivateRoot,
     guard: PrivateRoot,
     fixture: tempfile::TempDir,
 }
@@ -113,7 +113,11 @@ impl Fixture {
             .write_all(b"reachable nested control")
             .unwrap();
         drop(nested_control);
-        let descendants = vec![sessions, vendor];
+        let inherited_root = policy
+            .open_existing_private_root(&guard.path().join("vendor/sessions"))
+            .unwrap();
+        drop(sessions);
+        drop(vendor);
         let db = rusqlite::Connection::open(guard.path().join("fixture.sqlite3")).unwrap();
         db.pragma_update(None, "temp_store", "MEMORY").unwrap();
         db.pragma_update(None, "journal_mode", "WAL").unwrap();
@@ -146,7 +150,7 @@ impl Fixture {
             },
             Custody {
                 db,
-                _descendants: descendants,
+                _inherited_root: inherited_root,
                 guard,
                 fixture,
             },

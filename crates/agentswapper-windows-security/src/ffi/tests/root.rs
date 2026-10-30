@@ -183,6 +183,68 @@ fn refuses_broad_ancestors_and_existing_unprotected_roots_without_repair() {
 }
 
 #[test]
+fn existing_root_open_has_no_creation_side_effects_and_admits_only_private_inheritance() {
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let missing = fixture.path().join("absent/child");
+    assert!(
+        matches!(policy.open_existing_private_root(&missing), Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound)
+    );
+    assert!(!fixture.path().join("absent").exists());
+
+    let protected_path = fixture.path().join("private");
+    let created = policy.open_or_create_private_root(&protected_path).unwrap();
+    let reopened = policy.open_existing_private_root(&protected_path).unwrap();
+    assert_eq!(created.path(), reopened.path());
+    let inherited_path = created.path().join("inherited");
+    std::fs::create_dir(&inherited_path).unwrap();
+    std::fs::write(inherited_path.join("canary.txt"), b"existing private state").unwrap();
+    let inherited = policy
+        .open_existing_inherited_directory_at(created.directory(), OsStr::new("inherited"))
+        .unwrap();
+    let before = LocalDescriptor::from_file(&inherited).unwrap();
+    let admitted = policy.open_existing_private_root(&inherited_path).unwrap();
+    let after = LocalDescriptor::from_file(admitted.directory()).unwrap();
+    assert_eq!(before.bytes().unwrap(), after.bytes().unwrap());
+    assert_eq!(
+        std::fs::read(admitted.path().join("canary.txt")).unwrap(),
+        b"existing private state"
+    );
+    assert!(std::fs::rename(&inherited_path, inherited_path.with_extension("moved")).is_err());
+    // Creation's protected-leaf contract must remain distinct.
+    assert!(matches!(
+        policy.open_or_create_private_root(&inherited_path),
+        Err(Error::UnprotectedDacl)
+    ));
+
+    let broad =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
+            .unwrap();
+    let broad_path = fixture.path().join("broad");
+    let broad_handle = create(&broad_path, ObjectKind::Directory, &broad).unwrap();
+    std::fs::create_dir(broad_path.join("inherited")).unwrap();
+    let broad_before = LocalDescriptor::from_file(&broad_handle).unwrap();
+    assert!(matches!(
+        policy.open_existing_private_root(&broad_path),
+        Err(Error::UnexpectedDacl)
+    ));
+    assert!(matches!(
+        policy.open_existing_private_root(&broad_path.join("inherited")),
+        Err(Error::UnexpectedDacl)
+    ));
+    let broad_after = LocalDescriptor::from_file(&broad_handle).unwrap();
+    assert_eq!(broad_before.bytes().unwrap(), broad_after.bytes().unwrap());
+    assert!(
+        policy
+            .open_existing_private_root(&fixture.path().join("../escape"))
+            .is_err()
+    );
+    println!(
+        "::notice title=Windows existing private root::missing paths left untouched; existing protected and strictly inherited private roots admitted with unchanged descriptors/data; broad parent and leaf refused without repair"
+    );
+}
+
+#[test]
 fn refuses_reparse_components_before_creating_any_target_child() {
     let fixture = fixture();
     let policy = SecurityPolicy::for_current_process().unwrap();

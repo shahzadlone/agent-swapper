@@ -476,6 +476,16 @@ that same parent policy. These operations never create missing children or
 repair permissions. Existing root admission and protected-object APIs remain
 strict; legacy migration is not implied.
 
+The separate `open_existing_private_root` operation acquires the complete
+ancestor chain without creating missing components. It admits either a protected
+leaf or an already-private, strictly inherited leaf. This supports read-only
+state access and safe admission of existing layouts; broader legacy ACLs remain
+errors, with no automatic repair or credential copying. The creation constructor
+still requires a protected leaf. Native tests compare descriptors and canary
+bytes before and after admission and require missing paths to remain absent.
+The separate-user fixture retains an inherited root through this full constructor
+while probing nested privacy. These new root-admission checks need native results.
+
 Portable tests cover all flags, changed permissions/trustees, owner choices,
 truncation and randomized offsets. Native fixtures cover ordinary multilevel
 creation, unchanged descriptors, relative reopen, retained rename refusal,

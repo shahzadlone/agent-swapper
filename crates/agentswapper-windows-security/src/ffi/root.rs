@@ -12,7 +12,13 @@ use windows_sys::Win32::Storage::FileSystem::{
 const MAX_COMPONENTS: usize = 128;
 const MAX_PATH_UNITS: usize = 32767;
 
-/// Experimental retained path from a fixed NTFS volume root to a protected
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RootOpen {
+    CreateProtected,
+    ExistingPrivate,
+}
+
+/// Experimental retained path from a fixed NTFS volume root to a validated
 /// private directory. Keep this guard alive until every pathname-based user
 /// (including SQLite connections) has closed. It is not a sandbox and cannot
 /// prevent changes by the selected user, SYSTEM, Administrators, TrustedInstaller
@@ -32,7 +38,7 @@ impl PrivateRoot {
         &self.path
     }
 
-    /// Borrow the protected leaf for relative child operations. The handle
+    /// Borrow the private leaf for relative child operations. The handle
     /// requests inspection/traversal only and is not inheritable.
     pub fn directory(&self) -> &File {
         &self.root
@@ -48,6 +54,19 @@ impl SecurityPolicy {
     /// leave empty protected directories, never partially written private data.
     /// Paths are bounded to 128 components and 32766 UTF-16 units.
     pub fn open_or_create_private_root(&self, path: &Path) -> Result<PrivateRoot> {
+        self.open_root(path, RootOpen::CreateProtected)
+    }
+
+    /// Retain an existing private directory and all its ancestors without
+    /// creating anything. The leaf may be protected or inherit the exact
+    /// three-principal private directory policy. This admits an already-private
+    /// layout without rewriting its ACL; it never migrates broad legacy state.
+    /// All device, reparse, ancestry and sharing restrictions still apply.
+    pub fn open_existing_private_root(&self, path: &Path) -> Result<PrivateRoot> {
+        self.open_root(path, RootOpen::ExistingPrivate)
+    }
+
+    fn open_root(&self, path: &Path, mode: RootOpen) -> Result<PrivateRoot> {
         reject_impersonation()?;
         wide_path(path)?;
         let mut components = path.components();
@@ -86,7 +105,10 @@ impl SecurityPolicy {
                 FILE_SHARE_READ,
             ) {
                 Ok(child) => child,
-                Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                Err(Error::Io(error))
+                    if mode == RootOpen::CreateProtected
+                        && error.kind() == io::ErrorKind::NotFound =>
+                {
                     match open_at_with_sharing(
                         &directory,
                         name,
@@ -119,7 +141,10 @@ impl SecurityPolicy {
         // ancestor likewise denies DELETE/DELETE_CHILD. Write sharing is also
         // excluded: nonemptiness alone does not qualify every reparse tag.
         // Recheck every actual handle before publishing any usable pathname.
-        self.validate_handle(&directory, ObjectKind::Directory)?;
+        match mode {
+            RootOpen::CreateProtected => self.validate_handle(&directory, ObjectKind::Directory)?,
+            RootOpen::ExistingPrivate => self.validate_private_parent(&directory)?,
+        }
         for ancestor in ancestors.iter().rev() {
             self.validate_traversed_directory(ancestor)?;
         }
