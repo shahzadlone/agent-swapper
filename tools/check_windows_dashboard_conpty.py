@@ -327,7 +327,10 @@ def check(binary, fixture):
             session.send(keys + b" \r")
             record = until(lambda: read_json(root / f"launch-{number}.json"), f"fixture agent {number} did not start")
             assert record["inputMode"] & 6 == 6, "agent inherited raw dashboard input"
-            assert Path(record["home"]).resolve() == homes[record["agent"]].resolve()
+            # The production guard deliberately preserves a verbatim DOS path.
+            # Python resolve() can preserve that prefix on only one spelling;
+            # compare the actual directory identity instead of path strings.
+            assert Path(record["home"]).samefile(homes[record["agent"]]), "agent received a different profile directory"
             return record
 
         def finished(number, code, interrupt=False):
@@ -432,6 +435,9 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        import traceback
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        detail = f"{type(error).__name__} at {Path(frame.filename).name}:{frame.lineno} ({frame.name}): {error}; {frame.line}"
+        message = detail[:3000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"::error title=Windows dashboard ConPTY::{message}", flush=True)
         raise
