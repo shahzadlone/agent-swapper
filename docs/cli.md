@@ -150,7 +150,9 @@ restoration is reported after journaling the actual exit. This does not restore
 an entire screen buffer, a supervisor crash or external work. The six disposable
 console cases passed at `08facc1` in
 [Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40959372054/job/123747795279).
-The new interactive ConPTY transition fixture is awaiting its first hosted result.
+Interactive ConPTY launches, resume, privacy, resize, rename and unregister
+also passed at `16053be` in
+[Windows CI](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816/job/123802538596).
 Other applications sharing the same Windows console are not
 isolated from mode changes.
 
@@ -234,8 +236,9 @@ for the complete workflow, trust boundary and current qualification limits.
 ## Manual handover packs
 
 Use `aswp handover pack`, `inspect`, and `pickup` to carry an existing task note
-in an encrypted file. Pickup prints a manual reconciliation note; it does not
-launch another agent. See the [handover guide](handover.md) for the complete
+in an encrypted file. Pickup prints a manual reconciliation note, or saves
+plaintext with `--output HANDOVER_PICKUP.md` while keeping context out of stdout.
+It does not launch another agent. See the [handover guide](handover.md) for the complete
 workflow, password handling, trust boundary, and limits.
 
 ## Directory mappings

@@ -17,6 +17,19 @@ aswp handover inspect ../task.age
 aswp handover pickup ../task.age --target codex
 ```
 
+To give the receiver a file instead of printing decrypted context in terminal
+logs, use:
+
+```sh
+aswp handover pickup ../task.age --target codex --output ../HANDOVER_PICKUP.md
+```
+
+This explicitly creates **plaintext**. Keep the encrypted pack for transport;
+protect or remove the plaintext file when finished. The destination must be a
+new `HANDOVER*.md` or `PICKUP*.md` file in an existing directory outside known
+agent homes and AgentSwapper state. Standard instruction files such as
+`AGENTS.md` and `CLAUDE.md` are refused. No receiving agent is launched.
+
 Each command uses a hidden terminal passphrase prompt. Packing asks twice;
 use a long, unique passphrase of at least 16 characters. The passphrase is not
 stored or placed in arguments, environment variables, SQLite, or output. Ctrl-C
@@ -35,7 +48,8 @@ pack. Pipe-based input keeps its existing noninteractive behavior.
 `pack` uses a registered profile as an operator-supplied source label. No login
 is required or inferred. `inspect` prints metadata, including document size,
 source label, and workspace reference; it hides note content. `pickup` explicitly
-prints a decrypted Markdown note on stdout for the selected receiving harness.
+prints a decrypted Markdown note on stdout for the selected receiving harness,
+unless `--output` saves it to a file.
 This output contains your context: avoid recording it in shared terminal logs.
 You decide whether to give it to the target provider. No network request occurs.
 Inspect and pickup work without creating local AgentSwapper state.
@@ -72,8 +86,11 @@ are rejected. The flag refuses an interactive terminal so it cannot echo a
 typed password. Use a trusted secret manager to supply this pipe; do not put a
 literal passphrase in a shell command or history. `--json` retains the CLI's
 unstable schema-v0 envelope. Inspect JSON contains metadata only; pickup JSON
-deliberately includes decrypted context and the reconciliation report. A broken
-pickup pipe returns a failure so callers can detect an incomplete handover.
+deliberately includes decrypted context and the reconciliation report. With
+`pickup --output`, both normal and JSON stdout contain only the destination and
+report metadata, including an explicit plaintext indicator in JSON. A broken
+pickup pipe returns a failure. If file publication already succeeded before the
+acknowledgement failed, the complete file remains; inspect it before retrying.
 
 ## Format and limits
 
@@ -107,7 +124,9 @@ source-note ownership or hardlink restrictions; note inputs keep those checks.
 
 Outputs use a temporary file, fsync, and exclusive publication in the same
 directory. Existing files and symlinks are never overwritten. POSIX output mode
-is checked as private; Windows ACL privacy is not verified. Directory-sync
+is checked as private (0600); Windows ACL privacy is not verified. Cancellation
+before publication removes the temporary file; after publication the committed
+artifact remains. Directory-sync
 status is reported separately after publication: lack of support does not
 misreport an already-written file as a failed export. Explicit ciphertext
 exports are not a replacement for the future encrypted account-backup feature.

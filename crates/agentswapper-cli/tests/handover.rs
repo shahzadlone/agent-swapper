@@ -190,6 +190,41 @@ fn handover_roundtrip_reports_drift_and_never_executes_imported_commands() {
     }
     assert!(rendered.contains("````markdown"));
     assert!(!s.project().join("DONT_EXECUTE").exists());
+    let pickup = s.temp.path().join("HANDOVER_PICKUP.md");
+    let exported = AssertCommand::from_std(s.native_with_state(&receiver))
+        .args(["handover", "pickup"])
+        .arg(&encrypted)
+        .arg("--output")
+        .arg(&pickup)
+        .args(["--target", "codex", "--passphrase-stdin", "--json"])
+        .write_stdin(PASSPHRASE)
+        .output()
+        .unwrap();
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    assert!(
+        !receiver.exists(),
+        "pickup export must not initialize receiver state"
+    );
+    assert!(!String::from_utf8_lossy(&exported.stdout).contains("context-canary"));
+    assert!(!String::from_utf8_lossy(&exported.stderr).contains("context-canary"));
+    let exported: Value = serde_json::from_slice(&exported.stdout).unwrap();
+    assert_eq!(exported["data"]["plaintext"], true);
+    assert!(exported["data"]["handover"].is_null());
+    assert_eq!(fs::read_to_string(&pickup).unwrap(), rendered);
+    s.cmd()
+        .args(["handover", "pickup"])
+        .arg(&encrypted)
+        .arg("--output")
+        .arg(&pickup)
+        .args(["--target", "codex"])
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("output already exists"));
+    assert_eq!(fs::read_to_string(&pickup).unwrap(), rendered);
     s.git(&[
         "commit",
         "--quiet",
@@ -223,6 +258,18 @@ fn handover_roundtrip_reports_drift_and_never_executes_imported_commands() {
     corrupt[last] ^= 1;
     let bad = s.temp.path().join("tampered.age");
     fs::write(&bad, corrupt).unwrap();
+    let refused = s.temp.path().join("PICKUP_TAMPERED.md");
+    s.cmd()
+        .args(["handover", "pickup"])
+        .arg(&bad)
+        .arg("--output")
+        .arg(&refused)
+        .args(["--target", "codex", "--passphrase-stdin", "--json"])
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("handover_decryption_failed"));
+    assert!(!refused.exists());
     s.cmd()
         .args(["handover", "inspect"])
         .arg(&bad)
@@ -239,24 +286,37 @@ fn handover_roundtrip_reports_drift_and_never_executes_imported_commands() {
         .assert()
         .code(125)
         .stderr(predicate::str::contains("output already exists"));
-    // The receiver must not accept a truncated stdout stream as a successful pickup.
-    let mut native = s.native();
-    native
-        .args(["handover", "pickup"])
-        .arg(&encrypted)
-        .args(["--target", "codex", "--passphrase-stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = native.spawn().unwrap();
-    drop(child.stdout.take());
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(PASSPHRASE.as_bytes())
-        .unwrap();
-    assert_eq!(child.wait().unwrap().code(), Some(125));
+    // A truncated context stream or export acknowledgement is an error. A
+    // file already published before the acknowledgement fails is retained.
+    for output in [None, Some(s.temp.path().join("PICKUP_BROKEN_PIPE.md"))] {
+        let mut native = s.native();
+        native
+            .args(["handover", "pickup"])
+            .arg(&encrypted)
+            .args(["--target", "codex", "--passphrase-stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if let Some(path) = &output {
+            native.arg("--output").arg(path);
+        }
+        let mut child = native.spawn().unwrap();
+        drop(child.stdout.take());
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(PASSPHRASE.as_bytes())
+            .unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(125));
+        if let Some(path) = output {
+            assert!(
+                fs::read_to_string(path)
+                    .unwrap()
+                    .contains("context-canary-27491")
+            );
+        }
+    }
 }
 
 #[test]
@@ -325,4 +385,55 @@ fn handover_requires_explicit_password_input_and_rejects_multiline_passwords() {
         .code(125)
         .stderr(predicate::str::contains(PASSPHRASE).not());
     assert!(!output.exists());
+}
+
+#[test]
+fn pickup_refuses_unsafe_plaintext_destinations_before_reading_password_or_pack() {
+    let s = Sandbox::new();
+    let missing = s.temp.path().join("missing.age");
+    let native = s.temp.path().join("home").join(".claude");
+    fs::create_dir(&native).unwrap();
+    for output in [
+        s.project().join("AGENTS.md"),
+        s.project().join("CLAUDE.md"),
+        s.project().join("pickup.json"),
+        s.state().join("HANDOVER.md"),
+        native.join("HANDOVER.md"),
+    ] {
+        s.cmd()
+            .args(["handover", "pickup"])
+            .arg(&missing)
+            .arg("--output")
+            .arg(&output)
+            .args(["--target", "codex", "--json"])
+            .assert()
+            .code(125)
+            .stdout(predicate::str::contains("unsafe_handover_output"));
+        assert!(!output.exists());
+    }
+    let overridden = s.temp.path().join("overridden-profile");
+    let credentials = overridden.join(".codex");
+    fs::create_dir_all(&credentials).unwrap();
+    let output = credentials.join("HANDOVER.md");
+    s.cmd()
+        .env("USERPROFILE", &overridden)
+        .args(["handover", "pickup"])
+        .arg(&missing)
+        .arg("--output")
+        .arg(&output)
+        .args(["--target", "codex", "--json"])
+        .assert()
+        .code(125)
+        .stdout(predicate::str::contains("unsafe_handover_output"));
+    let source = credentials.join("HANDOVER_SOURCE.md");
+    fs::write(&source, "credential-directory-canary").unwrap();
+    s.cmd()
+        .env("USERPROFILE", &overridden)
+        .args(["handover", "pack", "--from", "work", "--input"])
+        .arg(&source)
+        .arg("--output")
+        .arg(s.temp.path().join("must-not-exist.age"))
+        .assert()
+        .code(125)
+        .stderr(predicate::str::contains("outside authentication"));
 }

@@ -316,13 +316,32 @@ pub fn validate_note_location(path: &Path, state_root: &Path) -> Result<PathBuf>
         return Err(Error::UnsafeHandoverInput);
     }
     let resolved = dunce::canonicalize(path)?;
-    let mut forbidden = vec![state_root.to_owned()];
+    validate_document_location(&resolved, Some(state_root))?;
+    Ok(resolved)
+}
+
+fn validate_document_location(resolved: &Path, state_root: Option<&Path>) -> Result<()> {
+    let mut forbidden: Vec<_> = state_root.into_iter().map(Path::to_owned).collect();
     if let Ok(default_root) = crate::Store::default_root() {
         forbidden.push(default_root);
     }
+    let mut homes = Vec::new();
     if let Some(base) = directories::BaseDirs::new() {
+        homes.push(base.home_dir().to_owned());
+    }
+    // Windows known-folder lookup and an agent's HOME/USERPROFILE override
+    // can differ. Treat each known absolute home as a credential location.
+    for key in ["HOME", "USERPROFILE"] {
+        if let Some(home) = std::env::var_os(key)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+        {
+            homes.push(home);
+        }
+    }
+    for home in homes {
         for name in [".claude", ".codex", ".kimi", ".kimi-code", ".gents"] {
-            forbidden.push(base.home_dir().join(name));
+            forbidden.push(home.join(name));
         }
     }
     for harness in Harness::ALL {
@@ -352,7 +371,37 @@ pub fn validate_note_location(path: &Path, state_root: &Path) -> Result<PathBuf>
     {
         return Err(Error::UnsafeHandoverInput);
     }
-    Ok(resolved)
+    Ok(())
+}
+
+/// Validate a user-selected plaintext destination without creating local state
+/// or opening a credential file. Imported capsule paths are never destinations.
+pub fn validate_pickup_output(path: &Path, state_root: Option<&Path>) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    if fs::symlink_metadata(&absolute).is_ok() {
+        return Err(Error::OutputExists);
+    }
+    let resolved =
+        crate::private_fs::normalize_root(&absolute).map_err(|_| Error::UnsafeHandoverOutput)?;
+    let parent = dunce::canonicalize(resolved.parent().ok_or(Error::UnsafeHandoverOutput)?)?;
+    let output = parent.join(resolved.file_name().ok_or(Error::UnsafeHandoverOutput)?);
+    validate_document_location(&output, state_root).map_err(|_| Error::UnsafeHandoverOutput)?;
+    let name = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(Error::UnsafeHandoverOutput)?;
+    let lower = name.to_ascii_lowercase();
+    // Avoid standard auto-loaded instruction/configuration names and Windows
+    // alternate data streams while keeping portable handover filenames.
+    if !(lower.starts_with("handover") || lower.starts_with("pickup"))
+        || !lower.ends_with(".md")
+        || name.contains(':')
+        || name.chars().any(char::is_control)
+        || !safe_text(name)
+    {
+        return Err(Error::UnsafeHandoverOutput);
+    }
+    Ok(output)
 }
 
 pub fn read_ciphertext(path: &Path) -> Result<Vec<u8>> {
@@ -421,10 +470,57 @@ pub struct PublishedPack {
     pub directory_synced: bool,
 }
 
+/// An explicit plaintext export. This is not an encrypted handover pack.
+pub struct PublishedPickup {
+    pub path: PathBuf,
+    pub directory_synced: bool,
+}
+
 /// Ciphertext only. The destination is exclusive; no file or symlink is replaced.
 pub fn write_ciphertext(path: &Path, ciphertext: &[u8]) -> Result<PublishedPack> {
+    write_ciphertext_cancellable(path, ciphertext, || false)
+}
+
+pub fn write_ciphertext_cancellable(
+    path: &Path,
+    ciphertext: &[u8],
+    interrupted: impl Fn() -> bool,
+) -> Result<PublishedPack> {
     if ciphertext.len() > MAX_CIPHERTEXT_BYTES {
         return Err(Error::HandoverTooLarge);
+    }
+    publish_private_bytes(path, ciphertext, ".aswp-handover-", interrupted)
+}
+
+/// Export reviewed pickup context to a new private file. The caller explicitly
+/// chooses plaintext; no receiver is launched and no provider is contacted.
+pub fn write_pickup(
+    path: &Path,
+    pack: &HandoverPack,
+    report: &PickupReport<'_>,
+    state_root: Option<&Path>,
+    interrupted: impl Fn() -> bool,
+) -> Result<PublishedPickup> {
+    let output = validate_pickup_output(path, state_root)?;
+    let note = Zeroizing::new(pack.render_pickup(report));
+    if note.len() > MAX_PAYLOAD_BYTES {
+        return Err(Error::HandoverTooLarge);
+    }
+    let published = publish_private_bytes(&output, note.as_bytes(), ".aswp-pickup-", interrupted)?;
+    Ok(PublishedPickup {
+        path: published.path,
+        directory_synced: published.directory_synced,
+    })
+}
+
+fn publish_private_bytes(
+    path: &Path,
+    bytes: &[u8],
+    prefix: &str,
+    interrupted: impl Fn() -> bool,
+) -> Result<PublishedPack> {
+    if interrupted() {
+        return Err(Error::Cancelled);
     }
     let absolute = std::path::absolute(path)?;
     let parent = dunce::canonicalize(absolute.parent().ok_or(Error::UnsafePath)?)?;
@@ -434,7 +530,7 @@ pub fn write_ciphertext(path: &Path, ciphertext: &[u8]) -> Result<PublishedPack>
         return Err(Error::OutputExists);
     }
     let mut file = tempfile::Builder::new()
-        .prefix(".aswp-handover-")
+        .prefix(prefix)
         .tempfile_in(&parent)?;
     #[cfg(unix)]
     {
@@ -443,8 +539,13 @@ pub fn write_ciphertext(path: &Path, ciphertext: &[u8]) -> Result<PublishedPack>
             return Err(Error::UnsafePath);
         }
     }
-    file.write_all(ciphertext)?;
+    file.write_all(bytes)?;
     file.as_file().sync_all()?;
+    // Cancellation before the exclusive publication boundary must leave no
+    // destination file. After publication, the artifact is already committed.
+    if interrupted() {
+        return Err(Error::Cancelled);
+    }
     file.persist_noclobber(&output).map_err(|error| {
         if error.error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::OutputExists
@@ -744,6 +845,108 @@ mod tests {
             rendered.lines().filter(|line| *line == "````````").count(),
             1
         );
+    }
+
+    #[test]
+    fn plaintext_pickup_exports_preserve_context_and_refuse_instruction_or_state_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = pack(
+            &temp,
+            "# Goal\nKeep the original constraints.\n```sh\ntouch DO_NOT_RUN\n```\n",
+        );
+        let report = original.reconcile(Harness::Codex, temp.path()).unwrap();
+        let state = temp.path().join("state");
+        for name in [
+            "AGENTS.md",
+            "CLAUDE.md",
+            "notes.md",
+            "PICKUP.json",
+            "HANDOVER.md:stream.md",
+            "HANDOVER\u{202e}.md",
+        ] {
+            assert!(matches!(
+                validate_pickup_output(&temp.path().join(name), Some(&state)),
+                Err(Error::UnsafeHandoverOutput)
+            ));
+        }
+        assert!(matches!(
+            validate_pickup_output(&state.join("HANDOVER.md"), Some(&state)),
+            Err(Error::UnsafeHandoverOutput)
+        ));
+        let destination = temp.path().join("HANDOVER_PICKUP.md");
+        let published =
+            write_pickup(&destination, &original, &report, Some(&state), || false).unwrap();
+        assert_eq!(
+            fs::read_to_string(&published.path).unwrap(),
+            original.render_pickup(&report)
+        );
+        assert!(!temp.path().join("DO_NOT_RUN").exists());
+        assert!(matches!(
+            write_pickup(&destination, &original, &report, Some(&state), || false),
+            Err(Error::OutputExists)
+        ));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let link = temp.path().join("PICKUP_LINK.md");
+            std::os::unix::fs::symlink(&destination, &link).unwrap();
+            assert!(matches!(
+                validate_pickup_output(&link, Some(&state)),
+                Err(Error::OutputExists)
+            ));
+        }
+    }
+
+    #[test]
+    fn cancellation_after_writing_cleans_private_temps_without_publishing() {
+        use std::cell::Cell;
+        let temp = tempfile::tempdir().unwrap();
+        let original = pack(&temp, "unverified context");
+        let report = original.reconcile(Harness::Kimi, temp.path()).unwrap();
+        let observed = Cell::new(false);
+        let cancel_after_write = |prefix: &str| {
+            let written = fs::read_dir(temp.path()).unwrap().any(|entry| {
+                let entry = entry.unwrap();
+                entry.file_name().to_string_lossy().starts_with(prefix)
+                    && entry.metadata().unwrap().len() > 0
+            });
+            observed.set(observed.get() || written);
+            written
+        };
+        let encrypted = temp.path().join("cancelled.age");
+        assert!(matches!(
+            write_ciphertext_cancellable(&encrypted, b"encrypted fixture", || cancel_after_write(
+                ".aswp-handover-"
+            )),
+            Err(Error::Cancelled)
+        ));
+        assert!(observed.get());
+        assert!(!encrypted.exists());
+        observed.set(false);
+        let plaintext = temp.path().join("PICKUP_CANCELLED.md");
+        assert!(matches!(
+            write_pickup(
+                &plaintext,
+                &original,
+                &report,
+                Some(&temp.path().join("state")),
+                || cancel_after_write(".aswp-pickup-")
+            ),
+            Err(Error::Cancelled)
+        ));
+        assert!(observed.get());
+        assert!(!plaintext.exists());
+        assert!(!fs::read_dir(temp.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".aswp-")
+        }));
     }
 
     proptest! {

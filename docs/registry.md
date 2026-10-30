@@ -50,7 +50,9 @@ links after a peer unlinks it; reparse points and multiple links remain refused.
 Required registry/lock handles still require one link. A separate Windows
 regression unlinks an already-open sidecar and reports the observed link count;
 the initialization stress gate now runs 100 iterations without retries.
-The first native result for that change is pending.
+At `16053be`, Windows observed a zero link count on the unlinked owned handle,
+and all 100 stress iterations passed in
+[CI run 40975543816](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816/job/123802538596).
 
 Migration backups use a distinct required read-only open and a second fingerprint
 check of the published snapshot. Absence cannot create a new empty backup or be

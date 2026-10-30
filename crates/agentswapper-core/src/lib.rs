@@ -175,6 +175,10 @@ pub enum Error {
     )]
     UnsafeHandoverInput,
     #[error(
+        "pickup output must be a new HANDOVER*.md or PICKUP*.md file outside known agent homes and application state"
+    )]
+    UnsafeHandoverOutput,
+    #[error(
         "handover file must be regular; symbolic links and Windows cloud/reparse files are unsupported in this preview"
     )]
     UnsafeHandoverFile,
@@ -270,6 +274,7 @@ impl Error {
             Self::NonUtf8Path => "non_utf8_path",
             Self::HandoverTooLarge => "handover_too_large",
             Self::UnsafeHandoverInput => "unsafe_handover_input",
+            Self::UnsafeHandoverOutput => "unsafe_handover_output",
             Self::UnsafeHandoverFile => "unsafe_handover_file",
             Self::InvalidHandover => "invalid_handover",
             Self::HandoverDecryption => "handover_decryption_failed",

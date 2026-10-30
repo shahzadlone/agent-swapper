@@ -37,9 +37,12 @@ pub(crate) enum HandoverCommands {
         #[command(flatten)]
         secret: PassphraseInput,
     },
-    /// Unlock and print a manual pickup note. Never launches the target agent.
+    /// Unlock and print or save a manual pickup note. Never launches the target agent.
     Pickup {
         file: PathBuf,
+        /// Save plaintext to a new HANDOVER*.md or PICKUP*.md instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
         /// Intended receiver; a label, not an automatic network disclosure.
         #[arg(long, value_parser = super::parse_harness)]
         target: Harness,
@@ -271,7 +274,7 @@ fn dispatch_inner(
             let handover::PublishedPack {
                 path: output,
                 directory_synced,
-            } = handover::write_ciphertext(&output, &ciphertext)?;
+            } = handover::write_ciphertext_cancellable(&output, &ciphertext, &interrupted)?;
             super::emit(
                 json_mode,
                 &json!({"output":output,"sourcePath":source_path,"directorySynced":directory_synced,"pack":pack.summary()}),
@@ -309,20 +312,41 @@ fn dispatch_inner(
         }
         HandoverCommands::Pickup {
             file,
+            output,
             target,
             workspace,
             secret,
         } => {
+            if let Some(path) = &output {
+                handover::validate_pickup_output(path, state_dir.as_deref())?;
+            }
             let ciphertext = handover::read_ciphertext(&file)?;
             let passphrase = secret.read(false, &interrupted)?;
             check_interrupted(&interrupted)?;
             let pack = HandoverPack::open(&ciphertext, passphrase)?;
             let report = pack.reconcile(target, &selected_workspace(workspace)?)?;
-            let note = Zeroizing::new(pack.render_pickup(&report));
             check_interrupted(&interrupted)?;
-            if json_mode {
+            if let Some(output) = output {
+                let published = handover::write_pickup(
+                    &output,
+                    &pack,
+                    &report,
+                    state_dir.as_deref(),
+                    &interrupted,
+                )?;
+                super::emit(
+                    json_mode,
+                    &json!({"output":published.path,"plaintext":true,"directorySynced":published.directory_synced,"report":report}),
+                    &format!(
+                        "Saved plaintext pickup: {}\nTrust: imported/unverified. No receiver was launched.\nGive this file to your receiving agent's handover-pick workflow.",
+                        terminal_text(&published.path.display().to_string())
+                    ),
+                )?;
+            } else if json_mode {
+                let note = Zeroizing::new(pack.render_pickup(&report));
                 super::emit(true, &json!({"report":report,"handover":note.as_str()}), "")?;
             } else {
+                let note = Zeroizing::new(pack.render_pickup(&report));
                 let mut stdout = io::stdout().lock();
                 stdout.write_all(note.as_bytes())?;
                 stdout.flush()?;

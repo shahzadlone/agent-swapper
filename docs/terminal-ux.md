@@ -18,7 +18,8 @@ they inspect the dashboard child's actual signal status, restored attributes
 and alternate-screen exit bytes. A repeated macOS run had missed that final byte
 sequence when inspecting an exited standalone PTY child. EOF races remain a
 separate direct-child fixture: signal delivery and peer closure must happen in
-the same actor. The strengthened session fixture is awaiting native macOS evidence.
+the same actor. The strengthened session fixture passed on macOS at `16053be` in
+[CI run 40975543816](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816/job/123802538852).
 
 ## Implemented foreground transition
 
@@ -82,8 +83,9 @@ agent-owned files. Noticed peer label/binding changes reset review; an alias
 reused by another profile cannot redirect the action. Privacy covers drafts,
 labels and errors, including narrow/resized dialogs; cancellation preserves
 the existing profile. POSIX PTY tests cover a peer rename/reused alias while
-unregister review is open, file retention and mapping removal. New Windows
-ConPTY coverage for those added actions is awaiting its hosted result.
+unregister review is open, file retention and mapping removal. Windows ConPTY
+coverage for those added actions passed at `16053be` in
+[CI run 40975543816](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816/job/123802538596).
 
 ## Entry and visual direction
 

@@ -165,6 +165,8 @@ Implemented, unreleased:
 - authenticated unlock before rendering, bounded decryption cost, exclusive
   output publication, source-location/link checks, and terminal control refusal;
 - metadata-only inspection and manual pickup notes with imported-data fences;
+- explicit plaintext pickup file export with protected destinations, exclusive
+  publication, cancellation cleanup and metadata-only acknowledgement;
 - directory and Git HEAD reconciliation, with worktree state explicitly unknown;
 - fixture tests for tampering, wrong passwords, credential-location refusal,
   source preservation, drift, and failed/truncated pickup output.
