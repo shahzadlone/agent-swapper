@@ -61,8 +61,11 @@ The candidate implements:
   and other processes of the same user are trusted. Files use explicit ACEs;
   directories use explicit object/container-inheritable ACEs. Unsupported or
   inherited layouts are refused, even if they might otherwise be secure.
-- Exclusive file/directory creation with security attributes supplied at
-  creation. Returned handles are not inheritable and do not share deletion.
+- Exclusive file/directory creation through `NtCreateFile`, relative to an
+  owned parent handle, with the security descriptor supplied at creation.
+  Directory creation and handle acquisition are one operation. The API accepts
+  one validated child name, refuses reparse traversal, and verifies the native
+  creation result. Returned handles are not inheritable and do not share deletion.
   Existing objects are never adopted or repaired. Failed post-creation checks
   can leave an empty object; cleanup never deletes an uncertain pathname.
 - Owner/DACL snapshots via `GetSecurityInfo` on the actual file handle, with
@@ -83,16 +86,33 @@ and [volume capability API](https://learn.microsoft.com/en-us/windows/win32/api/
 define the boundary. No caller-supplied descriptor bytes are passed into native
 security APIs.
 
+Relative creation follows Microsoft's user-mode
+[`NtCreateFile` contract](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+and [`OBJECT_ATTRIBUTES` contract](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes).
+Its root handle, UTF-16 buffer, native descriptor and output structures stay
+alive through synchronous creation. `FILE_CREATE` never overwrites; no delete
+sharing or inherited handle is requested. `create_new_at` first requires a
+parent matching the private-directory policy. The absolute-path helper opens
+and checks the immediate parent, then uses the same relative primitive; that
+helper still requires trusted ancestors and does not qualify them itself.
+
 The portable tests include malformed/truncated descriptors, arbitrary offsets,
 null/absent/empty DACLs, broad/duplicate trustees, unfamiliar ACEs, inheritance
 and overlapping components. Native fixtures cover actual creation, permissive
 parent inheritance, replacement of a filename while retaining its original
 handle, hardlink refusal, non-overwrite and Windows-generated descriptor forms.
+Additional native fixtures replace a parent's old pathname before creating a
+directory and file through its retained handle, verify that the replacement
+receives nothing, and refuse traversal/stream/device names and broad parents.
+They also refuse parent/child symbolic links without following them and verify
+impersonation refusal on a disposable thread impersonating only its own user.
+That fixture restores the thread identity on every exit; restoration failure
+aborts the owned test process. It is not a separate-user access test.
 Compilation is separate from native execution evidence.
 
-This is not yet a private-path API. Directory creation and opening are separate
-operations; the caller must currently supply a trusted, stable parent. The
-candidate does not pin or validate the full ancestor chain, establish custody
+This is not yet a private-path API. Creation is anchored to the supplied parent
+object, but the caller must still establish that parent's identity and custody.
+The candidate does not pin or validate the full ancestor chain, establish custody
 against parent deletion rights, validate remote/mapped-drive behavior, protect
 future vendor-created descendants, or prove denial to a separate user. A handle
 snapshot also cannot prevent later changes by trusted principals. Those gaps

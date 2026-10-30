@@ -2,7 +2,8 @@
 
 The experimental `agentswapper-windows-security` workspace crate pins the
 already-locked Microsoft `windows-sys 0.61.2` bindings and enables security,
-authorization, threading and filesystem APIs. No third-party package is added
+authorization, threading and filesystem APIs, including the documented
+user-mode `NtCreateFile` binding exposed in its WDK module. No third-party package is added
 and neither the core nor CLI links this candidate. Unlike the earlier console
 wrappers, this is a deliberately owned, narrowly scoped unsafe boundary; see
 the [API invariants and qualification gates](windows-acl.md). The policy/parser

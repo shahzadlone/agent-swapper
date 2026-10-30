@@ -2,7 +2,7 @@
 //! security APIs. Arbitrary descriptor bytes go to the safe parser instead.
 
 use std::{
-    ffi::c_void,
+    ffi::{OsStr, c_void},
     fs::File,
     io,
     mem::size_of,
@@ -12,29 +12,41 @@ use std::{
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
     path::{Component, Path, Prefix},
-    ptr::{NonNull, null_mut},
+    ptr::{NonNull, null, null_mut},
 };
 
+use windows_sys::Wdk::{
+    Foundation::OBJECT_ATTRIBUTES,
+    Storage::FileSystem::{
+        FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT,
+        FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
+    },
+};
 use windows_sys::Win32::{
-    Foundation::{ERROR_NO_TOKEN, INVALID_HANDLE_VALUE, LocalFree},
+    Foundation::{
+        ERROR_NO_TOKEN, INVALID_HANDLE_VALUE, LocalFree, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE,
+        RtlNtStatusToDosError, UNICODE_STRING,
+    },
     Security::{
         Authorization::{
             ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
         },
         DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorLength,
-        GetTokenInformation, OWNER_SECURITY_INFORMATION, SE_SELF_RELATIVE, SECURITY_ATTRIBUTES,
-        TOKEN_QUERY, TOKEN_USER, TokenUser,
+        GetTokenInformation, OWNER_SECURITY_INFORMATION, SE_SELF_RELATIVE, TOKEN_QUERY, TOKEN_USER,
+        TokenUser,
     },
     Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW,
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-        FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFileInformationByHandle,
-        GetVolumeInformationByHandleW, OPEN_EXISTING, READ_CONTROL,
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, FILE_TRAVERSE, GetFileInformationByHandle, GetVolumeInformationByHandleW,
+        OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
     },
     System::{
+        IO::IO_STATUS_BLOCK,
         SystemServices::FILE_PERSISTENT_ACLS,
         Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
+        WindowsProgramming::FILE_CREATED,
     },
 };
 
@@ -131,14 +143,6 @@ impl LocalDescriptor {
         // allocation. The immutable slice cannot outlive its LocalDescriptor.
         Ok(unsafe { std::slice::from_raw_parts(self.0.as_ptr().cast(), length) })
     }
-
-    fn attributes(&self) -> SECURITY_ATTRIBUTES {
-        SECURITY_ATTRIBUTES {
-            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: self.0.as_ptr(),
-            bInheritHandle: 0,
-        }
-    }
 }
 
 fn process_user() -> Result<Sid> {
@@ -228,34 +232,7 @@ fn wide_path(path: &Path) -> Result<Vec<u16>> {
         let Component::Normal(name) = part else {
             return Err(Error::UnsupportedPath);
         };
-        let units: Vec<_> = name.encode_wide().collect();
-        if units.is_empty()
-            || units
-                .iter()
-                .any(|c| *c < 32 || b"<>:\"|?*".iter().any(|v| u16::from(*v) == *c))
-            || matches!(units.last(), Some(32 | 46))
-        {
-            return Err(Error::UnsupportedPath);
-        }
-        let stem = name
-            .to_string_lossy()
-            .split('.')
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(' ')
-            .to_ascii_uppercase();
-        let port = stem
-            .strip_prefix("COM")
-            .or_else(|| stem.strip_prefix("LPT"));
-        if matches!(
-            stem.as_str(),
-            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
-        ) || matches!(
-            port,
-            Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
-        ) {
-            return Err(Error::UnsupportedPath);
-        }
+        wide_component(name)?;
         count += 1;
     }
     if count == 0 {
@@ -268,41 +245,141 @@ fn wide_path(path: &Path) -> Result<Vec<u16>> {
     Ok(path)
 }
 
-fn create(path: &Path, kind: ObjectKind, descriptor: &LocalDescriptor) -> Result<File> {
-    let path = wide_path(path)?;
-    let attributes = descriptor.attributes();
-    if kind == ObjectKind::Directory {
-        // SAFETY: path is a live NUL-terminated absolute disk path; attributes
-        // borrows a live OS descriptor and disables handle inheritance. This
-        // creates exactly one directory, never adopts or edits an existing one.
-        if unsafe { CreateDirectoryW(path.as_ptr(), &attributes) } == 0 {
-            return Err(io::Error::last_os_error().into());
-        }
+fn wide_component(name: &OsStr) -> Result<Vec<u16>> {
+    let units: Vec<_> = name.encode_wide().collect();
+    if units.is_empty()
+        || units
+            .iter()
+            .any(|c| *c < 32 || b"<>:\"|?*/\\".iter().any(|v| u16::from(*v) == *c))
+        || matches!(units.last(), Some(32 | 46))
+    {
+        return Err(Error::UnsupportedPath);
     }
-    let (access, disposition) = match kind {
-        ObjectKind::File => (FILE_GENERIC_READ | FILE_GENERIC_WRITE, CREATE_NEW),
-        ObjectKind::Directory => (READ_CONTROL, OPEN_EXISTING),
-    };
-    // SAFETY: live path/attributes, valid constants, no template handle. The
-    // descriptor remains alive through creation. OPEN_REPARSE_POINT prevents
-    // following the final component; ancestor custody is a separate gate.
+    let stem = name
+        .to_string_lossy()
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    let port = stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"));
+    if matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) || matches!(
+        port,
+        Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+    ) {
+        return Err(Error::UnsupportedPath);
+    }
+    if units.len() > 255 {
+        return Err(Error::UnsupportedPath);
+    }
+    Ok(units)
+}
+
+fn create(path: &Path, kind: ObjectKind, descriptor: &LocalDescriptor) -> Result<File> {
+    wide_path(path)?;
+    let parent = path.parent().ok_or(Error::UnsupportedPath)?;
+    let name = path.file_name().ok_or(Error::UnsupportedPath)?;
+    let parent: Vec<u16> = parent.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: parent is derived from the validated, NUL-free absolute disk
+    // path. Open only an existing directory, with no inherited handle or delete
+    // sharing. The last component is not followed if it is a reparse point.
     let handle = unsafe {
         CreateFileW(
-            path.as_ptr(),
-            access,
+            parent.as_ptr(),
+            READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
-            &attributes,
-            disposition,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             null_mut(),
         )
     };
     if handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error().into());
     }
-    // SAFETY: CreateFileW succeeded and transferred unique ownership. std::File
-    // closes on every path. We do not reopen a pathname to validate this file.
-    Ok(unsafe { File::from_raw_handle(handle) })
+    // SAFETY: successful CreateFileW transferred unique ownership. The parent
+    // remains alive through relative creation and closes on every exit path.
+    let parent = unsafe { File::from_raw_handle(handle) };
+    validate_object(&parent, ObjectKind::Directory)?;
+    create_at(&parent, name, kind, descriptor)
+}
+
+fn create_at(
+    parent: &File,
+    name: &OsStr,
+    kind: ObjectKind,
+    descriptor: &LocalDescriptor,
+) -> Result<File> {
+    let mut name_buffer = wide_component(name)?;
+    let name = UNICODE_STRING {
+        Length: (name_buffer.len() * 2) as u16,
+        MaximumLength: (name_buffer.len() * 2) as u16,
+        Buffer: name_buffer.as_mut_ptr(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: parent.as_raw_handle(),
+        ObjectName: &name,
+        Attributes: OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE,
+        SecurityDescriptor: descriptor.0.as_ptr().cast(),
+        SecurityQualityOfService: null(),
+    };
+    let (access, options, file_attributes) = match kind {
+        ObjectKind::File => (
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            FILE_NON_DIRECTORY_FILE,
+            FILE_ATTRIBUTE_NORMAL,
+        ),
+        ObjectKind::Directory => (
+            READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
+            FILE_DIRECTORY_FILE,
+            FILE_ATTRIBUTE_DIRECTORY,
+        ),
+    };
+    let mut handle = null_mut();
+    let mut status_block = IO_STATUS_BLOCK::default();
+    // SAFETY: parent and OS descriptor stay alive; name is a bounded single
+    // component with an explicit UTF-16 byte length and no traversal, streams
+    // or NULs. All structs and outputs are initialized/aligned. NtCreateFile
+    // completes creation before returning; synchronous non-alertable mode also
+    // makes the returned handle usable by std::File. No OBJ_INHERIT, delete
+    // sharing, overwrite disposition, async buffers or extended attributes.
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            access,
+            &attributes,
+            &mut status_block,
+            null(),
+            file_attributes,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_CREATE,
+            options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            null(),
+            0,
+        )
+    };
+    if status < 0 {
+        // SAFETY: pure NTSTATUS-to-Win32 error mapping, no pointer arguments.
+        return Err(
+            io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32).into(),
+        );
+    }
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(Error::UnsupportedObject);
+    }
+    // SAFETY: successful native creation transferred a real, uniquely owned
+    // file/directory handle, which standard File closes using CloseHandle.
+    let file = unsafe { File::from_raw_handle(handle) };
+    if status_block.Information != FILE_CREATED as usize {
+        return Err(Error::UnsupportedObject);
+    }
+    Ok(file)
 }
 
 fn validate_object(file: &File, kind: ObjectKind) -> Result<()> {
@@ -377,6 +454,19 @@ impl SecurityPolicy {
         reject_impersonation()?;
         let descriptor = self.creation_descriptor(kind)?;
         let file = create(path, kind, &descriptor)?;
+        self.validate_handle(&file, kind)?;
+        Ok(file)
+    }
+
+    /// Create one child relative to an already-owned private directory. No
+    /// pathname for the parent is looked up. Returns the newly created object
+    /// handle from the same native operation, including for directories. This
+    /// anchors creation to that object; it does not pin its ancestor names.
+    pub fn create_new_at(&self, parent: &File, name: &OsStr, kind: ObjectKind) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_handle(parent, ObjectKind::Directory)?;
+        let descriptor = self.creation_descriptor(kind)?;
+        let file = create_at(parent, name, kind, &descriptor)?;
         self.validate_handle(&file, kind)?;
         Ok(file)
     }
