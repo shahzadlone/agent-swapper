@@ -9,6 +9,7 @@ const HEADER: usize = 20;
 const SELF_RELATIVE: u16 = 0x8000;
 const DACL_PRESENT: u16 = 0x0004;
 const DACL_PROTECTED: u16 = 0x1000;
+const DACL_AUTO_INHERITED: u16 = 0x0400;
 const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
 const SYSTEM: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
 const ADMINISTRATORS: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
@@ -74,6 +75,20 @@ fn offset(bytes: &[u8], field: usize) -> Result<usize> {
 }
 
 pub(crate) fn validate(bytes: &[u8], owner: &Sid, kind: ObjectKind) -> Result<()> {
+    validate_layout(bytes, owner, kind, Layout::Protected)
+}
+
+pub(crate) fn validate_inherited_file(bytes: &[u8], owner: &Sid) -> Result<()> {
+    validate_layout(bytes, owner, ObjectKind::File, Layout::InheritedFile)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    Protected,
+    InheritedFile,
+}
+
+fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) -> Result<()> {
     if !(HEADER..=MAX_DESCRIPTOR).contains(&bytes.len()) || bytes[0] != 1 || bytes[1] != 0 {
         return Err(Error::InvalidDescriptor);
     }
@@ -101,20 +116,38 @@ pub(crate) fn validate(bytes: &[u8], owner: &Sid, kind: ObjectKind) -> Result<()
     if count == 0 {
         return Err(Error::EmptyDacl);
     }
-    if control & DACL_PROTECTED == 0 {
-        return Err(Error::UnprotectedDacl);
+    match layout {
+        Layout::Protected if control & DACL_PROTECTED == 0 => return Err(Error::UnprotectedDacl),
+        Layout::InheritedFile
+            if control & (DACL_PROTECTED | DACL_AUTO_INHERITED) != DACL_AUTO_INHERITED =>
+        {
+            return Err(Error::UnexpectedDacl);
+        }
+        _ => {}
     }
     // Snapshot requests cover owner and DACL only. Permit Windows' group-
     // defaulted and auto-inherited bookkeeping; no pending inheritance or
     // resource-manager interpretation, defaulted DACL, or supplied SACL.
-    if control & !(SELF_RELATIVE | DACL_PRESENT | DACL_PROTECTED | 0x0402) != 0
-        || dword(bytes, 12)? != 0
-    {
+    // A system-created inherited child can have a defaulted owner. Its actual
+    // SID must still be one of the already-trusted principals below.
+    let allowed_control = SELF_RELATIVE
+        | DACL_PRESENT
+        | DACL_PROTECTED
+        | 0x0402
+        | if layout == Layout::InheritedFile {
+            1
+        } else {
+            0
+        };
+    if control & !allowed_control != 0 || dword(bytes, 12)? != 0 {
         return Err(Error::InvalidDescriptor);
     }
     let owner_start = offset(bytes, 4)?;
     let actual_owner = sid_prefix(&bytes[owner_start..])?;
-    if actual_owner != owner.0 {
+    if actual_owner != owner.0
+        && !(layout == Layout::InheritedFile
+            && (actual_owner == SYSTEM || actual_owner == ADMINISTRATORS))
+    {
         return Err(Error::OwnerMismatch);
     }
     let mut regions = vec![
@@ -139,9 +172,10 @@ pub(crate) fn validate(bytes: &[u8], owner: &Sid, kind: ObjectKind) -> Result<()
     }
     let trustees = [owner.0.as_slice(), SYSTEM, ADMINISTRATORS];
     let mut seen = [false; 3];
-    let expected_flags = match kind {
-        ObjectKind::File => 0,
-        ObjectKind::Directory => 3,
+    let expected_flags = match (layout, kind) {
+        (Layout::InheritedFile, _) => 0x10,
+        (Layout::Protected, ObjectKind::File) => 0,
+        (Layout::Protected, ObjectKind::Directory) => 3,
     };
     let mut cursor = 8;
     for _ in 0..count {

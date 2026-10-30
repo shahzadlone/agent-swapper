@@ -236,6 +236,33 @@ fn separate_identity_cannot_access_private_objects() {
         .unwrap();
     nested.write_all(b"nested fixture canary").unwrap();
     drop(nested);
+    // A reachable control inside the same directory prevents a traversal
+    // denial from masquerading as the inherited child's own ACL protection.
+    let mut traversal_control = create_at(
+        &directory,
+        OsStr::new("traversal-control.txt"),
+        ObjectKind::File,
+        &control_sd,
+    )
+    .unwrap();
+    traversal_control
+        .write_all(b"nested public control")
+        .unwrap();
+    drop(traversal_control);
+    std::fs::write(
+        private_directory.join("inherited.txt"),
+        b"inherited fixture canary",
+    )
+    .unwrap();
+    drop(
+        policy
+            .open_existing_inherited_file_at(
+                &directory,
+                OsStr::new("inherited.txt"),
+                FileAccess::ReadOnly,
+            )
+            .unwrap(),
+    );
     drop(directory);
     drop(parent);
 
@@ -296,6 +323,16 @@ fn separate_identity_cannot_access_private_objects() {
             b"public fixture control"
         );
         std::fs::write(&control_for_thread, b"other user control write").unwrap();
+        assert_eq!(std::fs::read(directory_for_thread.join("traversal-control.txt")).unwrap(), b"nested public control");
+        std::fs::write(directory_for_thread.join("traversal-control.txt"), b"nested control updated").unwrap();
+        let inherited = directory_for_thread.join("inherited.txt");
+        denied(File::open(&inherited), "read inherited private file");
+        denied(std::fs::OpenOptions::new().write(true).open(&inherited), "write inherited private file");
+        for access in [WRITE_DAC, WRITE_OWNER, DELETE] {
+            denied(std::fs::OpenOptions::new().access_mode(access).open(&inherited), "open inherited security/delete rights");
+        }
+        denied(std::fs::remove_file(&inherited), "delete inherited private file");
+        denied(std::fs::rename(&inherited, directory_for_thread.join("moved-inherited.txt")), "rename inherited private file");
         denied(File::open(&private_for_thread), "read private file");
         denied(
             std::fs::OpenOptions::new()
@@ -407,6 +444,18 @@ fn separate_identity_cannot_access_private_objects() {
         b"nested fixture canary"
     );
     assert!(!private_directory.join("injected.txt").exists());
+    assert_eq!(
+        std::fs::read(private_directory.join("inherited.txt")).unwrap(),
+        b"inherited fixture canary"
+    );
+    assert_eq!(
+        std::fs::read(private_directory.join("traversal-control.txt")).unwrap(),
+        b"nested control updated"
+    );
+    assert!(!private_directory.join("moved-inherited.txt").exists());
+    println!(
+        "::notice title=Windows inherited ACL separate identity::other user read/wrote the control in the same private directory but was denied inherited file data, security and deletion access; original inherited bytes preserved"
+    );
     println!(
         "::notice title=Windows ACL separate identity::temporary standard user read/wrote the permissive control but was denied private reads, writes, security changes, deletion, rename, listing and child creation; original bytes preserved and owned account removed"
     );

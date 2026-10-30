@@ -39,9 +39,9 @@ pub enum Error {
     EmptyDacl,
     #[error("the DACL is not protected from parent inheritance")]
     UnprotectedDacl,
-    #[error("the object is not owned by the selected process identity")]
+    #[error("the object owner is not allowed by the selected security policy")]
     OwnerMismatch,
-    #[error("the DACL does not match the restricted creation policy")]
+    #[error("the DACL does not match the selected restricted policy")]
     UnexpectedDacl,
     #[error("the filesystem object has an unsupported type, link or filesystem")]
     UnsupportedObject,
@@ -67,5 +67,15 @@ impl SecurityPolicy {
     /// casts. This does not perform a Windows access check or pin a pathname.
     pub fn validate_descriptor(&self, bytes: &[u8], kind: ObjectKind) -> Result<()> {
         descriptor::validate(bytes, &self.owner, kind)
+    }
+
+    /// Snapshot-only policy for a file directly inheriting the three exact
+    /// grants from a private parent: all ACEs inherited, no explicit additions,
+    /// no protection or unknown flags. Owner may be the process user, SYSTEM or
+    /// Administrators, all of whom already have full access under this policy.
+    /// Flags cannot prove inheritance origin or parent custody. Native callers
+    /// should use `open_existing_inherited_file_at` with a protected parent.
+    pub fn validate_inherited_file_descriptor(&self, bytes: &[u8]) -> Result<()> {
+        descriptor::validate_inherited_file(bytes, &self.owner)
     }
 }

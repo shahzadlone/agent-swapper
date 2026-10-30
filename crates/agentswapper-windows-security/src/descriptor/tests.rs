@@ -18,6 +18,10 @@ fn policy() -> SecurityPolicy {
 // Small independent MS-DTYP corpus builder. Native tests additionally use the
 // Windows SDDL converter and actual filesystem descriptors, not this builder.
 fn descriptor(kind: ObjectKind, trustees: &[&[u8]]) -> Vec<u8> {
+    descriptor_with_owner(kind, trustees, USER)
+}
+
+fn descriptor_with_owner(kind: ObjectKind, trustees: &[&[u8]], owner: &[u8]) -> Vec<u8> {
     let mut acl = vec![2, 0, 0, 0, trustees.len() as u8, 0, 0, 0];
     for sid in trustees {
         acl.extend([0, if kind == ObjectKind::Directory { 3 } else { 0 }]);
@@ -28,10 +32,21 @@ fn descriptor(kind: ObjectKind, trustees: &[&[u8]]) -> Vec<u8> {
     let size = (acl.len() as u16).to_le_bytes();
     acl[2..4].copy_from_slice(&size);
     let mut descriptor = vec![1, 0, 4, 144, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    descriptor.extend(((20 + USER.len()) as u32).to_le_bytes());
-    descriptor.extend(USER);
+    descriptor.extend(((20 + owner.len()) as u32).to_le_bytes());
+    descriptor.extend(owner);
     descriptor.extend(acl);
     descriptor
+}
+
+fn inherited(trustees: &[&[u8]], owner: &[u8]) -> Vec<u8> {
+    let mut bytes = descriptor_with_owner(ObjectKind::File, trustees, owner);
+    bytes[3] = 0x84; // self-relative + auto-inherited, not protected.
+    let mut ace = 20 + owner.len() + 8;
+    for trustee in trustees {
+        bytes[ace + 1] = 0x10;
+        ace += 8 + trustee.len();
+    }
+    bytes
 }
 
 fn valid(kind: ObjectKind) -> Vec<u8> {
@@ -279,11 +294,105 @@ fn refuses_oversized_descriptors_and_unrecognized_revisions() {
     }
 }
 
+#[test]
+fn inherited_file_policy_requires_exact_inherited_grants_and_an_already_trusted_owner() {
+    for owner in [USER, SYSTEM, ADMINISTRATORS] {
+        for order in [
+            [USER, SYSTEM, ADMINISTRATORS],
+            [ADMINISTRATORS, SYSTEM, USER],
+        ] {
+            let mut bytes = inherited(&order, owner);
+            policy().validate_inherited_file_descriptor(&bytes).unwrap();
+            // The same snapshot must never qualify as an explicitly protected file.
+            assert!(matches!(
+                policy().validate_descriptor(&bytes, ObjectKind::File),
+                Err(Error::UnprotectedDacl)
+            ));
+            bytes[2] |= 1; // A defaulted owner remains subject to the SID check.
+            policy().validate_inherited_file_descriptor(&bytes).unwrap();
+        }
+    }
+    assert!(matches!(
+        policy().validate_inherited_file_descriptor(&inherited(
+            &[USER, SYSTEM, ADMINISTRATORS],
+            EVERYONE
+        )),
+        Err(Error::OwnerMismatch)
+    ));
+    assert!(
+        policy()
+            .validate_inherited_file_descriptor(&valid(ObjectKind::File))
+            .is_err()
+    );
+    for trustees in [
+        vec![USER, SYSTEM, EVERYONE],
+        vec![USER, USER, ADMINISTRATORS],
+        vec![USER, SYSTEM],
+        vec![USER, SYSTEM, ADMINISTRATORS, EVERYONE],
+    ] {
+        assert!(
+            policy()
+                .validate_inherited_file_descriptor(&inherited(&trustees, USER))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn inherited_file_policy_refuses_mixed_explicit_inherit_only_unknown_or_pending_permissions() {
+    let original = inherited(&[USER, SYSTEM, ADMINISTRATORS], USER);
+    let ace = 20 + USER.len() + 8;
+    for flags in 0..=255 {
+        if flags == 0x10 {
+            continue;
+        }
+        let mut bytes = original.clone();
+        bytes[ace + 1] = flags;
+        assert!(
+            policy().validate_inherited_file_descriptor(&bytes).is_err(),
+            "ACE flags {flags}"
+        );
+    }
+    for ace_type in 1..=255 {
+        let mut bytes = original.clone();
+        bytes[ace] = ace_type;
+        assert!(policy().validate_inherited_file_descriptor(&bytes).is_err());
+    }
+    for control in [0x8004_u16, 0x9004, 0x9404, 0x8504, 0x840c, 0xc404, 0x8400] {
+        let mut bytes = original.clone();
+        bytes[2..4].copy_from_slice(&control.to_le_bytes());
+        assert!(
+            policy().validate_inherited_file_descriptor(&bytes).is_err(),
+            "control {control:04x}"
+        );
+    }
+    for index in 20..original.len() {
+        for bit in 0..8 {
+            let mut changed = original.clone();
+            changed[index] ^= 1 << bit;
+            assert!(
+                policy()
+                    .validate_inherited_file_descriptor(&changed)
+                    .is_err(),
+                "changed byte {index}, bit {bit}"
+            );
+        }
+    }
+    for end in 0..original.len() {
+        assert!(
+            policy()
+                .validate_inherited_file_descriptor(&original[..end])
+                .is_err()
+        );
+    }
+}
+
 proptest! {
     #[test]
     fn arbitrary_descriptor_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
         let _ = policy().validate_descriptor(&bytes, ObjectKind::File);
         let _ = policy().validate_descriptor(&bytes, ObjectKind::Directory);
+        let _ = policy().validate_inherited_file_descriptor(&bytes);
     }
 
     #[test]
@@ -293,5 +402,10 @@ proptest! {
             bytes[field..field+4].copy_from_slice(&value.to_le_bytes());
         }
         let _ = policy().validate_descriptor(&bytes, ObjectKind::File);
+        let mut inherited = inherited(&[USER, SYSTEM, ADMINISTRATORS], USER);
+        for (field, value) in [(4, owner), (8, group), (12, sacl), (16, dacl)] {
+            inherited[field..field+4].copy_from_slice(&value.to_le_bytes());
+        }
+        let _ = policy().validate_inherited_file_descriptor(&inherited);
     }
 }

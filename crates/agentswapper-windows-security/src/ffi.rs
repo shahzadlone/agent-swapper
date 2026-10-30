@@ -516,6 +516,26 @@ impl SecurityPolicy {
         self.open_existing_at(parent, name, ObjectKind::Directory, FileAccess::ReadOnly)
     }
 
+    /// Reopen a direct child file whose ACL was inherited from this protected
+    /// private parent (for example a SQLite sidecar). Checks the parent's exact
+    /// protected policy first, then the child's actual type, link count, volume
+    /// and inherited-only policy. Never repairs, creates or truncates a file.
+    /// Does not qualify arbitrary vendor descendants or retain parent custody.
+    pub fn open_existing_inherited_file_at(
+        &self,
+        parent: &File,
+        name: &OsStr,
+        access: FileAccess,
+    ) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_handle(parent, ObjectKind::Directory)?;
+        let file = open_at(parent, name, ObjectKind::File, OpenMode::Existing(access))?;
+        validate_object(&file, ObjectKind::File)?;
+        let descriptor = LocalDescriptor::from_file(&file)?;
+        self.validate_inherited_file_descriptor(descriptor.bytes()?)?;
+        Ok(file)
+    }
+
     fn open_existing_at(
         &self,
         parent: &File,

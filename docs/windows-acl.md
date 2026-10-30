@@ -59,8 +59,9 @@ The candidate implements:
 - SDDL conversion through Windows, with a protected DACL granting full control
   only to that user, LocalSystem and built-in Administrators. Those principals
   and other processes of the same user are trusted. Files use explicit ACEs;
-  directories use explicit object/container-inheritable ACEs. Unsupported or
-  inherited layouts are refused, even if they might otherwise be secure.
+  directories use explicit object/container-inheritable ACEs. The protected
+  policy refuses inherited layouts, even if they might otherwise be secure.
+  A separate direct-child file policy is described below.
 - Exclusive file/directory creation through `NtCreateFile`, relative to an
   owned parent handle, with the security descriptor supplied at creation.
   Directory creation and handle acquisition are one operation. The API accepts
@@ -163,7 +164,8 @@ retained-handle attempts returned sharing violation (32). The closed private
 directory returned access denied (5), independently of handle retention.
 These observations qualify the fixture's measured intervals only.
 This test does not cover every group policy, filesystem or vendor credential
-layout. Reopening changes after that revision need their own native results.
+layout. Reopening and inherited-file changes after that revision need their own
+native results.
 
 The fixture uses the documented [local account creation API](https://learn.microsoft.com/en-us/windows/win32/api/lmaccess/nf-lmaccess-netuseradd),
 [local logon API](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-logonuserw)
@@ -179,6 +181,45 @@ against parent deletion rights, validate remote/mapped-drive behavior, protect
 future vendor-created descendants, or qualify real vendor credential layouts. A handle
 snapshot also cannot prevent later changes by trusted principals. Those gaps
 must be resolved before storage integration or a privacy claim.
+
+## Direct inherited files
+
+SQLite creates its own WAL and shared-memory files. Those files inherit
+permissions; treating them as explicitly protected files would conflate two
+different policies. `open_existing_inherited_file_at` therefore requires the
+parent's exact **protected directory** policy, then opens one child relative to
+that handle and checks the child's actual descriptor. The existing protected
+creation/open APIs keep their original policy.
+
+The child policy requires exactly three full-control allow ACEs, all marked
+inherited, for the selected user, SYSTEM and Administrators. It refuses mixed
+explicit/inherited grants, inherit-only or unknown flags, a protected or
+non-auto-inherited DACL, other trustees, null/empty DACLs and unknown layouts.
+The owner must be one of those same trusted principals: system-created files
+can select a token's default owner. This adds no principal beyond those already
+granted full control. It does not accept arbitrary vendor permission layouts.
+
+This follows Microsoft's [ACE inheritance rules](https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-inheritance-rules)
+and [descriptor control flags](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-control).
+Flags alone do not prove where an ACL came from. The opened parent and child
+are both validated; a snapshot cannot prevent later trusted permission changes.
+No permissions are repaired. Moving a broad file beneath a private parent must
+not qualify it solely because of its new pathname.
+
+Native fixtures use the same pinned bundled SQLite dependency as the core to
+inspect an actual database, WAL and SHM, then verify database contents after
+closing the guards and letting SQLite remove its sidecars. A separate-user
+probe includes a permissive control inside the same private directory: that
+control must remain readable/writable while the inherited file refuses data,
+security and deletion access. This distinguishes target ACL denial from a
+failure merely to traverse the directory. These fixtures require their own
+successful native run before they count as qualification evidence.
+
+This API does not yet handle inherited directories, disconnected optional
+sidecar snapshots, existing-state migration or the complete retained ancestor
+chain. The SQLite fixture adds only a Windows test dependency already present
+in the workspace. Cross-checking its native test binary requires MSVC's C tools;
+a Linux-only Rust check is not execution evidence.
 
 ## Required before a privacy claim
 

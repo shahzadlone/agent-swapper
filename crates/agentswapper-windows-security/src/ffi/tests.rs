@@ -577,6 +577,14 @@ fn thread_impersonation_refuses_identity_selection_and_creation() {
             policy.open_existing_directory_at(&parent, OsStr::new("refused")),
             Err(Error::Impersonation)
         ));
+        assert!(matches!(
+            policy.open_existing_inherited_file_at(
+                &parent,
+                OsStr::new("refused"),
+                FileAccess::ReadOnly
+            ),
+            Err(Error::Impersonation)
+        ));
         drop(restore);
         assert!(!root.path().join("refused.txt").exists());
         assert!(!root.path().join("parent/refused.txt").exists());
@@ -584,4 +592,137 @@ fn thread_impersonation_refuses_identity_selection_and_creation() {
     })
     .join()
     .unwrap();
+}
+
+#[test]
+fn sqlite_database_and_live_sidecars_inherit_only_the_private_parent_grants() {
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let path = root.path().join("private");
+    let parent = policy.create_new(&path, ObjectKind::Directory).unwrap();
+    let database = path.join("registry.sqlite3");
+    let db = rusqlite::Connection::open(&database).unwrap();
+    db.pragma_update(None, "journal_mode", "WAL").unwrap();
+    db.execute_batch(
+        "CREATE TABLE fixture(value INTEGER NOT NULL); INSERT INTO fixture VALUES(7);",
+    )
+    .unwrap();
+    for name in [
+        "registry.sqlite3",
+        "registry.sqlite3-wal",
+        "registry.sqlite3-shm",
+    ] {
+        let file = policy
+            .open_existing_inherited_file_at(&parent, OsStr::new(name), FileAccess::ReadOnly)
+            .unwrap();
+        assert!(file.metadata().unwrap().len() > 0);
+        assert!(matches!(
+            policy.validate_handle(&file, ObjectKind::File),
+            Err(Error::UnprotectedDacl)
+        ));
+        // Close each guard before SQLite's cleanup; no delete sharing is intentional.
+    }
+    db.close().unwrap();
+    assert!(!path.join("registry.sqlite3-wal").exists());
+    assert!(!path.join("registry.sqlite3-shm").exists());
+    let db = rusqlite::Connection::open(&database).unwrap();
+    assert_eq!(
+        db.query_row("SELECT value FROM fixture", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        7
+    );
+    println!(
+        "::notice title=Windows inherited SQLite ACL::actual database, WAL and SHM passed the distinct inherited-only file policy under a protected parent; database remained readable after sidecar cleanup"
+    );
+}
+
+#[test]
+fn inherited_reopen_refuses_broad_or_protected_files_and_preserves_nonmatching_acls() {
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let path = root.path().join("private");
+    let parent = policy.create_new(&path, ObjectKind::Directory).unwrap();
+    std::fs::write(path.join("inherited"), b"inherited canary").unwrap();
+    let mut file = policy
+        .open_existing_inherited_file_at(&parent, OsStr::new("inherited"), FileAccess::ReadWrite)
+        .unwrap();
+    file.seek(SeekFrom::End(0)).unwrap();
+    file.write_all(b" preserved").unwrap();
+    drop(file);
+    drop(
+        policy
+            .create_new_at(&parent, OsStr::new("explicit"), ObjectKind::File)
+            .unwrap(),
+    );
+    assert!(
+        policy
+            .open_existing_inherited_file_at(&parent, OsStr::new("explicit"), FileAccess::ReadOnly)
+            .is_err()
+    );
+    assert!(
+        matches!(policy.open_existing_inherited_file_at(&parent, OsStr::new("missing"), FileAccess::ReadOnly), Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound)
+    );
+    assert!(!path.join("missing").exists());
+    let broad =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
+            .unwrap();
+    let broad_path = root.path().join("broad");
+    let broad_parent = create(&broad_path, ObjectKind::Directory, &broad).unwrap();
+    std::fs::write(broad_path.join("broad-child"), b"broad fixture").unwrap();
+    assert!(matches!(
+        policy.open_existing_inherited_file_at(
+            &broad_parent,
+            OsStr::new("broad-child"),
+            FileAccess::ReadOnly
+        ),
+        Err(Error::UnexpectedDacl)
+    ));
+    // Moving a broad inherited child into a private parent must not qualify it
+    // by its new location or silently repair its descriptor.
+    std::fs::rename(broad_path.join("broad-child"), path.join("moved-broad")).unwrap();
+    let snapshot = File::open(path.join("moved-broad")).unwrap();
+    let before = LocalDescriptor::from_file(&snapshot)
+        .unwrap()
+        .bytes()
+        .unwrap()
+        .to_vec();
+    assert!(
+        policy
+            .open_existing_inherited_file_at(
+                &parent,
+                OsStr::new("moved-broad"),
+                FileAccess::ReadWrite
+            )
+            .is_err()
+    );
+    assert_eq!(
+        LocalDescriptor::from_file(&snapshot)
+            .unwrap()
+            .bytes()
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        std::fs::read(path.join("moved-broad")).unwrap(),
+        b"broad fixture"
+    );
+    assert_eq!(
+        std::fs::read(path.join("inherited")).unwrap(),
+        b"inherited canary preserved"
+    );
+    std::fs::hard_link(path.join("inherited"), path.join("alias")).unwrap();
+    assert!(matches!(
+        policy.open_existing_inherited_file_at(
+            &parent,
+            OsStr::new("inherited"),
+            FileAccess::ReadOnly
+        ),
+        Err(Error::UnsupportedObject)
+    ));
+    std::os::windows::fs::symlink_file(path.join("explicit"), path.join("link")).unwrap();
+    assert!(
+        policy
+            .open_existing_inherited_file_at(&parent, OsStr::new("link"), FileAccess::ReadOnly)
+            .is_err()
+    );
 }

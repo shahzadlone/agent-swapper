@@ -5,16 +5,18 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
-The latest recorded complete pipeline is `54c7b19`:
-[CI run 40999147184](https://github.com/shahzadlone/agent-swapper/actions/runs/40999147184)
+The latest recorded complete pipeline is `43fe407`:
+[CI run 41003109095](https://github.com/shahzadlone/agent-swapper/actions/runs/41003109095)
 passed Linux/macOS dashboard transitions, Windows native console restoration
 and ConPTY launches/rename/unregister, 100 Windows registry stress iterations,
 encrypted handover and explicit plaintext pickup export, hidden-input cleanup
-and terminal disconnect refusal, the initial isolated Windows ACL candidate,
+and terminal disconnect refusal, the isolated Windows ACL candidate with
+relative creation, adversarial descriptor checks and separate-user access and
+parent-deletion probes,
 the dependency policy, all three candidate builds, separate-runner byte
 comparisons and preview provenance verification. Subsequent changes need their
 own completed run. The ACL candidate is not linked into the CLI and this run
-predates its relative-creation and separate-identity additions. Real-provider qualification, automated
+predates its relative-reopening and inherited-file additions. Real-provider qualification, automated
 subscription switching, platform containment and signed public distribution
 remain separate unfinished gates.
 
