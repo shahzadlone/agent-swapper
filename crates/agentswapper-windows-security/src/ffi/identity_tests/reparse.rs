@@ -11,7 +11,10 @@ use windows_sys::Win32::{
         FILE_ADD_SUBDIRECTORY, FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
         FILE_WRITE_EA,
     },
-    System::{IO::DeviceIoControl, Ioctl::FSCTL_SET_REPARSE_POINT},
+    System::{
+        IO::DeviceIoControl,
+        Ioctl::{FSCTL_SET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT_EX},
+    },
 };
 
 #[derive(Clone)]
@@ -20,6 +23,7 @@ pub(super) struct Fixture {
     control: PathBuf,
     cases: Vec<Probe>,
     nonempty: PathBuf,
+    extended_empty: PathBuf,
 }
 
 // Kept only by the original fixture identity, never passed into its probes.
@@ -41,6 +45,7 @@ impl Fixture {
             target: root.join("junction-target"),
             control: root.join("junction-control"),
             nonempty: root.join("junction-nonempty"),
+            extended_empty: root.join("junction-extended-empty"),
             cases: [
                 ("read-only", 0),
                 ("create-subdirectory", FILE_ADD_SUBDIRECTORY),
@@ -87,6 +92,7 @@ impl Fixture {
         ))
         .unwrap();
         let parent = create(&fixture.nonempty, ObjectKind::Directory, &parent_sd).unwrap();
+        drop(create(&fixture.extended_empty, ObjectKind::Directory, &parent_sd).unwrap());
         let child_sd = policy.creation_descriptor(ObjectKind::Directory).unwrap();
         let child = create_at(
             &parent,
@@ -161,6 +167,24 @@ impl Fixture {
             }
             Ok(()) => panic!("nonempty ancestor unexpectedly became a junction"),
         }
+        // Qualify the newer operation independently with a fresh empty control.
+        // REPARSE_DATA_BUFFER_EX has a 32-byte fixed header before the payload:
+        // zero flags, no existing tag/GUID, and zero reserved bytes. The latter
+        // header values require an object with no existing reparse tag.
+        let mut extended = vec![0_u8; 32];
+        extended.extend_from_slice(&payload);
+        let empty = open_directory(
+            &self.extended_empty,
+            FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY,
+        )
+        .unwrap();
+        set_reparse(&empty, &extended, FSCTL_SET_REPARSE_POINT_EX).unwrap();
+        assert_eq!(
+            std::fs::read(self.extended_empty.join("canary.txt")).unwrap(),
+            b"junction target fixture"
+        );
+        let error = set_reparse(&directory, &extended, FSCTL_SET_REPARSE_POINT_EX).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(145));
         let child = self.nonempty.join("protected-child");
         denied(
             open_directory(&child, DELETE),
@@ -172,7 +196,7 @@ impl Fixture {
             "rename protected child",
         );
         println!(
-            "::notice title=Windows nonempty ancestor::matched empty control redirected; parent with retained protected child refused junction mutation with directory-not-empty (145); other user denied child delete access, removal and rename"
+            "::notice title=Windows nonempty ancestor::matched empty controls redirected with basic and extended reparse operations; parent with retained protected child refused both with directory-not-empty (145); other user denied child delete access, removal and rename"
         );
         results
     }
@@ -215,6 +239,14 @@ impl Fixture {
         }
         // Remove only the junction, then prove the owned target still exists.
         std::fs::remove_dir(&self.control).unwrap();
+        assert_ne!(
+            std::fs::symlink_metadata(&self.extended_empty)
+                .unwrap()
+                .file_attributes()
+                & FILE_ATTRIBUTE_REPARSE_POINT,
+            0
+        );
+        std::fs::remove_dir(&self.extended_empty).unwrap();
         assert_eq!(
             std::fs::read(self.target.join("canary.txt")).unwrap(),
             b"junction target fixture"
@@ -288,6 +320,10 @@ fn mount_point_payload(target: &Path) -> Vec<u8> {
 }
 
 fn set_junction(directory: &File, bytes: &[u8]) -> io::Result<()> {
+    set_reparse(directory, bytes, FSCTL_SET_REPARSE_POINT)
+}
+
+fn set_reparse(directory: &File, bytes: &[u8], operation: u32) -> io::Result<()> {
     let mut returned = 0;
     // SAFETY: the live synchronous handle targets an owned fixture directory.
     // bytes is the bounded, initialized mount-point payload and stays alive
@@ -296,7 +332,7 @@ fn set_junction(directory: &File, bytes: &[u8]) -> io::Result<()> {
     if unsafe {
         DeviceIoControl(
             directory.as_raw_handle(),
-            FSCTL_SET_REPARSE_POINT,
+            operation,
             bytes.as_ptr().cast(),
             bytes.len() as u32,
             null_mut(),

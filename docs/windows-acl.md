@@ -295,8 +295,23 @@ the nonempty-directory rule in Microsoft's
 [FSCTL operation specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/4aeefef8-92c3-4abc-af7a-a610caf8a165).
 Handle grants, original child bytes and reparse attributes are checked. A
 successful empty control is required before any nonempty result is credited.
-Until this is measured, no conditional exception for create-subdirectory
-rights is implemented. In particular, no actual system-drive root is mutated.
+At `5c64085`, this fixture and the complete three-platform pipeline passed in
+[CI run 41107861061](https://github.com/shahzadlone/agent-swapper/actions/runs/41107861061).
+The reported granted masks exactly matched each requested matrix mask, including
+`0x001200ad` for create-subdirectory access, without write-data or
+write-attributes rights. The matched nonempty parent refused junction creation
+with error 145, and the protected child refused deletion access, removal and
+rename. These measurements cover that disposable NTFS fixture and mount-point
+operation; they do not establish a full-path guard or every reparse operation.
+No conditional exception for create-subdirectory rights is implemented yet.
+No actual system-drive root is mutated.
+
+The follow-up fixture also exercises `FSCTL_SET_REPARSE_POINT_EX` with its own
+fresh empty control and the same nonempty parent. It constructs the documented
+[extended buffer header](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_reparse_data_buffer_ex)
+with no existing tag and verifies the control's actual redirection before
+requiring error 145 from the nonempty case. This needs its own native result;
+passing the older operation does not qualify the extended one.
 
 ## Required before a privacy claim
 
