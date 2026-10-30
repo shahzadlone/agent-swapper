@@ -21,6 +21,7 @@ pub(super) struct Fixture {
 // then remove the owned fixture. No privileged handle enters the probe thread.
 pub(super) struct Custody {
     db: rusqlite::Connection,
+    _descendants: Vec<File>,
     guard: PrivateRoot,
     fixture: tempfile::TempDir,
 }
@@ -77,6 +78,42 @@ impl Fixture {
         .unwrap();
         control.write_all(b"reachable chain control").unwrap();
         drop(control);
+        // Ordinary vendor-like creation, without our protected descriptor:
+        // every generation must inherit precisely the same private grants.
+        std::fs::create_dir_all(guard.path().join("vendor/sessions")).unwrap();
+        std::fs::write(
+            guard.path().join("vendor/sessions/state.txt"),
+            b"nested private canary",
+        )
+        .unwrap();
+        let vendor = policy
+            .open_existing_inherited_directory_at(guard.directory(), OsStr::new("vendor"))
+            .unwrap();
+        let sessions = policy
+            .open_existing_inherited_directory_at(&vendor, OsStr::new("sessions"))
+            .unwrap();
+        drop(
+            policy
+                .open_existing_inherited_file_at(
+                    &sessions,
+                    OsStr::new("state.txt"),
+                    FileAccess::ReadOnly,
+                )
+                .unwrap(),
+        );
+        // The second identity must also reach this exact nested location.
+        let mut nested_control = create_at(
+            &sessions,
+            OsStr::new("public.txt"),
+            ObjectKind::File,
+            &file_control,
+        )
+        .unwrap();
+        nested_control
+            .write_all(b"reachable nested control")
+            .unwrap();
+        drop(nested_control);
+        let descendants = vec![sessions, vendor];
         let db = rusqlite::Connection::open(guard.path().join("fixture.sqlite3")).unwrap();
         db.pragma_update(None, "temp_store", "MEMORY").unwrap();
         db.pragma_update(None, "journal_mode", "WAL").unwrap();
@@ -107,7 +144,12 @@ impl Fixture {
                 controls,
                 tag_control,
             },
-            Custody { db, guard, fixture },
+            Custody {
+                db,
+                _descendants: descendants,
+                guard,
+                fixture,
+            },
         )
     }
 
@@ -116,11 +158,16 @@ impl Fixture {
             std::fs::read(self.leaf.join("public.txt")).unwrap(),
             b"reachable chain control"
         );
+        assert_eq!(
+            std::fs::read(self.leaf.join("vendor/sessions/public.txt")).unwrap(),
+            b"reachable nested control"
+        );
         for name in [
             "private.txt",
             "fixture.sqlite3",
             "fixture.sqlite3-wal",
             "fixture.sqlite3-shm",
+            "vendor/sessions/state.txt",
         ] {
             let path = self.leaf.join(name);
             denied(File::open(&path), "read combined chain private data");
@@ -137,6 +184,21 @@ impl Fixture {
             File::create(self.leaf.join("injected.txt")),
             "inject private root child",
         );
+        for name in ["vendor", "vendor/sessions"] {
+            let path = self.leaf.join(name);
+            denied(
+                File::create(path.join("injected.txt")),
+                "inject inherited private directory child",
+            );
+            denied(
+                reparse::open_directory(&path, DELETE),
+                "open inherited private directory for deletion",
+            );
+            denied(
+                std::fs::rename(&path, path.with_extension("moved")),
+                "rename inherited private directory",
+            );
+        }
         let basic = reparse::mount_point_payload(&self.target);
         let mut extended = vec![0_u8; 32];
         extended.extend_from_slice(&basic);
@@ -209,6 +271,20 @@ impl Custody {
             b"chain private canary"
         );
         assert_eq!(
+            std::fs::read(self.guard.path().join("vendor/sessions/state.txt")).unwrap(),
+            b"nested private canary"
+        );
+        for name in ["vendor", "vendor/sessions"] {
+            let path = self.guard.path().join(name);
+            assert!(!path.join("injected.txt").exists());
+            assert!(!path.with_extension("moved").exists());
+            assert_eq!(
+                std::fs::symlink_metadata(path).unwrap().file_attributes()
+                    & FILE_ATTRIBUTE_REPARSE_POINT,
+                0
+            );
+        }
+        assert_eq!(
             self.db
                 .query_row("SELECT value FROM fixture", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
@@ -247,6 +323,9 @@ impl Custody {
         );
         println!(
             "::notice title=Windows combined private root::temporary standard user reached public control, could not read/write/delete private file or live SQLite database/WAL/SHM, could not rename retained intermediate or leaf; AD4/MAXIMUM_ALLOWED ancestor opens refused with sharing violation, metadata-only basic/extended reparse attempts denied; empty controls redirected; original data and target preserved"
+        );
+        println!(
+            "::notice title=Windows inherited private tree::temporary standard user reached nested public control but could not read/write/delete inherited private data, inject a child or rename inherited directories; original nested data preserved"
         );
     }
 }

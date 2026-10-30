@@ -359,9 +359,8 @@ concurrent constructors, long paths, reparse/broad-ACL refusal and impersonation
 The first implementation passed the native Windows test job at `32bb0ad` in
 [CI run 41135840809](https://github.com/shahzadlone/agent-swapper/actions/runs/41135840809).
 That result predates write-sharing exclusion and device-information checks.
-Their native results, a combined separate-user chain/SQLite test, drive-alias
-qualification, additional reparse forms, independent code review, migration and
-storage integration remain gates. Neither
+Their later native results are recorded below. Independent review of the
+follow-up code, migration and storage integration remain gates. Neither
 the core nor CLI links this candidate, and `doctor` still reports Windows ACL
 privacy as unverified.
 
@@ -382,7 +381,7 @@ LocalSystem's global namespace, and records ownership only after successful
 creation. Removal matches the exact raw target and runs on error/unwind too.
 A readable alias is the positive control; the private-root constructor must
 refuse omitted ancestry before creating a child. Target preservation and alias
-removal are checked. These new fixtures still require native evidence.
+removal are checked. Native results are recorded below.
 
 At `e8eb961`, the ordinary Windows tests and both ACL qualification steps passed
 in [CI run 41137050356](https://github.com/shahzadlone/agent-swapper/actions/runs/41137050356).
@@ -401,7 +400,7 @@ without remote/removable-media characteristics, before trusting an ACL snapshot.
 The fixed-size initialized output and returned byte count are checked. See
 [the device information contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_file_fs_device_information)
 and [volume query contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwqueryvolumeinformationfile).
-Mapped network storage still requires a negative native control before promotion.
+The negative native control below tests an actual remote handle.
 
 The follow-up ignored fixture creates a unique temporary SMB share containing
 only a fresh fictional file, with share access restricted to the fixture user's
@@ -410,7 +409,7 @@ change service, firewall, account or existing-share policy. Local validation
 must succeed, a loopback SMB read of the same bytes must succeed, and validation
 of that remote handle must specifically return `UnsupportedObject`. Share
 removal is explicit with unwind cleanup, followed by absence and original-file
-checks. This probe still needs native results. Its API contracts are
+checks. Its API contracts are
 [`NetShareAdd`](https://learn.microsoft.com/en-us/windows/win32/api/lmshare/nf-lmshare-netshareadd)
 and [`NetShareDel`](https://learn.microsoft.com/en-us/windows/win32/api/lmshare/nf-lmshare-netsharedel).
 
@@ -437,8 +436,15 @@ the temporary standard user. A nonempty AD4 control must accept the directory
 tag, show its actual reparse attribute, and permit exact tag/GUID removal.
 Two metadata-only ancestor handles under the full guard must refuse the same
 valid inputs. Control-tag cleanup runs on unwind as well. This uses only
-disposable fixture objects; the tag is not used in product storage. Separate-user
-and extended-operation results remain pending until that revision runs natively.
+disposable fixture objects; the tag is not used in product storage.
+
+At `838d8ed`, [CI run 41138470554](https://github.com/shahzadlone/agent-swapper/actions/runs/41138470554)
+passed both native ACL steps, all three platform jobs, candidate packaging,
+separate-runner binary comparisons and preview provenance verification. This
+includes the actual loopback SMB read/refusal/cleanup and separate-user basic
+and extended directory-bit reparse controls. The earlier SMB revision
+`e694f70` passed those Windows probes but failed an unrelated POSIX terminal
+fixture; it is not recorded as a successful complete pipeline.
 
 The low-level absolute creation helper remains explicitly dependent on trusted
 ancestors; the full constructor does not use it. Same-user processes, OS
@@ -449,6 +455,35 @@ the combined fixture uses `temp_store=MEMORY`. A custom handle-relative SQLite
 VFS is an alternative if pathname custody or compatibility cannot be qualified,
 not an implemented component. A completed review of older code does not approve
 these follow-up implementations automatically.
+
+## Inherited descendants
+
+Vendor-created subdirectories need a separate descriptor policy. The candidate
+now recognizes only the same exact user/SYSTEM/Administrators full-control
+entries, each effective and inherited with both object and container propagation
+(`0x13`). Files retain their distinct inherited-only `0x10` rule. Explicit,
+inherit-only, nonpropagating, broad or unsupported entries are refused. The
+descriptor's auto-inherited bookkeeping bit remains optional; the per-entry
+inheritance bit is mandatory. This follows the documented
+[ACE inheritance rules](https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-inheritance-rules),
+and does not infer parentage merely from a flag.
+
+The relative inherited-directory opener validates its actual private parent,
+then opens the child without write/delete sharing and checks its type, device
+and exact descriptor. Parents may be protected or strictly inherited; callers
+must retain every handle to the guarded root. The inherited-file opener accepts
+that same parent policy. These operations never create missing children or
+repair permissions. Existing root admission and protected-object APIs remain
+strict; legacy migration is not implied.
+
+Portable tests cover all flags, changed permissions/trustees, owner choices,
+truncation and randomized offsets. Native fixtures cover ordinary multilevel
+creation, unchanged descriptors, relative reopen, retained rename refusal,
+missing/reparse/traversal refusal and a broad-parent negative control. The
+separate-user chain fixture adds a readable nested public control alongside
+private inherited data and checks read/write/delete, injection and directory
+rename refusal. These additions still require their own native results and
+review. They qualify filesystem behavior, not real vendor credential layouts.
 
 ## Required before a privacy claim
 

@@ -563,11 +563,12 @@ impl SecurityPolicy {
         self.open_existing_at(parent, name, ObjectKind::Directory, FileAccess::ReadOnly)
     }
 
-    /// Reopen a direct child file whose ACL was inherited from this protected
-    /// private parent (for example a SQLite sidecar). Checks the parent's exact
-    /// protected policy first, then the child's actual type, link count, volume
-    /// and inherited-only policy. Never repairs, creates or truncates a file.
-    /// Does not qualify arbitrary vendor descendants or retain parent custody.
+    /// Reopen a direct child file under a protected or strictly inherited
+    /// private parent (for example a SQLite sidecar or vendor-created file).
+    /// Checks the parent's exact three-principal policy first, then the child's
+    /// actual type, link count, volume and inherited-only policy. Never repairs,
+    /// creates or truncates a file. Every parent must be retained separately;
+    /// this does not qualify a vendor's credential layout or retain ancestry.
     pub fn open_existing_inherited_file_at(
         &self,
         parent: &File,
@@ -575,12 +576,46 @@ impl SecurityPolicy {
         access: FileAccess,
     ) -> Result<File> {
         reject_impersonation()?;
-        self.validate_handle(parent, ObjectKind::Directory)?;
+        self.validate_private_parent(parent)?;
         let file = open_at(parent, name, ObjectKind::File, OpenMode::Existing(access))?;
         validate_object(&file, ObjectKind::File)?;
         let descriptor = LocalDescriptor::from_file(&file)?;
         self.validate_inherited_file_descriptor(descriptor.bytes()?)?;
         Ok(file)
+    }
+
+    /// Reopen one existing inherited directory under a protected or strictly
+    /// inherited private parent. Retain every returned handle back to a guarded
+    /// root. Excludes write/delete sharing and never creates, follows reparses,
+    /// or changes permissions. Inheritance flags alone do not prove ancestry.
+    pub fn open_existing_inherited_directory_at(
+        &self,
+        parent: &File,
+        name: &OsStr,
+    ) -> Result<File> {
+        reject_impersonation()?;
+        self.validate_private_parent(parent)?;
+        let directory = open_at_with_sharing(
+            parent,
+            name,
+            ObjectKind::Directory,
+            OpenMode::Existing(FileAccess::ReadOnly),
+            FILE_SHARE_READ,
+        )?;
+        validate_object(&directory, ObjectKind::Directory)?;
+        let descriptor = LocalDescriptor::from_file(&directory)?;
+        self.validate_inherited_directory_descriptor(descriptor.bytes()?)?;
+        Ok(directory)
+    }
+
+    fn validate_private_parent(&self, parent: &File) -> Result<()> {
+        validate_object(parent, ObjectKind::Directory)?;
+        let descriptor = LocalDescriptor::from_file(parent)?;
+        let bytes = descriptor.bytes()?;
+        match self.validate_descriptor(bytes, ObjectKind::Directory) {
+            Err(Error::UnprotectedDacl) => self.validate_inherited_directory_descriptor(bytes),
+            result => result,
+        }
     }
 
     fn open_existing_at(

@@ -58,6 +58,96 @@ fn retains_all_components_until_private_root_guard_is_dropped() {
 }
 
 #[test]
+fn reopens_nested_inherited_directories_without_repair_or_losing_custody() {
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let root = policy
+        .open_or_create_private_root(&fixture.path().join("private"))
+        .unwrap();
+    let nested = root.path().join("vendor/sessions");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("state.txt"), b"fictional nested state").unwrap();
+    let mut parent = root.directory();
+    let mut retained = Vec::new();
+    let mut path = root.path().to_path_buf();
+    for name in ["vendor", "sessions"] {
+        path.push(name);
+        let before_handle = std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&path)
+            .unwrap();
+        let before = LocalDescriptor::from_file(&before_handle).unwrap();
+        let directory = policy
+            .open_existing_inherited_directory_at(parent, OsStr::new(name))
+            .unwrap();
+        let after = LocalDescriptor::from_file(&directory).unwrap();
+        assert_eq!(before.bytes().unwrap(), after.bytes().unwrap());
+        assert!(matches!(
+            policy.validate_handle(&directory, ObjectKind::Directory),
+            Err(Error::UnprotectedDacl)
+        ));
+        assert!(std::fs::rename(&path, path.with_extension("moved")).is_err());
+        retained.push(directory);
+        parent = retained.last().unwrap();
+    }
+    let mut file = policy
+        .open_existing_inherited_file_at(parent, OsStr::new("state.txt"), FileAccess::ReadOnly)
+        .unwrap();
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"fictional nested state");
+    drop(file);
+    assert!(
+        matches!(policy.open_existing_inherited_directory_at(parent, OsStr::new("missing")), Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound)
+    );
+    assert!(!nested.join("missing").exists());
+    for name in ["..", "bad:stream", "bad/path"] {
+        assert!(matches!(
+            policy.open_existing_inherited_directory_at(parent, OsStr::new(name)),
+            Err(Error::UnsupportedPath)
+        ));
+    }
+    std::os::windows::fs::symlink_dir(&nested, root.path().join("link")).unwrap();
+    assert!(
+        policy
+            .open_existing_inherited_directory_at(root.directory(), OsStr::new("link"))
+            .is_err()
+    );
+    drop(retained);
+    let moved = nested.with_extension("moved");
+    std::fs::rename(&nested, &moved).unwrap();
+    assert_eq!(
+        std::fs::read(moved.join("state.txt")).unwrap(),
+        b"fictional nested state"
+    );
+    println!(
+        "::notice title=Windows inherited descendants::ordinary nested creation inherited exact private grants; relative reopen preserved descriptors and bytes; retained directories blocked rename, missing/traversal/reparse paths refused; rename succeeded after release"
+    );
+}
+
+#[test]
+fn inherited_descendant_reopen_refuses_broad_parent_before_reading_private_child() {
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let broad =
+        LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
+            .unwrap();
+    let parent = create(&fixture.path().join("broad"), ObjectKind::Directory, &broad).unwrap();
+    for name in ["child", "missing"] {
+        assert!(matches!(
+            policy.open_existing_inherited_directory_at(&parent, OsStr::new(name)),
+            Err(Error::UnexpectedDacl)
+        ));
+        assert!(matches!(
+            policy.open_existing_inherited_file_at(&parent, OsStr::new(name), FileAccess::ReadOnly),
+            Err(Error::UnexpectedDacl)
+        ));
+    }
+    assert!(!fixture.path().join("broad/child").exists());
+}
+
+#[test]
 fn refuses_broad_ancestors_and_existing_unprotected_roots_without_repair() {
     let fixture = fixture();
     let policy = SecurityPolicy::for_current_process().unwrap();

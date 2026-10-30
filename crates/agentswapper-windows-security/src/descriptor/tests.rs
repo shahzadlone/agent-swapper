@@ -39,11 +39,15 @@ fn descriptor_with_owner(kind: ObjectKind, trustees: &[&[u8]], owner: &[u8]) -> 
 }
 
 fn inherited(trustees: &[&[u8]], owner: &[u8]) -> Vec<u8> {
-    let mut bytes = descriptor_with_owner(ObjectKind::File, trustees, owner);
+    inherited_kind(ObjectKind::File, trustees, owner)
+}
+
+fn inherited_kind(kind: ObjectKind, trustees: &[&[u8]], owner: &[u8]) -> Vec<u8> {
+    let mut bytes = descriptor_with_owner(kind, trustees, owner);
     bytes[3] = 0x84; // self-relative + auto-inherited, not protected.
     let mut ace = 20 + owner.len() + 8;
     for trustee in trustees {
-        bytes[ace + 1] = 0x10;
+        bytes[ace + 1] |= 0x10;
         ace += 8 + trustee.len();
     }
     bytes
@@ -356,6 +360,94 @@ fn inherited_file_policy_requires_exact_inherited_grants_and_an_already_trusted_
 }
 
 #[test]
+fn inherited_directories_require_exact_effective_and_propagating_private_grants() {
+    let policy = policy();
+    let valid = |owner| {
+        inherited_kind(
+            ObjectKind::Directory,
+            &[USER, SYSTEM, ADMINISTRATORS],
+            owner,
+        )
+    };
+    for owner in [USER, SYSTEM, ADMINISTRATORS] {
+        for control in [0x8004_u16, 0x8404, 0x8005, 0x8405] {
+            let mut bytes = valid(owner);
+            bytes[2..4].copy_from_slice(&control.to_le_bytes());
+            policy
+                .validate_inherited_directory_descriptor(&bytes)
+                .unwrap();
+            assert!(policy.validate_inherited_file_descriptor(&bytes).is_err());
+            assert!(
+                policy
+                    .validate_descriptor(&bytes, ObjectKind::Directory)
+                    .is_err()
+            );
+        }
+    }
+    for owner in [EVERYONE, TRUSTED_INSTALLER] {
+        assert!(matches!(
+            policy.validate_inherited_directory_descriptor(&valid(owner)),
+            Err(Error::OwnerMismatch)
+        ));
+    }
+    for trustees in [
+        vec![USER, SYSTEM, EVERYONE],
+        vec![USER, USER, ADMINISTRATORS],
+        vec![USER, SYSTEM],
+        vec![USER, SYSTEM, ADMINISTRATORS, EVERYONE],
+    ] {
+        assert!(
+            policy
+                .validate_inherited_directory_descriptor(&inherited_kind(
+                    ObjectKind::Directory,
+                    &trustees,
+                    USER
+                ))
+                .is_err()
+        );
+    }
+    let original = valid(USER);
+    for flags in 0..=255 {
+        let mut bytes = original.clone();
+        bytes[20 + USER.len() + 9] = flags;
+        assert_eq!(
+            policy
+                .validate_inherited_directory_descriptor(&bytes)
+                .is_ok(),
+            flags == 0x13
+        );
+    }
+    for index in 20..original.len() {
+        for bit in 0..8 {
+            let mut bytes = original.clone();
+            bytes[index] ^= 1 << bit;
+            assert!(
+                policy
+                    .validate_inherited_directory_descriptor(&bytes)
+                    .is_err(),
+                "changed {index}:{bit}"
+            );
+        }
+    }
+    for end in 0..original.len() {
+        assert!(
+            policy
+                .validate_inherited_directory_descriptor(&original[..end])
+                .is_err()
+        );
+    }
+    for control in [0x9004_u16, 0x9404, 0x8504, 0x840c, 0xc404, 0x8400] {
+        let mut bytes = original.clone();
+        bytes[2..4].copy_from_slice(&control.to_le_bytes());
+        assert!(
+            policy
+                .validate_inherited_directory_descriptor(&bytes)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn inherited_file_policy_refuses_mixed_explicit_inherit_only_unknown_or_pending_permissions() {
     let original = inherited(&[USER, SYSTEM, ADMINISTRATORS], USER);
     let ace = 20 + USER.len() + 8;
@@ -510,6 +602,7 @@ proptest! {
         let _ = policy().validate_descriptor(&bytes, ObjectKind::File);
         let _ = policy().validate_descriptor(&bytes, ObjectKind::Directory);
         let _ = policy().validate_inherited_file_descriptor(&bytes);
+        let _ = policy().validate_inherited_directory_descriptor(&bytes);
         let _ = policy().validate_ancestor_descriptor(&bytes);
         let _ = validate_traversed_ancestor(&bytes, &policy().owner);
     }
@@ -526,6 +619,11 @@ proptest! {
             inherited[field..field+4].copy_from_slice(&value.to_le_bytes());
         }
         let _ = policy().validate_inherited_file_descriptor(&inherited);
+        let mut directory = inherited_kind(ObjectKind::Directory, &[USER, SYSTEM, ADMINISTRATORS], USER);
+        for (field, value) in [(4, owner), (8, group), (12, sacl), (16, dacl)] {
+            directory[field..field+4].copy_from_slice(&value.to_le_bytes());
+        }
+        let _ = policy().validate_inherited_directory_descriptor(&directory);
         let mut ancestor = ancestor(USER, 0, 1);
         for (field, value) in [(4, owner), (8, group), (12, sacl), (16, dacl)] {
             ancestor[field..field+4].copy_from_slice(&value.to_le_bytes());

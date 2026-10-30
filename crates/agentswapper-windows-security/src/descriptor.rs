@@ -89,7 +89,11 @@ pub(crate) fn validate(bytes: &[u8], owner: &Sid, kind: ObjectKind) -> Result<()
 }
 
 pub(crate) fn validate_inherited_file(bytes: &[u8], owner: &Sid) -> Result<()> {
-    validate_layout(bytes, owner, ObjectKind::File, Layout::InheritedFile)
+    validate_layout(bytes, owner, ObjectKind::File, Layout::Inherited)
+}
+
+pub(crate) fn validate_inherited_directory(bytes: &[u8], owner: &Sid) -> Result<()> {
+    validate_layout(bytes, owner, ObjectKind::Directory, Layout::Inherited)
 }
 
 pub(crate) fn validate_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
@@ -112,7 +116,7 @@ pub(crate) fn validate_traversed_ancestor(bytes: &[u8], owner: &Sid) -> Result<(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
     Protected,
-    InheritedFile,
+    Inherited,
     Ancestor,
     #[cfg(any(windows, test))]
     TraversedAncestor,
@@ -159,7 +163,7 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
     }
     match layout {
         Layout::Protected if control & DACL_PROTECTED == 0 => return Err(Error::UnprotectedDacl),
-        Layout::InheritedFile if control & DACL_PROTECTED != 0 => {
+        Layout::Inherited if control & DACL_PROTECTED != 0 => {
             return Err(Error::UnexpectedDacl);
         }
         _ => {}
@@ -232,13 +236,8 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
                 return Err(Error::UnexpectedDacl);
             }
         } else {
-            let expected_flags = if layout == Layout::InheritedFile {
-                0x10
-            } else if kind == ObjectKind::Directory {
-                3
-            } else {
-                0
-            };
+            let expected_flags = if layout == Layout::Inherited { 0x10 } else { 0 }
+                | if kind == ObjectKind::Directory { 3 } else { 0 };
             if ace[1] != expected_flags || mask != FILE_ALL_ACCESS {
                 return Err(Error::UnexpectedDacl);
             }

@@ -77,9 +77,17 @@ impl SecurityPolicy {
     /// no protection or unknown flags. Owner may be the process user, SYSTEM or
     /// Administrators, all of whom already have full access under this policy.
     /// Flags cannot prove inheritance origin or parent custody. Native callers
-    /// should use `open_existing_inherited_file_at` with a protected parent.
+    /// should use `open_existing_inherited_file_at` with a validated private parent.
     pub fn validate_inherited_file_descriptor(&self, bytes: &[u8]) -> Result<()> {
         descriptor::validate_inherited_file(bytes, &self.owner)
+    }
+
+    /// Snapshot-only policy for a directory inheriting the same three exact
+    /// grants. Every ACE must be effective, inherited and propagating to both
+    /// files and directories. No explicit additions or unknown flags qualify.
+    /// This cannot prove its ancestry or protect against later policy changes.
+    pub fn validate_inherited_directory_descriptor(&self, bytes: &[u8]) -> Result<()> {
+        descriptor::validate_inherited_directory(bytes, &self.owner)
     }
 
     /// Candidate permission classification for a retained ancestor directory.

@@ -5,8 +5,8 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
-The latest recorded complete pipeline is `8adf85b`:
-[CI run 41134874184](https://github.com/shahzadlone/agent-swapper/actions/runs/41134874184)
+The latest recorded complete pipeline is `838d8ed`:
+[CI run 41138470554](https://github.com/shahzadlone/agent-swapper/actions/runs/41138470554)
 passed Linux/macOS dashboard transitions, Windows native console restoration
 and ConPTY launches/rename/unregister, 100 Windows registry stress iterations,
 encrypted handover and explicit plaintext pickup export, hidden-input cleanup
@@ -14,11 +14,14 @@ and terminal disconnect refusal, the isolated Windows ACL candidate with
 relative creation/reopening, inherited SQLite file checks, adversarial
 descriptors, separate-user access, parent deletion and junction probes,
 including basic/extended reparse operations, matched empty/nonempty ancestor
-controls and actual handle grants,
+controls and actual handle grants, full-chain write/delete sharing exclusion,
+separate-user live SQLite access checks, subdirectory-drive and actual SMB
+handle refusal, basic/extended directory-bit reparse controls, and per-connection
+SQLite temporary memory storage,
 the dependency policy, all three candidate builds, separate-runner byte
 comparisons and preview provenance verification. Subsequent changes need their
 own completed run. The ACL candidate is not linked into the CLI and this run
-does not establish full-path custody. Real-provider qualification, automated
+does not establish production storage privacy. Real-provider qualification, automated
 subscription switching, platform containment and signed public distribution
 remain separate unfinished gates.
 
