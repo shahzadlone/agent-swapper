@@ -22,6 +22,7 @@ use zeroize::Zeroizing;
 
 mod chain;
 mod drive_alias;
+mod remote_device;
 mod reparse;
 
 fn require_hosted_fixture() -> io::Result<()> {
@@ -217,6 +218,7 @@ fn separate_identity_cannot_access_private_objects() {
     let root = tempfile::tempdir().unwrap();
     let policy = SecurityPolicy::for_current_process().unwrap();
     drive_alias::probe(&policy);
+    remote_device::probe(&policy);
     let (chain, chain_custody) = chain::Fixture::prepare(&policy);
     let (reparse, _reparse_custody) = reparse::Fixture::prepare(root.path(), &policy);
     let reparse_for_thread = reparse.clone();

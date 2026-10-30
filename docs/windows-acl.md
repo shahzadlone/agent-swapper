@@ -384,6 +384,13 @@ A readable alias is the positive control; the private-root constructor must
 refuse omitted ancestry before creating a child. Target preservation and alias
 removal are checked. These new fixtures still require native evidence.
 
+At `e8eb961`, the ordinary Windows tests and both ACL qualification steps passed
+in [CI run 41137050356](https://github.com/shahzadlone/agent-swapper/actions/runs/41137050356).
+This includes the combined separate-user SQLite/chain control, metadata-only
+sharing control, preexisting/later writer refusal and SUBST-equivalent alias
+refusal. It does not include the subsequent loopback SMB probe or establish
+production storage privacy.
+
 ## Independent review follow-up
 
 The completed Opus review identified that NTFS naming and persistent-ACL flags
@@ -395,6 +402,17 @@ The fixed-size initialized output and returned byte count are checked. See
 [the device information contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_file_fs_device_information)
 and [volume query contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwqueryvolumeinformationfile).
 Mapped network storage still requires a negative native control before promotion.
+
+The follow-up ignored fixture creates a unique temporary SMB share containing
+only a fresh fictional file, with share access restricted to the fixture user's
+SID. The mutating helper checks the hosted-runner opt-in itself; it does not
+change service, firewall, account or existing-share policy. Local validation
+must succeed, a loopback SMB read of the same bytes must succeed, and validation
+of that remote handle must specifically return `UnsupportedObject`. Share
+removal is explicit with unwind cleanup, followed by absence and original-file
+checks. This probe still needs native results. Its API contracts are
+[`NetShareAdd`](https://learn.microsoft.com/en-us/windows/win32/api/lmshare/nf-lmshare-netshareadd)
+and [`NetShareDel`](https://learn.microsoft.com/en-us/windows/win32/api/lmshare/nf-lmshare-netsharedel).
 
 The review also raised directory-bit reparse tags as an unmeasured attack
 hypothesis. Microsoft describes tags whose directories may contain children in
