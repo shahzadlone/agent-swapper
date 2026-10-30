@@ -102,7 +102,7 @@ impl PassphraseInput {
             }
             Ok(first)
         })();
-        restore.restore().map_err(|_| Error::TerminalRestore)?;
+        restore.restore().map_err(|_| Error::SecretInputCleanup)?;
         result
     }
 }
@@ -129,9 +129,12 @@ impl RestoreEcho {
         self.active = false;
         // Discard unread secret input before re-enabling terminal echo.
         #[cfg(unix)]
-        let _ = rustix::termios::tcflush(io::stdin(), rustix::termios::QueueSelector::IFlush);
+        let flushed = rustix::termios::tcflush(io::stdin(), rustix::termios::QueueSelector::IFlush)
+            .map_err(io::Error::from);
         #[cfg(not(windows))]
         let result = crossterm::terminal::disable_raw_mode();
+        #[cfg(unix)]
+        let result = result.and(flushed);
         #[cfg(windows)]
         let result = {
             // A one-shot discard cannot block behind another console reader.
@@ -147,7 +150,7 @@ impl RestoreEcho {
                 .console
                 .take()
                 .map_or(Ok(()), |console| console.restore());
-            flushed.and(exact)
+            exact.and(flushed)
         };
         let _ = io::stderr().write_all(b"\r\n");
         result

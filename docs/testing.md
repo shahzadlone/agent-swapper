@@ -38,7 +38,7 @@ them to make failures explicit.
 | Process groups | A reparented session writer keeps writing after the original group is killed; bounded provider-free probe with cleanup |
 | Disclosure | Canary auth values and argument contents are absent from wrapper error/preview output; the fixture writes only the chosen profile home |
 | CLI | Both binary names, help without opening state, profile lifecycle, duplicate aliases, JSON shape, bounded run history including retired profiles and conservative custody |
-| Handover | Authenticated encrypted round trip, wrong password and tamper refusal, chunk-boundary truncation, bounded work, concurrent exclusive output, source-link/credential-location checks, invisible-character and fence handling, AltGr/repeat input, actual HEAD drift, and broken-pipe failure |
+| Handover | Authenticated encrypted round trip, wrong password and tamper refusal, chunk-boundary truncation, bounded work, concurrent exclusive output, source-link/credential-location checks, invisible-character and fence handling, AltGr/repeat input, actual HEAD drift, explicit plaintext pickup publication with cancellation cleanup, metadata-only file acknowledgements, and broken-pipe failure |
 | Terminal | Reviewed empty and narrow/masked snapshots, literal unknown quota, very small viewport rendering |
 
 Bare-command entry is also exercised in a real POSIX PTY with temporary state and
@@ -46,7 +46,11 @@ fictional labels: both command names, saved masking, masked search, resize/help,
 q/Ctrl-C exit and exact terminal-attribute restoration. Explicit JSON remains
 noninteractive on a terminal. Run `python tools/check_dashboard_pty.py
 target/debug/aswp target/debug/agentswapper` after building the binaries. CI runs
-this on Linux and macOS; Windows ConPTY coverage remains an open UI gate.
+this on Linux and macOS. Windows native console and ConPTY fixtures cover
+foreground launches/login, gents resume, Ctrl-C, resize, masking, rename,
+unregister and exact mode restoration. These passed with the handover export at
+`ffae532` in [CI run 40990672777](https://github.com/shahzadlone/agent-swapper/actions/runs/40990672777).
+The complete terminal/provider support matrix remains open.
 
 Each integration test creates its own temporary state and fake home. Tests
 compile a small, dependency-free native fixture once per test process. No
@@ -111,8 +115,19 @@ passphrases to check hidden entry at both prompt positions, external INT/TERM/HU
 keyboard cancellation, queued-input removal, mismatch handling, cancellation
 after prompt teardown during cryptography, and an encrypted pack/inspect round
 trip. It verifies exact terminal settings, original signal termination, no echoed
-canaries and no ciphertext publication on cancelled entry. CI runs the 12 cases
+canaries and no ciphertext publication on cancelled entry. It also checks
+incomplete UTF-8/escape sequences and delayed valid Unicode. CI runs these cases
 on Linux and macOS. These tests do not read native credentials.
+
+`check_windows_handover_conpty.py` adds hidden-entry checks in a disposable
+Windows pseudoconsole, using a deliberately nondefault initial input mode.
+Its prequeued-input cases write complete key records before the CLI starts and
+peek after its observed exit: no queued characters may remain after cancelling
+either password phase. Normal pack/inspect, wrong password, unsupported input,
+mismatch and pickup-file cases also check exit status, mode readback and canary
+echo. A read-only inherited input handle must cause flush refusal, restore modes
+and prevent pack publication. Its first complete hosted result is pending; wrapper cross-compilation
+and Python syntax checks alone do not qualify native behavior.
 
 The foundation suite at commit `67db60a` passed GitHub CI on Linux, macOS, and
 Windows, including Clippy and doctests. Handover changes run through the same
@@ -122,6 +137,13 @@ Neither a configured job nor a fixture result verifies a real provider. There
 is no lower, untested MSRV promise. Release binaries also passed a local
 pack/inspect/pickup round trip, and a real POSIX terminal check verified hidden
 entry, confirmation, cancellation, and restoration of terminal settings.
+
+A focused read-only Claude Opus 5.5 xhigh cleanup review identified inconsistent
+POSIX flush-error handling and error precedence when both flush and restoration
+fail. Both were corrected. Its conditional redirected-input concern is limited
+by the existing terminal-stdin prerequisite; capture also includes the attached
+`CONIN$`/`CONOUT$` devices. An earlier broader review timed out without findings.
+These source reviews do not substitute for native runtime evidence.
 
 ## Gates still required
 

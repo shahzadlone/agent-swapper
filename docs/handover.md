@@ -47,8 +47,10 @@ pack. Pipe-based input keeps its existing noninteractive behavior.
 
 On Windows, hidden entry captures the original console modes through owned
 handles and restores and verifies them on success, cancellation and input
-errors. Queued console input is discarded before restoring echo. Cleanup failure
-is reported before encryption or decrypted output.
+errors. Queued console input is discarded before restoring echo. On both POSIX
+and Windows, flush or restoration failure reports `secret_input_cleanup_failed`
+before encryption or decrypted output; restoration is still attempted if
+flushing fails.
 The new native ConPTY fixture checks a nondefault input mode, both password
 phases, secret/context echo and prequeued secret disposal; the expanded fixture's
 first hosted result is pending. Forced process termination remains unqualified. Other

@@ -208,6 +208,8 @@ pub enum Error {
         "unsupported key in hidden passphrase entry; retry or provide one line through --passphrase-stdin"
     )]
     UnsupportedPasswordKey,
+    #[error("hidden input cleanup failed; check your terminal before continuing")]
+    SecretInputCleanup,
     #[error("storage operation failed")]
     Database(#[from] rusqlite::Error),
     #[error("filesystem or process operation failed")]
@@ -223,6 +225,7 @@ impl Error {
         match self {
             Self::UnknownConfigKey => "unknown_config_key",
             Self::TerminalRestore => "terminal_restore_failed",
+            Self::SecretInputCleanup => "secret_input_cleanup_failed",
             Self::InvalidConfigValue => "invalid_config_value",
             Self::InvalidConfig => "invalid_config",
             Self::ConfigTooLarge => "config_too_large",

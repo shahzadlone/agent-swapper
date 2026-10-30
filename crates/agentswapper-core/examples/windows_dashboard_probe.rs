@@ -156,12 +156,17 @@ mod probe {
         if handover {
             queue_helper(root, &input, "__queue")?;
         }
+        let child_input = if handover && root.join("fixture-readonly-input").exists() {
+            OpenOptions::new().read(true).open(r"\\.\CONIN$")?
+        } else {
+            input.try_clone()?
+        };
         let mut child = Command::new(cli)
             .arg("--state-dir")
             .arg(root.join("state"))
             .args(arguments)
             .current_dir(root.join("workspace"))
-            .stdin(Stdio::from(input.try_clone()?))
+            .stdin(Stdio::from(child_input))
             .stdout(Stdio::from(output.try_clone()?))
             .stderr(Stdio::from(output.try_clone()?))
             .spawn()?;

@@ -101,8 +101,10 @@ def check(binary, fixture, case):
         queued = case.startswith("queued-")
         if queued:
             (root / "fixture-queue.json").write_text(json.dumps([sys.executable, str(Path(__file__).resolve()), case]), encoding="utf-8")
+        if case == "readonly-input":
+            (root / "fixture-readonly-input").touch()
         expected = 130 if queued or case in {"escape", "ctrl-c", "confirm-cancel"} else 125 if case in {
-            "mismatch", "unsupported-key", "wrong-password"} else 0
+            "mismatch", "unsupported-key", "wrong-password", "readonly-input"} else 0
         (root / "fixture-command.json").write_text(json.dumps([arguments, expected]), encoding="utf-8")
         session = Session([str(fixture), "__handover_host", str(binary), str(root)], env, root / "workspace")
         try:
@@ -115,7 +117,7 @@ def check(binary, fixture, case):
                 session.send(PASSWORD + {"escape": b"\x1b", "ctrl-c": b"\x03", "unsupported-key": b"\t"}[case])
             else:
                 session.send((b"fictional-wrong-secret-canary" if case == "wrong-password" else PASSWORD) + b"\r")
-                if case in {"pack", "mismatch", "confirm-cancel"}:
+                if case in {"pack", "mismatch", "confirm-cancel", "readonly-input"}:
                     session.wait_output(b"Confirm passphrase:")
                     session.send(PASSWORD + (b"-different\r" if case == "mismatch" else b"\x1b" if case == "confirm-cancel" else b"\r"))
             deadline = time.monotonic() + 30
@@ -139,6 +141,8 @@ def check(binary, fixture, case):
         output = bytes(session.output)
         if case == "queued-confirm-cancel":
             assert b"Confirm passphrase:" in output, "queued fixture did not reach confirmation"
+        if case == "readonly-input":
+            assert b"hidden input cleanup failed" in output, "flush refusal was not reported"
         for canary in [PASSWORD, QUEUED.encode(), b"fictional-wrong-secret-canary", b"fictional-context-canary"]:
             assert canary not in output, f"{case}: secret/context was echoed"
         if case == "pack":
@@ -158,7 +162,7 @@ def main():
     if os.name != "nt" or len(sys.argv) != 3:
         raise SystemExit("Usage on Windows: check_windows_handover_conpty.py PATH_TO_ASWP PATH_TO_WINDOWS_DASHBOARD_PROBE")
     binary, fixture = [Path(value).resolve(strict=True) for value in sys.argv[1:]]
-    for case in ["escape", "ctrl-c", "confirm-cancel", "queued-cancel", "queued-confirm-cancel", "mismatch", "unsupported-key", "pack", "inspect", "wrong-password", "pickup-file"]:
+    for case in ["escape", "ctrl-c", "confirm-cancel", "queued-cancel", "queued-confirm-cancel", "mismatch", "unsupported-key", "readonly-input", "pack", "inspect", "wrong-password", "pickup-file"]:
         check(binary, fixture, case)
 
 
