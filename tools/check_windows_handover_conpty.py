@@ -104,7 +104,8 @@ def check(binary, fixture, case):
         session = Session([str(fixture), "__handover_host", str(binary), str(root)], env, root / "workspace")
         try:
             if not queued:
-                session.wait_output(b"Handover passphrase: ")
+                # ConPTY may render a trailing space as cursor movement.
+                session.wait_output(b"Handover passphrase:")
             if queued:
                 pass  # The host placed the complete sequence in the console before spawn.
             elif case in {"escape", "ctrl-c", "unsupported-key"}:
@@ -112,7 +113,7 @@ def check(binary, fixture, case):
             else:
                 session.send((b"fictional-wrong-secret-canary" if case == "wrong-password" else PASSWORD) + b"\r")
                 if case in {"pack", "mismatch", "confirm-cancel"}:
-                    session.wait_output(b"Confirm passphrase: ")
+                    session.wait_output(b"Confirm passphrase:")
                     session.send(PASSWORD + (b"-different\r" if case == "mismatch" else b"\x1b" if case == "confirm-cancel" else b"\r"))
             deadline = time.monotonic() + 30
             while session.alive():
