@@ -261,12 +261,26 @@ fn separate_identity_cannot_access_private_objects() {
     );
     let held_file_path = delete_parent_path.join("held.txt");
     let held_directory_path = delete_parent_path.join("held-directory");
+    let released_public_directory = delete_parent_path.join("released-permissive-directory");
+    drop(
+        create(
+            &released_public_directory,
+            ObjectKind::Directory,
+            &delete_parent_sd,
+        )
+        .unwrap(),
+    );
     let held_file = policy
         .create_new(&held_file_path, ObjectKind::File)
         .unwrap();
-    let held_directory = policy
-        .create_new(&held_directory_path, ObjectKind::Directory)
-        .unwrap();
+    // A permissive directory supplies a successful deletion control, so a
+    // private directory's ACL denial cannot masquerade as a handle-sharing gate.
+    let held_directory = create(
+        &held_directory_path,
+        ObjectKind::Directory,
+        &delete_parent_sd,
+    )
+    .unwrap();
 
     let control_for_thread = control_path.clone();
     let private_for_thread = private_path.clone();
@@ -324,37 +338,60 @@ fn separate_identity_cannot_access_private_objects() {
             std::fs::remove_file(directory_for_thread.join("nested.txt")),
             "delete nested private file",
         );
-        // These successful controls prevent blaming the containing directory
-        // or caller identity for the retained-handle refusals that follow.
+        // The private-file and permissive-directory controls must be removable.
+        // Record the private directory separately: parent rights did not grant
+        // DELETE for it on the previously measured Windows runner.
         std::fs::remove_file(&released_file).unwrap();
-        delete_empty_directory_by_handle(&released_directory).unwrap();
+        let private_directory_removed = match delete_empty_directory_by_handle(&released_directory) {
+            Ok(()) => {
+                println!("::notice title=Windows private directory deletion::closed private directory removed through parent rights");
+                true
+            }
+            Err(error) if error.raw_os_error() == Some(5) => {
+                println!("::notice title=Windows private directory deletion::closed private directory refused DELETE access with OS code 5; this does not establish handle protection");
+                false
+            }
+            Err(error) => panic!("closed private directory deletion: unexpected error {error}"),
+        };
+        delete_empty_directory_by_handle(&released_public_directory).unwrap();
         guarded_deletion(
             std::fs::remove_file(&held_file_path),
             "delete retained private file",
         );
         guarded_deletion(
             delete_empty_directory_by_handle(&held_directory_path),
-            "delete retained private directory",
+            "delete retained permissive directory",
         );
         drop(restore);
         drop(token);
+        private_directory_removed
     })
     .join();
     // Delete the account even if an access assertion failed. The logon token
     // and impersonation guard are gone before this explicit cleanup.
     account.remove().unwrap();
-    checked.unwrap();
+    let private_directory_removed = checked.unwrap();
     policy
         .validate_handle(&held_file, ObjectKind::File)
         .unwrap();
-    policy
-        .validate_handle(&held_directory, ObjectKind::Directory)
-        .unwrap();
+    validate_object(&held_directory, ObjectKind::Directory).unwrap();
+    assert!(matches!(
+        policy.validate_handle(&held_directory, ObjectKind::Directory),
+        Err(Error::UnexpectedDacl)
+    ));
     drop(held_file);
     drop(held_directory);
     drop(delete_parent);
     assert!(!delete_parent_path.join("released.txt").exists());
-    assert!(!delete_parent_path.join("released-directory").exists());
+    assert_eq!(
+        delete_parent_path.join("released-directory").exists(),
+        !private_directory_removed
+    );
+    assert!(
+        !delete_parent_path
+            .join("released-permissive-directory")
+            .exists()
+    );
     assert!(delete_parent_path.join("held.txt").is_file());
     assert!(delete_parent_path.join("held-directory").is_dir());
     assert_eq!(
@@ -374,6 +411,6 @@ fn separate_identity_cannot_access_private_objects() {
         "::notice title=Windows ACL separate identity::temporary standard user read/wrote the permissive control but was denied private reads, writes, security changes, deletion, rename, listing and child creation; original bytes preserved and owned account removed"
     );
     println!(
-        "::notice title=Windows ACL ancestor limit::the temporary user deleted closed private objects through parent delete-child rights; owned creation handles blocked deletion in the measured interval; complete ancestor custody remains a gate"
+        "::notice title=Windows ACL ancestor limit::the temporary user deleted a closed private file through parent rights and a permissive directory through its own rights; retained creation handles blocked both equivalent attempts; complete ancestor custody remains a gate"
     );
 }

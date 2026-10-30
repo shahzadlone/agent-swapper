@@ -128,20 +128,27 @@ checks original file bytes and cleanup. For these ACL-only probes, owner-held
 file handles are closed first, so a sharing violation cannot masquerade as an ACL denial. The
 control parent grants others read/traverse, **not delete-child** access. A
 permissive ancestor with deletion rights remains a separate custody problem.
-The fixture also exercises that case explicitly: under an additional parent
-granting everyone full control, it attempts to delete closed private objects
-and objects whose creation handles are retained. The closed objects are required
-to be removable, while retained-handle attempts must fail with access-denied or
-sharing-violation status. It reports the actual codes. This measures a handle's
-protection during that interval, not a permanent guarantee for the full path.
+The fixture also exercises that case explicitly under an additional parent
+granting everyone full control. A closed private file must be removable through
+parent rights. A closed private directory's result is recorded separately:
+success or access denied are observations, not custody receipts. To test the
+directory handle independently of ACL denial, an explicitly permissive directory
+must be removable as a positive control. Equivalent attempts against a private
+file and permissive directory whose creation handles remain open must fail
+with access-denied or sharing-violation status. The permissive directory is also
+required to fail the private-ACL policy. Actual codes are reported. This measures
+a handle's protection during that interval, not a permanent guarantee for the
+full path.
 At `edcb5ef`, the file control was deleted, but `RemoveDirectoryW` returned
 access denied for the closed directory in
 [CI run 41001315576](https://github.com/shahzadlone/agent-swapper/actions/runs/41001315576).
 The fixture failed before its retained-handle checks; that run does not qualify
-directory custody. The directory probe now requests a DELETE-only handle and
-uses [file disposition](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
-through that handle, recording whether refusal occurs during open or disposition.
-The high-level removal result is not treated as proof of handle protection.
+directory custody. A subsequent DELETE-only open also returned access denied
+at `fdde4bf` in [CI run 41002333737](https://github.com/shahzadlone/agent-swapper/actions/runs/41002333737),
+before [file disposition](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
+could run. The revised probe distinguishes that private-directory observation
+from the successful permissive-directory control. A preexisting ACL denial is
+never counted as proof that retaining a handle blocked deletion.
 This test does not cover every group policy, filesystem or vendor credential
 layout. Its execution result must be recorded before treating it as evidence.
 
