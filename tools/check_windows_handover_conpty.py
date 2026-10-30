@@ -56,7 +56,10 @@ def queue_helper(phase, root, case):
         records = (Record * len(text))()
         for record, char in zip(records, text):
             record.kind = 1
-            record.event.key = Key(1, 1, 0x1b if char == "\x1b" else 0x0d if char == "\r" else ord(char.upper()), 0, char, 0)
+            # Virtual-key codes differ from Unicode punctuation: '-' is OEM
+            # minus, whereas 0x2d means Insert and would cancel entry early.
+            vk = {"\x1b": 0x1b, "\r": 0x0d, "-": 0xbd}.get(char, ord(char.upper()))
+            record.event.key = Key(1, 1, vk, 0, char, 0)
         require(api.WriteConsoleInputW(handle, records, len(records), c.byref(count)))
         assert count.value == len(records)
     else:
@@ -134,6 +137,8 @@ def check(binary, fixture, case):
             session.close()
         # Include bytes drained during ClosePseudoConsole in the leak check.
         output = bytes(session.output)
+        if case == "queued-confirm-cancel":
+            assert b"Confirm passphrase:" in output, "queued fixture did not reach confirmation"
         for canary in [PASSWORD, QUEUED.encode(), b"fictional-wrong-secret-canary", b"fictional-context-canary"]:
             assert canary not in output, f"{case}: secret/context was echoed"
         if case == "pack":
