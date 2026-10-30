@@ -172,6 +172,7 @@ mod probe {
             .spawn()?;
         let deadline = Instant::now() + Duration::from_secs(90);
         let mut observed = None;
+        let mut request = 0_u32;
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -184,11 +185,13 @@ mod probe {
                     "dashboard did not exit",
                 ));
             }
-            if let Ok(request) = fs::read_to_string(root.join("mode-request")) {
-                require(
-                    request.len() == 32 && request.bytes().all(|b| b.is_ascii_hexdigit()),
-                    "invalid mode observation request",
-                )?;
+            if root.join(format!("mode-request-{}", request + 1)).exists() {
+                require(request < 64, "mode observation exceeded fixture budget")?;
+                request += 1;
+            }
+            if request != 0 {
+                // Requests are immutable, payload-free markers. Observe modes
+                // until the next numbered request without replacing open files.
                 let current = (request, console::mode(&input)?, console::mode(&output)?);
                 if observed.as_ref() != Some(&current) {
                     fs::write(

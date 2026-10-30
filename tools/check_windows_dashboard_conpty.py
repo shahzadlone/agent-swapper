@@ -6,6 +6,7 @@ only to this fixture; teardown never signals a PID from the run journal.
 """
 import ctypes as c
 from ctypes import wintypes as w
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,6 @@ import sys
 import tempfile
 import threading
 import time
-import uuid
 
 
 class Coord(c.Structure):
@@ -289,18 +289,27 @@ def check(binary, fixture):
             except (OSError, ValueError):
                 return None
 
-        def raw_dashboard():
-            request = uuid.uuid4().hex
-            temporary = root / f"request-{request}"
-            temporary.write_text(request, encoding="ascii")
-            os.replace(temporary, root / "mode-request")
+        request_number = 0
 
-            def observed():
-                state = read_json(root / "mode-response.json")
-                if state and state["request"] == request and state["inputMode"] & 6 == 0:
-                    return state
-                return None
-            return until(observed, "dashboard did not return to raw input")
+        def raw_dashboard():
+            nonlocal request_number
+            # Keep the preceding marker open to exercise publication while a
+            # reader retains it. Windows need not allow replacing an open name.
+            previous = ((root / f"mode-request-{request_number}").open("rb")
+                        if request_number else nullcontext())
+            with previous:
+                request_number += 1
+                assert request_number <= 64, "mode observation exceeded fixture budget"
+                # A marker has no payload: existence publishes the whole request.
+                # Each name is used once; no reader/writer replacement race.
+                (root / f"mode-request-{request_number}").touch(exist_ok=False)
+
+                def observed():
+                    state = read_json(root / "mode-response.json")
+                    if state and state["request"] == request_number and state["inputMode"] & 6 == 0:
+                        return state
+                    return None
+                return until(observed, "dashboard did not return to raw input")
 
         def history():
             return json.loads(cli("runs", "--json").stdout)["data"]

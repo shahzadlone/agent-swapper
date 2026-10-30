@@ -87,6 +87,16 @@ The test coordinator has its own
 process-lifetime Job and fake agents expire; this does not add default Job
 containment to production launches.
 
+At `7c76e48`, the POSIX signal checks passed, but the Windows coordinator's
+replacement of an open mode-request file failed with access denied in
+[CI run 41139138099](https://github.com/shahzadlone/agent-swapper/actions/runs/41139138099).
+Mode requests now use distinct numbered, payload-free markers, bounded to 64
+per fixture. The coordinator keeps observing modes for the current request;
+the caller requires a matching response before proceeding. The fixture retains
+the previous marker's read handle while requesting the next observation, so
+successful progress cannot depend on replacing an open name. Application
+console handling and its restoration assertions are unchanged.
+
 Rename (`n`) and unregister (`d`) now address the selected stable profile ID.
 Unregister requires Space and Enter, refuses busy/unresolved work and retains
 agent-owned files. Noticed peer label/binding changes reset review; an alias
