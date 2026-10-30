@@ -34,7 +34,11 @@ Read [CLI usage](docs/cli.md), [preferences](docs/config.md), [testing](docs/tes
 core domain and storage code independent of clap, Ratatui, and terminal state.
 New auth, routing, or switching behavior requires evidence and failure tests.
 Use typed errors, short transactions, direct argument forwarding, and validated
-identifiers. Unsafe Rust is forbidden in workspace crates. Do not commit test
+identifiers. The core and CLI forbid unsafe Rust. The experimental Windows
+security crate has one explicit FFI exception, with ownership/safety comments
+and unsafe-block linting; its parser still forbids unsafe Rust. Read the
+[boundary decision and qualification gates](docs/windows-acl.md) before changing
+it or adding any dependency on it. Do not commit test
 credentials, private state, or recorded production sessions.
 
 Review snapshot diffs before accepting them. Commit proptest regression seeds;

@@ -17,8 +17,12 @@ Launcher-path CI passed at `7909957` ([run 40695586176](https://github.com/shahz
 
 The workspace uses Rust's built-in test harness plus nextest, proptest,
 assert_cmd, tempfile, and insta with Ratatui TestBackend. The compiler and
-minimum supported Rust version are both pinned to 1.98.0. Our crates forbid
-unsafe Rust; Clippy rejects unwrap/expect in production. Test code may use
+minimum supported Rust version are both pinned to 1.98.0. The core and CLI forbid
+unsafe Rust. The Windows ACL qualification crate has a single documented FFI
+exception; its descriptor parser forbids unsafe code and runs adversarial and
+property tests on every platform. Native Windows tests exercise creation and
+handle snapshots, without promoting production ACL privacy. See the
+[boundary decision](windows-acl.md). Clippy rejects unwrap/expect in production. Test code may use
 them to make failures explicit.
 
 ## What the current suite establishes

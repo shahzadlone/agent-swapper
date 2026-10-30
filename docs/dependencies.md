@@ -1,5 +1,13 @@
 # Dependency decisions
 
+The experimental `agentswapper-windows-security` workspace crate pins the
+already-locked Microsoft `windows-sys 0.61.2` bindings and enables security,
+authorization, threading and filesystem APIs. No third-party package is added
+and neither the core nor CLI links this candidate. Unlike the earlier console
+wrappers, this is a deliberately owned, narrowly scoped unsafe boundary; see
+the [API invariants and qualification gates](windows-acl.md). The policy/parser
+uses only safe Rust. It does not adopt `windows-acl` or `windows-permissions`.
+
 The Unix native-launch path enables the existing `rustix` termios feature to
 save and restore foreground terminal attributes after an observed child exit.
 This uses an already locked dependency and adds no new package. It does not

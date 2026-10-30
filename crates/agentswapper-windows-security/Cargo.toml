@@ -1,0 +1,29 @@
+[package]
+name = "agentswapper-windows-security"
+description = "Experimental, handle-based Windows file security boundary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_SystemServices"] }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+# The only exception to the workspace's forbid rule is ffi.rs. The core,
+# CLI, descriptor parser and policy remain entirely safe Rust.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+undocumented_unsafe_blocks = "deny"

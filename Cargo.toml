@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/agentswapper-core", "crates/agentswapper-cli"]
+members = ["crates/agentswapper-core", "crates/agentswapper-cli", "crates/agentswapper-windows-security"]
 resolver = "3"
 
 [workspace.package]
