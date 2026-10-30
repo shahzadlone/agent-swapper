@@ -159,6 +159,32 @@ fn open_private_file(path: &Path, writable: bool) -> Result<File> {
 }
 
 pub(crate) fn validate_file(path: &Path) -> Result<()> {
+    #[cfg(not(windows))]
+    return validate_optional_file_once(path);
+    #[cfg(windows)]
+    {
+        // Classic Windows deletion keeps a name pending until the last owned
+        // handle closes. CreateFile then reports ACCESS_DENIED, even for an
+        // otherwise accessible SQLite sidecar. Recheck the entire validation
+        // briefly; permission denial itself never counts as safe absence.
+        let started = std::time::Instant::now();
+        loop {
+            let result = validate_optional_file_once(path);
+            match &result {
+                Err(Error::Io(error))
+                    if error.raw_os_error()
+                        == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
+                        && started.elapsed() < std::time::Duration::from_millis(250) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                _ => return result,
+            }
+        }
+    }
+}
+
+fn validate_optional_file_once(path: &Path) -> Result<()> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -283,6 +309,50 @@ mod tests {
         fs::remove_file(alias).unwrap();
         assert!(file(&path).is_ok());
         assert!(validate_file(&path).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn optional_sidecar_pending_deletion_is_rechecked_but_denial_stays_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("registry.sqlite3-shm");
+        for release in [false, true] {
+            fs::write(&path, b"fictional sidecar").unwrap();
+            let held = OpenOptions::new().read(true).open(&path).unwrap();
+            // Use classic DeleteFile, not std's POSIX-style unlink. Holding a
+            // share-delete handle keeps the Windows name pending deletion.
+            winsafe::DeleteFile(path.to_str().unwrap()).unwrap();
+            let error = validate_optional_file_once(&path).unwrap_err();
+            assert!(matches!(error, Error::Io(ref error) if error.raw_os_error() == Some(5)));
+            if release {
+                let closer = std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                    drop(held);
+                });
+                validate_file(&path).unwrap();
+                closer.join().unwrap();
+            } else {
+                let start = std::time::Instant::now();
+                assert!(
+                    matches!(validate_file(&path), Err(Error::Io(error)) if error.raw_os_error() == Some(5))
+                );
+                assert!(start.elapsed() < std::time::Duration::from_secs(5));
+                drop(held);
+            }
+            assert!(
+                !path.exists(),
+                "validation must not recreate an optional sidecar"
+            );
+        }
+        // The retry policy still performs normal link validation on a present
+        // object and never turns an unsafe replacement into accepted absence.
+        let source = directory.path().join("source");
+        fs::write(&source, b"fictional source").unwrap();
+        fs::hard_link(&source, &path).unwrap();
+        assert!(matches!(validate_file(&path), Err(Error::UnsafePath)));
+        eprintln!(
+            "\n::notice title=Windows pending-delete sidecar::observed access denied, accepted only after deletion, retained persistent denial and hardlink refusal"
+        );
     }
 
     #[cfg(windows)]

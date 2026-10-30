@@ -46,6 +46,13 @@ flush or protect a console shared with another reader. The ConPTY regression
 preloads cancellation and a fictional secret into the actual console queue
 before launching the CLI, then peeks for leftovers after observed exit.
 
+Windows core tests also use winsafe's reviewed `DeleteFile` wrapper to create a
+classic pending-deletion sidecar. It converts the fixture path to a temporary
+UTF-16 string, calls `DeleteFileW` synchronously and maps BOOL failure through
+`GetLastError`. This is a development dependency only for core; it adds no second
+package. Standard-library removal uses different unlink semantics on the tested
+runner and cannot establish this particular pending-name behavior by itself.
+
 The Windows ConPTY test uses Python's standard ctypes interface to the
 [documented pseudoconsole startup and teardown APIs](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session).
 Review covers structure layouts, non-inherited communication handles, attribute

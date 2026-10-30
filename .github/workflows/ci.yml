@@ -118,7 +118,7 @@ jobs:
       - name: Windows optional SQLite sidecar retirement
         if: runner.os == 'Windows'
         timeout-minutes: 2
-        run: cargo +1.98.0 test --locked -p agentswapper-core --lib private_fs::tests::optional_sidecar_snapshot_survives_unlink_after_handle_open -- --exact --nocapture
+        run: cargo +1.98.0 test --locked -p agentswapper-core --lib private_fs::tests::optional_sidecar_ -- --nocapture
       - name: Report failing tests
         if: failure()
         run: python tools/report_test_failures.py target/nextest/ci/junit.xml

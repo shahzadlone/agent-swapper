@@ -54,6 +54,21 @@ At `16053be`, Windows observed a zero link count on the unlinked owned handle,
 and all 100 stress iterations passed in
 [CI run 40975543816](https://github.com/shahzadlone/agent-swapper/actions/runs/40975543816/job/123802538596).
 
+A later 100-iteration run at `753ef34` found an intermittent Windows
+`ERROR_ACCESS_DENIED` during concurrent opening/registration in
+[CI run 40992185620](https://github.com/shahzadlone/agent-swapper/actions/runs/40992185620).
+Its original error did not identify the filesystem operation. Test-only
+diagnostics now distinguish opening, optional-sidecar validation and registration.
+Separately, [Windows documents](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea)
+that a name pending classic deletion produces this same error. Optional sidecar
+validation now rechecks its complete metadata/handle validation for up to 250 ms
+on that exact OS error. It succeeds only after observed absence or successful
+validation; persistent denial and unsafe links still fail. Required registry,
+lock and backup opens do not use this retry policy. A native regression uses
+classic `DeleteFile` with an owned handle to measure pending deletion, bounded
+failure and recovery after that handle closes. Native qualification and whether
+this resolves the stress failure remain pending.
+
 Migration backups use a distinct required read-only open and a second fingerprint
 check of the published snapshot. Absence cannot create a new empty backup or be
 accepted as an optional sidecar. Local tests check missing-file refusal, read-only

@@ -161,7 +161,11 @@ impl Store {
         let path = root.join("registry.sqlite3");
         let _created = private_fs::file(&path)?;
         for suffix in ["-wal", "-shm", "-journal"] {
-            private_fs::validate_file(&root.join(format!("registry.sqlite3{suffix}")))?;
+            private_fs::validate_file(&root.join(format!("registry.sqlite3{suffix}")))
+                .inspect_err(|_error| {
+                    #[cfg(test)]
+                    eprintln!("optional registry sidecar {suffix} validation failed: {_error:?}");
+                })?;
         }
         let mut db = open_registry(&path)?;
         db.busy_timeout(Duration::from_secs(3))?;
@@ -1109,7 +1113,14 @@ mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    Store::open(&root)?.register(Harness::Claude, "work".parse()?)
+                    Store::open(&root)
+                        .inspect_err(|error| eprintln!("concurrent registry open: {error:?}"))?
+                        .register(Harness::Claude, "work".parse()?)
+                        .inspect_err(|error| {
+                            if !matches!(error, Error::DuplicateAlias) {
+                                eprintln!("concurrent registration: {error:?}");
+                            }
+                        })
                 })
             })
             .collect();

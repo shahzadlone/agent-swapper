@@ -103,6 +103,7 @@ dependencies = [
  "winapi-util",
  "windows 0.62.2",
  "windows-sys",
+ "winsafe",
  "zeroize",
 ]
 
