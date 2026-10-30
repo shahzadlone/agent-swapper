@@ -423,6 +423,23 @@ it must measure preexisting and later writers, MAXIMUM_ALLOWED, metadata-only
 operations and compatibility on the actual volume root. A metadata-only handle
 is an explicit control, not a substitute for the guard's TRAVERSE/EXECUTE access.
 
+A subsequent local Windows experiment confirmed the distinction. An AD4-only
+handle installed and removed a non-Microsoft directory-bit tag (`0x10000042`,
+with a fresh GUID) on both empty and nonempty disposable directories. A
+READ_ATTRIBUTES-only handle under the stronger retained guard refused the same
+operation with access denied (5). Original canaries and cleanup passed. This
+used the current user's handles, not a separate identity, and tested the basic
+operation only. It disproves using nonemptiness as a general reparse barrier;
+the earlier `32bb0ad` guard must not be promoted on its original evidence.
+
+The follow-up CI regression repeats both basic and extended operations under
+the temporary standard user. A nonempty AD4 control must accept the directory
+tag, show its actual reparse attribute, and permit exact tag/GUID removal.
+Two metadata-only ancestor handles under the full guard must refuse the same
+valid inputs. Control-tag cleanup runs on unwind as well. This uses only
+disposable fixture objects; the tag is not used in product storage. Separate-user
+and extended-operation results remain pending until that revision runs natively.
+
 The low-level absolute creation helper remains explicitly dependent on trusted
 ancestors; the full constructor does not use it. Same-user processes, OS
 namespace administration and privileged access that bypasses DACLs remain

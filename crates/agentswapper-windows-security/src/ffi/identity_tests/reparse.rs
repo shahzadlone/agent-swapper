@@ -13,7 +13,7 @@ use windows_sys::Win32::{
     },
     System::{
         IO::DeviceIoControl,
-        Ioctl::{FSCTL_SET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT_EX},
+        Ioctl::{FSCTL_DELETE_REPARSE_POINT, FSCTL_SET_REPARSE_POINT, FSCTL_SET_REPARSE_POINT_EX},
     },
 };
 
@@ -185,6 +185,9 @@ impl Fixture {
         );
         let error = set_reparse(&directory, &extended, FSCTL_SET_REPARSE_POINT_EX).unwrap_err();
         assert_eq!(error.raw_os_error(), Some(145));
+        // Nonempty is not a sufficient rule for all tags. A directory-bit tag
+        // can coexist with children; install/remove it as an explicit control.
+        directory_tag_probe(&directory, &[]);
         let child = self.nonempty.join("protected-child");
         denied(
             open_directory(&child, DELETE),
@@ -345,5 +348,73 @@ pub(super) fn set_reparse(directory: &File, bytes: &[u8], operation: u32) -> io:
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+pub(super) fn directory_tag_probe(control: &File, protected: &[File]) {
+    // Disposable non-Microsoft directory-bit tag, never used in product code.
+    // REPARSE_GUID_DATA_BUFFER: tag, zero data length/reserved, unique GUID.
+    let mut payload = vec![0_u8; 24];
+    payload[..4].copy_from_slice(&0x1000_0042_u32.to_le_bytes());
+    getrandom::fill(&mut payload[8..]).unwrap();
+    payload[8] |= 1; // Do not generate the all-zero GUID, even by chance.
+    let mut extended = vec![0_u8; 32];
+    extended.extend_from_slice(&payload);
+    for (operation, input) in [
+        (FSCTL_SET_REPARSE_POINT, &payload),
+        (FSCTL_SET_REPARSE_POINT_EX, &extended),
+    ] {
+        set_reparse(control, input, operation).unwrap();
+        let mut tag = OwnedTag {
+            directory: control,
+            payload: &payload,
+            active: true,
+        };
+        assert_ne!(
+            control.metadata().unwrap().file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+            0
+        );
+        tag.remove().unwrap();
+        assert_eq!(
+            control.metadata().unwrap().file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+            0
+        );
+        for directory in protected {
+            denied(
+                set_reparse(directory, input, operation),
+                "set directory-bit tag through metadata-only retained ancestor handle",
+            );
+        }
+    }
+    println!(
+        "::notice title=Windows directory-bit reparse::basic/extended directory-bit tag installation succeeded on nonempty AD4 control; tag removed; {} retained ancestor metadata handles refused both operations",
+        protected.len()
+    );
+}
+
+struct OwnedTag<'a> {
+    directory: &'a File,
+    payload: &'a [u8],
+    active: bool,
+}
+
+impl OwnedTag<'_> {
+    fn remove(&mut self) -> io::Result<()> {
+        set_reparse(self.directory, self.payload, FSCTL_DELETE_REPARSE_POINT)?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for OwnedTag<'_> {
+    fn drop(&mut self) {
+        if self.active
+            && let Err(error) = self.remove()
+        {
+            eprintln!(
+                "::error title=Windows directory-tag fixture cleanup::owned tag removal failed with OS code {:?}",
+                error.raw_os_error()
+            );
+        }
     }
 }

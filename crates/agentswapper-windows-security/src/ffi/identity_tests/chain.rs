@@ -14,6 +14,7 @@ pub(super) struct Fixture {
     leaf: PathBuf,
     target: PathBuf,
     controls: [PathBuf; 2],
+    tag_control: PathBuf,
 }
 
 // Declaration order matters: close SQLite before releasing pathname custody,
@@ -39,9 +40,12 @@ impl Fixture {
         .unwrap();
         let ancestors = [base.join("ancestor"), base.join("ancestor/middle")];
         let controls = [base.join("empty-basic"), base.join("empty-extended")];
+        let tag_control = base.join("nonempty-tag-control");
         for path in ancestors.iter().chain(&controls) {
             drop(create(path, ObjectKind::Directory, &parent_sd).unwrap());
         }
+        drop(create(&tag_control, ObjectKind::Directory, &parent_sd).unwrap());
+        std::fs::write(tag_control.join("canary.txt"), b"directory tag control").unwrap();
         let broad =
             LocalDescriptor::from_sddl(&format!("O:{}D:P(A;OICI;FA;;;WD)", policy.owner.sddl()))
                 .unwrap();
@@ -101,6 +105,7 @@ impl Fixture {
                 leaf,
                 target,
                 controls,
+                tag_control,
             },
             Custody { db, guard, fixture },
         )
@@ -169,6 +174,17 @@ impl Fixture {
             }
         }
         // Include an intermediate with AD4 grants, not only the private leaf.
+        let control = reparse::open_directory(
+            &self.tag_control,
+            FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY,
+        )
+        .unwrap();
+        let protected: Vec<_> = self
+            .ancestors
+            .iter()
+            .map(|path| reparse::open_directory(path, FILE_READ_ATTRIBUTES).unwrap())
+            .collect();
+        reparse::directory_tag_probe(&control, &protected);
         for directory in [&self.ancestors[1], &self.leaf] {
             denied(
                 reparse::open_directory(directory, DELETE),
@@ -184,6 +200,10 @@ impl Fixture {
 
 impl Custody {
     pub(super) fn verify(&self) {
+        assert_eq!(
+            std::fs::read(self.fixture.path().join("nonempty-tag-control/canary.txt")).unwrap(),
+            b"directory tag control"
+        );
         assert_eq!(
             std::fs::read(self.guard.path().join("private.txt")).unwrap(),
             b"chain private canary"
