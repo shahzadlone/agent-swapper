@@ -19,7 +19,11 @@ use windows_sys::Wdk::{
     Foundation::OBJECT_ATTRIBUTES,
     Storage::FileSystem::{
         FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-        FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, NtCreateFile,
+        FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, FileFsDeviceInformation,
+        NtCreateFile, NtQueryVolumeInformationFile,
+    },
+    System::SystemServices::{
+        FILE_FS_DEVICE_INFORMATION, FILE_REMOTE_DEVICE, FILE_REMOVABLE_MEDIA,
     },
 };
 use windows_sys::Win32::{
@@ -37,10 +41,10 @@ use windows_sys::Win32::{
     },
     Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FILE_TRAVERSE, GetFileInformationByHandle, GetVolumeInformationByHandleW,
-        OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_DEVICE_DISK, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, GetFileInformationByHandle,
+        GetVolumeInformationByHandleW, OPEN_EXISTING, READ_CONTROL, SYNCHRONIZE,
     },
     System::{
         IO::IO_STATUS_BLOCK,
@@ -328,6 +332,16 @@ enum OpenMode<'a> {
 }
 
 fn open_at(parent: &File, name: &OsStr, kind: ObjectKind, mode: OpenMode<'_>) -> Result<File> {
+    open_at_with_sharing(parent, name, kind, mode, FILE_SHARE_READ | FILE_SHARE_WRITE)
+}
+
+fn open_at_with_sharing(
+    parent: &File,
+    name: &OsStr,
+    kind: ObjectKind,
+    mode: OpenMode<'_>,
+    sharing: u32,
+) -> Result<File> {
     let (descriptor, disposition, expected_result, writable) = match mode {
         OpenMode::Create(descriptor) => (descriptor.0.as_ptr(), FILE_CREATE, FILE_CREATED, true),
         OpenMode::Existing(access) => (
@@ -358,6 +372,8 @@ fn open_at(parent: &File, name: &OsStr, kind: ObjectKind, mode: OpenMode<'_>) ->
             FILE_ATTRIBUTE_NORMAL,
         ),
         ObjectKind::Directory => (
+            // TRAVERSE equals EXECUTE and makes this a share-accounted reader.
+            // A metadata-only open would not establish the same sharing guard.
             READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
             FILE_DIRECTORY_FILE,
             FILE_ATTRIBUTE_DIRECTORY,
@@ -380,7 +396,7 @@ fn open_at(parent: &File, name: &OsStr, kind: ObjectKind, mode: OpenMode<'_>) ->
             &mut status_block,
             null(),
             file_attributes,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            sharing,
             disposition,
             options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
             null(),
@@ -406,6 +422,7 @@ fn open_at(parent: &File, name: &OsStr, kind: ObjectKind, mode: OpenMode<'_>) ->
 }
 
 fn validate_object(file: &File, kind: ObjectKind) -> Result<()> {
+    validate_local_device(file)?;
     let metadata = file.metadata()?;
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
         || (kind == ObjectKind::Directory)
@@ -442,6 +459,36 @@ fn validate_object(file: &File, kind: ObjectKind) -> Result<()> {
         return Err(io::Error::last_os_error().into());
     }
     if flags & FILE_PERSISTENT_ACLS == 0 || filesystem[..5] != [78, 84, 70, 83, 0] {
+        return Err(Error::UnsupportedObject);
+    }
+    Ok(())
+}
+
+fn validate_local_device(file: &File) -> Result<()> {
+    let mut information = FILE_FS_DEVICE_INFORMATION::default();
+    let mut status_block = IO_STATUS_BLOCK::default();
+    // SAFETY: live file handle and initialized, aligned fixed-size SDK outputs.
+    // This synchronous volume query uses the actual opened device, not a path
+    // or a server-provided filesystem name as evidence of local storage.
+    let status = unsafe {
+        NtQueryVolumeInformationFile(
+            file.as_raw_handle(),
+            &mut status_block,
+            (&mut information as *mut FILE_FS_DEVICE_INFORMATION).cast(),
+            size_of::<FILE_FS_DEVICE_INFORMATION>() as u32,
+            FileFsDeviceInformation,
+        )
+    };
+    if status < 0 {
+        // SAFETY: pure integer NTSTATUS conversion, no pointer arguments.
+        return Err(
+            io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32).into(),
+        );
+    }
+    if status_block.Information != size_of::<FILE_FS_DEVICE_INFORMATION>()
+        || information.DeviceType != FILE_DEVICE_DISK
+        || information.Characteristics & (FILE_REMOTE_DEVICE | FILE_REMOVABLE_MEDIA) != 0
+    {
         return Err(Error::UnsupportedObject);
     }
     Ok(())

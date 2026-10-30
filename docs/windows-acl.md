@@ -47,8 +47,11 @@ unsafe operations in unsafe functions. Its parser explicitly forbids unsafe
 code. This is a deliberate change to the earlier workspace-wide policy, not
 unsafe code hidden inside a vendored dependency. Every native call documents
 its buffer, ownership and lifetime invariants. Further independent review of
-this boundary remains a promotion gate. A requested Opus 5.5 review returned a
-session-limit message, not a completed ACL review.
+this boundary remains a promotion gate. An Opus 5.5 review at xhigh effort subsequently
+completed for the `8adf85b` parser/FFI and the proposed retained-root design.
+It found no ownership defect in those buffers/handles and identified device
+classification and reparse qualification gaps. This is a source review, not
+proof of memory safety or review of the later fixes; see the findings below.
 
 The candidate implements:
 
@@ -312,6 +315,8 @@ fresh empty control and the same nonempty parent. It constructs the documented
 with no existing tag and verifies the control's actual redirection before
 requiring error 145 from the nonempty case. This needs its own native result;
 passing the older operation does not qualify the extended one.
+At `8adf85b`, both operations and the complete three-platform pipeline passed in
+[CI run 41134874184](https://github.com/shahzadlone/agent-swapper/actions/runs/41134874184).
 
 ## Retained root candidate
 
@@ -320,7 +325,9 @@ It opens an actual fixed NTFS volume root, then opens each directory relative
 to the preceding retained handle. Missing directories use exclusive creation
 with the protected policy at creation time; a competing creator is handled by
 one reopen and validation, never by adoption without inspection or ACL repair.
-All handles exclude deletion sharing and inheritance. The final directory must
+All handles exclude write/delete sharing and inheritance. Directory handles
+retain TRAVERSE/EXECUTE access so that their sharing restrictions participate
+in the filesystem's share accounting. The final directory must
 match the exact protected three-principal policy. Existing inherited roots are
 refused, not automatically migrated.
 
@@ -328,9 +335,10 @@ Only this constructor uses an internal ancestor policy allowing
 create-subdirectory (`0x4`) in addition to the public read-only mask. Every
 retained child is independently checked, every ancestor refuses untrusted
 DELETE and DELETE_CHILD, and the complete chain is checked again from leaf to
-volume root before returning. Thus the design requires a nonempty chain that
-an untrusted principal cannot remove. It does not treat a standalone AD4
-descriptor snapshot as safe. Reparse checks occur again after child acquisition;
+volume root before returning. A nonempty chain alone is not credited as
+protection against every reparse tag: retained handles additionally exclude
+write access, including ADD_SUBDIRECTORY/APPEND_DATA. The implementation does
+not treat a standalone AD4 descriptor snapshot as safe. Reparse checks occur again after child acquisition;
 no sensitive data is written during construction. Failures can leave empty
 protected directories, which are not removed through uncertain pathnames.
 
@@ -339,7 +347,8 @@ must classify the anchor as fixed. A separate normalized, volume-relative
 [`GetFinalPathNameByHandleW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)
 result must identify only the volume root, so a SUBST alias to a subdirectory
 cannot silently omit its ancestors. The leaf path comes from its actual handle
-in normalized DOS form. UNC, device and removable roots are unsupported;
+in normalized, validated verbatim DOS form, with the original drive letter.
+The verbatim prefix must not be stripped by consumers. UNC, device and removable roots are unsupported;
 path length and component count are bounded. Drive namespace changes and
 changes by the user, SYSTEM, Administrators and TrustedInstaller are trusted.
 Previously acquired mutation rights are not revoked by a descriptor snapshot.
@@ -347,11 +356,64 @@ Previously acquired mutation rights are not revoked by a descriptor snapshot.
 The guard must outlive every pathname-based user, especially SQLite connections.
 Native fixtures cover protected creation/reopen, ancestor rename attempts,
 concurrent constructors, long paths, reparse/broad-ACL refusal and impersonation.
-They still need a successful native run for this implementation. A combined
-separate-user chain test, drive-alias qualification, additional reparse forms,
-independent code review, migration and storage integration remain gates. Neither
+The first implementation passed the native Windows test job at `32bb0ad` in
+[CI run 41135840809](https://github.com/shahzadlone/agent-swapper/actions/runs/41135840809).
+That result predates write-sharing exclusion and device-information checks.
+Their native results, a combined separate-user chain/SQLite test, drive-alias
+qualification, additional reparse forms, independent code review, migration and
+storage integration remain gates. Neither
 the core nor CLI links this candidate, and `doctor` still reports Windows ACL
 privacy as unverified.
+
+The combined CI-only fixture uses a newly owned directory under the runner's
+profile, two AD4 ancestors and an actual live SQLite database/WAL/SHM. It keeps
+the connection ahead of the guard in field-drop order. A permissive fictional
+file inside the same private leaf proves reachability; no privileged handles
+enter the other user's thread. Empty reparse controls must succeed, while
+AD4/MAXIMUM_ALLOWED opens against retained ancestors must fail with sharing
+violation and metadata-only reparse attempts must be denied. The fixture also
+checks private reads/writes/deletes, child injection, renames and original data.
+
+A separate hosted-runner-only fixture creates a transient, previously unused
+DOS drive alias to its own directory via
+[`DefineDosDeviceW`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-definedosdevicew).
+The mutating helper enforces the CI markers, refuses thread impersonation and
+LocalSystem's global namespace, and records ownership only after successful
+creation. Removal matches the exact raw target and runs on error/unwind too.
+A readable alias is the positive control; the private-root constructor must
+refuse omitted ancestry before creating a child. Target preservation and alias
+removal are checked. These new fixtures still require native evidence.
+
+## Independent review follow-up
+
+The completed Opus review identified that NTFS naming and persistent-ACL flags
+alone do not establish a local device: a Windows network filesystem can report
+those properties too. `validate_object` now queries the actual handle through
+`NtQueryVolumeInformationFile(FileFsDeviceInformation)` and requires a disk
+without remote/removable-media characteristics, before trusting an ACL snapshot.
+The fixed-size initialized output and returned byte count are checked. See
+[the device information contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_file_fs_device_information)
+and [volume query contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwqueryvolumeinformationfile).
+Mapped network storage still requires a negative native control before promotion.
+
+The review also raised directory-bit reparse tags as an unmeasured attack
+hypothesis. Microsoft describes tags whose directories may contain children in
+[reparse restrictions](https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-points).
+Mount-point error 145 does not qualify those other operations. The follow-up
+therefore excludes write sharing while retaining the existing ACL/type checks;
+it must measure preexisting and later writers, MAXIMUM_ALLOWED, metadata-only
+operations and compatibility on the actual volume root. A metadata-only handle
+is an explicit control, not a substitute for the guard's TRAVERSE/EXECUTE access.
+
+The low-level absolute creation helper remains explicitly dependent on trusted
+ancestors; the full constructor does not use it. Same-user processes, OS
+namespace administration and privileged access that bypasses DACLs remain
+outside the ordinary-other-user privacy model. Integrity-label sandboxing is
+not claimed. SQLite temporary storage must be constrained during integration;
+the combined fixture uses `temp_store=MEMORY`. A custom handle-relative SQLite
+VFS is an alternative if pathname custody or compatibility cannot be qualified,
+not an implemented component. A completed review of older code does not approve
+these follow-up implementations automatically.
 
 ## Required before a privacy claim
 

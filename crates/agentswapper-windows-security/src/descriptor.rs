@@ -97,8 +97,8 @@ pub(crate) fn validate_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
 }
 
 // Only the full path constructor may use this classification. Its retained,
-// independently validated child is what prevents an AD4 ancestor becoming an
-// empty junction target. This parser alone cannot establish that invariant.
+// independently validated child and write/delete sharing exclusion establish
+// its custody conditions. This parser alone cannot establish those invariants.
 #[cfg(any(windows, test))]
 pub(crate) fn validate_traversed_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
     validate_layout(

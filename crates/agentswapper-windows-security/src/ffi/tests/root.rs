@@ -147,6 +147,48 @@ fn concurrent_constructors_adopt_only_the_same_protected_directories() {
 }
 
 #[test]
+fn write_custody_rejects_preexisting_and_later_writers_but_metadata_only_opens_do_not() {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ADD_SUBDIRECTORY;
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let parent = fixture.path().join("parent");
+    let leaf = parent.join("private");
+    drop(policy.open_or_create_private_root(&leaf).unwrap());
+    let open = |access, sharing| {
+        std::fs::OpenOptions::new()
+            .access_mode(access)
+            .share_mode(sharing)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&parent)
+    };
+    // A metadata-only descriptor does not establish the same share accounting.
+    // This control prevents a future access-mask reduction from silently
+    // removing the retained guard's write/delete exclusion.
+    let metadata = open(READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ).unwrap();
+    let writer = open(FILE_ADD_SUBDIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE).unwrap();
+    drop(metadata);
+    assert!(
+        matches!(policy.open_or_create_private_root(&leaf), Err(Error::Io(error)) if error.raw_os_error() == Some(32))
+    );
+    drop(writer);
+    let guard = policy.open_or_create_private_root(&leaf).unwrap();
+    assert_eq!(
+        open(FILE_ADD_SUBDIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(32)
+    );
+    // Creating a child is still supported; it does not acquire a write handle
+    // to the guarded directory itself.
+    std::fs::create_dir(guard.path().join("ordinary-child")).unwrap();
+    drop(guard);
+    drop(open(FILE_ADD_SUBDIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE).unwrap());
+    println!(
+        "::notice title=Windows directory write custody::metadata-only control allowed an AD4 writer; retained root refused preexisting/later AD4 handles with sharing violation, allowed child creation, and released exclusion on drop"
+    );
+}
+
+#[test]
 fn returns_a_usable_normalized_path_beyond_the_legacy_path_limit() {
     let fixture = fixture();
     let policy = SecurityPolicy::for_current_process().unwrap();

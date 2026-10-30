@@ -282,14 +282,14 @@ fn granted_access(file: &File) -> u32 {
     information.AccessFlags
 }
 
-fn open_directory(path: &Path, access: u32) -> io::Result<File> {
+pub(super) fn open_directory(path: &Path, access: u32) -> io::Result<File> {
     std::fs::OpenOptions::new()
         .access_mode(access)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
 }
 
-fn mount_point_payload(target: &Path) -> Vec<u8> {
+pub(super) fn mount_point_payload(target: &Path) -> Vec<u8> {
     wide_path(target).unwrap();
     let mut print: Vec<u16> = target.as_os_str().encode_wide().collect();
     if print.starts_with(&[92, 92, 63, 92]) {
@@ -323,7 +323,7 @@ fn set_junction(directory: &File, bytes: &[u8]) -> io::Result<()> {
     set_reparse(directory, bytes, FSCTL_SET_REPARSE_POINT)
 }
 
-fn set_reparse(directory: &File, bytes: &[u8], operation: u32) -> io::Result<()> {
+pub(super) fn set_reparse(directory: &File, bytes: &[u8], operation: u32) -> io::Result<()> {
     let mut returned = 0;
     // SAFETY: the live synchronous handle targets an owned fixture directory.
     // bytes is the bounded, initialized mount-point payload and stays alive

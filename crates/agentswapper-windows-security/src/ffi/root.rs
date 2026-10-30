@@ -1,5 +1,6 @@
 //! Candidate full-path custody. Only this constructor can combine AD4 ancestor
-//! classification with retained, independently validated children. No caller
+//! classification with retained, independently validated children and refusal
+//! of write/delete sharing. No caller
 //! can obtain an accepted ancestor snapshot using that exception.
 
 use super::*;
@@ -77,24 +78,32 @@ impl SecurityPolicy {
             // here: no guard or pathname reaches the caller until the complete
             // retained chain has passed the bottom-up checks below.
             self.validate_traversed_directory(&directory)?;
-            let child = match open_at(
+            let child = match open_at_with_sharing(
                 &directory,
                 name,
                 ObjectKind::Directory,
                 OpenMode::Existing(FileAccess::ReadOnly),
+                FILE_SHARE_READ,
             ) {
                 Ok(child) => child,
                 Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-                    match create_at(&directory, name, ObjectKind::Directory, &descriptor) {
+                    match open_at_with_sharing(
+                        &directory,
+                        name,
+                        ObjectKind::Directory,
+                        OpenMode::Create(&descriptor),
+                        FILE_SHARE_READ,
+                    ) {
                         Ok(child) => child,
                         // A peer may have won exclusive creation. Reopen once
                         // and subject that actual object to the same policy.
                         Err(Error::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists => {
-                            open_at(
+                            open_at_with_sharing(
                                 &directory,
                                 name,
                                 ObjectKind::Directory,
                                 OpenMode::Existing(FileAccess::ReadOnly),
+                                FILE_SHARE_READ,
                             )?
                         }
                         Err(error) => return Err(error),
@@ -107,15 +116,19 @@ impl SecurityPolicy {
             directory = child;
         }
         // The final child cannot grant untrusted deletion rights. Every
-        // ancestor likewise denies DELETE/DELETE_CHILD, so the retained chain
-        // cannot be emptied by an untrusted principal. Rechecking type here
-        // also catches a parent changed into a reparse before child acquisition.
+        // ancestor likewise denies DELETE/DELETE_CHILD. Write sharing is also
+        // excluded: nonemptiness alone does not qualify every reparse tag.
+        // Recheck every actual handle before publishing any usable pathname.
         self.validate_handle(&directory, ObjectKind::Directory)?;
         for ancestor in ancestors.iter().rev() {
             self.validate_traversed_directory(ancestor)?;
         }
         let path = final_path(&directory, VOLUME_NAME_DOS)?;
         wide_path(&path)?;
+        if !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(actual) if actual.eq_ignore_ascii_case(&letter)))
+        {
+            return Err(Error::UnsupportedPath);
+        }
         Ok(PrivateRoot {
             root: directory,
             _ancestors: ancestors,
@@ -142,13 +155,13 @@ fn open_volume_root(letter: u8) -> Result<File> {
         return Err(Error::UnsupportedObject);
     }
     // SAFETY: initialized root buffer stays alive through this synchronous
-    // open. Request inspection/traversal only, no inherited handle or delete
-    // sharing, and never follow a final reparse point.
+    // open. TRAVERSE/EXECUTE is required for share accounting. Refuse both
+    // write and delete sharing, no inherited handle or reparse traversal.
     let handle = unsafe {
         CreateFileW(
             root.as_ptr(),
             READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ,
             null(),
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,

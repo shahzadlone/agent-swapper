@@ -20,7 +20,26 @@ use windows_sys::Win32::{
 };
 use zeroize::Zeroizing;
 
+mod chain;
+mod drive_alias;
 mod reparse;
+
+fn require_hosted_fixture() -> io::Result<()> {
+    for (key, expected) in [
+        ("GITHUB_ACTIONS", "true"),
+        ("RUNNER_ENVIRONMENT", "github-hosted"),
+        ("RUNNER_OS", "Windows"),
+        ("GITHUB_REPOSITORY", "shahzadlone/agent-swapper"),
+        ("ASWP_CI_IDENTITY_FIXTURE", "1"),
+    ] {
+        if std::env::var(key).ok().as_deref() != Some(expected) {
+            return Err(io::Error::other(
+                "identity fixture requires explicit disposable Windows CI execution",
+            ));
+        }
+    }
+    Ok(())
+}
 
 struct FixtureAccount {
     name: Vec<u16>,
@@ -30,19 +49,7 @@ struct FixtureAccount {
 impl FixtureAccount {
     fn create() -> io::Result<(Self, OwnedHandle)> {
         // This guard is inside the mutating helper, not only the test runner.
-        for (key, expected) in [
-            ("GITHUB_ACTIONS", "true"),
-            ("RUNNER_ENVIRONMENT", "github-hosted"),
-            ("RUNNER_OS", "Windows"),
-            ("GITHUB_REPOSITORY", "shahzadlone/agent-swapper"),
-            ("ASWP_CI_IDENTITY_FIXTURE", "1"),
-        ] {
-            if std::env::var(key).ok().as_deref() != Some(expected) {
-                return Err(io::Error::other(
-                    "identity fixture requires explicit disposable Windows CI execution",
-                ));
-            }
-        }
+        require_hosted_fixture()?;
         let mut nonce = [0_u8; 6];
         getrandom::fill(&mut nonce).map_err(io::Error::other)?;
         let mut name = String::from("aswp-");
@@ -209,6 +216,8 @@ fn separate_identity_cannot_access_private_objects() {
     let (account, token) = FixtureAccount::create().unwrap();
     let root = tempfile::tempdir().unwrap();
     let policy = SecurityPolicy::for_current_process().unwrap();
+    drive_alias::probe(&policy);
+    let (chain, chain_custody) = chain::Fixture::prepare(&policy);
     let (reparse, _reparse_custody) = reparse::Fixture::prepare(root.path(), &policy);
     let reparse_for_thread = reparse.clone();
     // Everyone can read/traverse this parent, but cannot delete children. A
@@ -322,6 +331,7 @@ fn separate_identity_cannot_access_private_objects() {
         // thread-bound restoration. No privileged handle is passed to probes.
         assert_ne!(unsafe { ImpersonateLoggedOnUser(token.as_raw_handle()) }, 0);
         let restore = RestoreIdentity(PhantomData);
+        chain.probe_as_other_user();
         let reparse_results = reparse_for_thread.probe_as_other_user();
         assert_eq!(
             std::fs::read(&control_for_thread).unwrap(),
@@ -413,6 +423,7 @@ fn separate_identity_cannot_access_private_objects() {
     // and impersonation guard are gone before this explicit cleanup.
     account.remove().unwrap();
     let (private_directory_removed, reparse_results) = checked.unwrap();
+    chain_custody.verify();
     reparse.verify_and_remove_junction(&reparse_results);
     policy
         .validate_handle(&held_file, ObjectKind::File)
