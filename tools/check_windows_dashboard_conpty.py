@@ -259,8 +259,16 @@ def check(binary, fixture):
         command = [str(binary), "--state-dir", str(root / "state")]
 
         def cli(*args):
-            return subprocess.run(command + list(args), cwd=root / "workspace", env=env,
-                                  check=True, capture_output=True, timeout=15)
+            result = subprocess.run(command + list(args), cwd=root / "workspace", env=env,
+                                    capture_output=True, timeout=15)
+            if result.returncode:
+                # Only fictional fixture inputs are used here. Preserve the
+                # bounded application error so CI identifies storage failures
+                # before the console is created instead of hiding stderr.
+                raise AssertionError(
+                    f"fixture CLI {args!r} exited {result.returncode}: "
+                    f"{result.stderr[-2000:].decode('utf-8', errors='replace')!r}")
+            return result
 
         for name, alias in [("claude", "alpha-canary"), ("codex", "beta-canary"), ("kimi", "gamma-canary")]:
             cli("profile", "add", name, "--alias", alias)
