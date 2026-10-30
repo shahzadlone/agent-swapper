@@ -98,8 +98,9 @@ fn private_snapshot_supports_retirement_without_weakening_required_file_checks()
             ));
         }
         println!(
-            "::notice title=Windows private snapshot retirement::inherited={inherited}, links={}; original bytes and exact ACL snapshot survived unlink; multiple links refused; required reopen did not recreate the name",
-            info.nNumberOfLinks
+            "::notice title=Windows private snapshot retirement::inherited={inherited}, links={}; before {before}; after {}; original bytes and private grants survived unlink; multiple links refused; required reopen did not recreate the name",
+            info.nNumberOfLinks,
+            descriptor_shape(&snapshot)
         );
     }
 }

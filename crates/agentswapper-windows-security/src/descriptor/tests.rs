@@ -448,6 +448,56 @@ fn inherited_directories_require_exact_effective_and_propagating_private_grants(
 }
 
 #[test]
+fn detached_file_layout_permits_cleared_inheritance_flags_but_no_changed_grants() {
+    let policy = policy();
+    for owner in [USER, SYSTEM, ADMINISTRATORS] {
+        for flags in [0_u8, 0x10] {
+            for control in [0x8004_u16, 0x8404, 0x9004, 0x9404] {
+                let mut bytes = inherited(&[USER, SYSTEM, ADMINISTRATORS], owner);
+                bytes[2..4].copy_from_slice(&control.to_le_bytes());
+                let mut ace = 20 + owner.len() + 8;
+                for trustee in [USER, SYSTEM, ADMINISTRATORS] {
+                    bytes[ace + 1] = flags;
+                    ace += 8 + trustee.len();
+                }
+                validate_detached_file(&bytes, &policy.owner).unwrap();
+            }
+        }
+    }
+    let original = inherited(&[USER, SYSTEM, ADMINISTRATORS], USER);
+    // Flipping a single inheritance flag makes a mixed layout, not an allowed
+    // uniform retirement transformation. All other changes must fail too.
+    for index in 20..original.len() {
+        for bit in 0..8 {
+            let mut bytes = original.clone();
+            bytes[index] ^= 1 << bit;
+            assert!(
+                validate_detached_file(&bytes, &policy.owner).is_err(),
+                "changed {index}:{bit}"
+            );
+        }
+    }
+    for trustees in [
+        vec![USER, SYSTEM, EVERYONE],
+        vec![USER, USER, ADMINISTRATORS],
+        vec![USER, SYSTEM],
+        vec![USER, SYSTEM, ADMINISTRATORS, EVERYONE],
+    ] {
+        assert!(validate_detached_file(&inherited(&trustees, USER), &policy.owner).is_err());
+    }
+    assert!(matches!(
+        validate_detached_file(
+            &inherited(&[USER, SYSTEM, ADMINISTRATORS], EVERYONE),
+            &policy.owner
+        ),
+        Err(Error::OwnerMismatch)
+    ));
+    for end in 0..original.len() {
+        assert!(validate_detached_file(&original[..end], &policy.owner).is_err());
+    }
+}
+
+#[test]
 fn inherited_file_policy_refuses_mixed_explicit_inherit_only_unknown_or_pending_permissions() {
     let original = inherited(&[USER, SYSTEM, ADMINISTRATORS], USER);
     let ace = 20 + USER.len() + 8;
@@ -603,6 +653,7 @@ proptest! {
         let _ = policy().validate_descriptor(&bytes, ObjectKind::Directory);
         let _ = policy().validate_inherited_file_descriptor(&bytes);
         let _ = policy().validate_inherited_directory_descriptor(&bytes);
+        let _ = validate_detached_file(&bytes, &policy().owner);
         let _ = policy().validate_ancestor_descriptor(&bytes);
         let _ = validate_traversed_ancestor(&bytes, &policy().owner);
     }
@@ -619,6 +670,7 @@ proptest! {
             inherited[field..field+4].copy_from_slice(&value.to_le_bytes());
         }
         let _ = policy().validate_inherited_file_descriptor(&inherited);
+        let _ = validate_detached_file(&inherited, &policy().owner);
         let mut directory = inherited_kind(ObjectKind::Directory, &[USER, SYSTEM, ADMINISTRATORS], USER);
         for (field, value) in [(4, owner), (8, group), (12, sacl), (16, dacl)] {
             directory[field..field+4].copy_from_slice(&value.to_le_bytes());

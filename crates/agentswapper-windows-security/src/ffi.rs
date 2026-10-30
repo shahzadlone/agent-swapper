@@ -425,6 +425,15 @@ fn validate_object(file: &File, kind: ObjectKind) -> Result<()> {
     validate_object_with_links(file, kind, false)
 }
 
+fn object_information(file: &File) -> Result<BY_HANDLE_FILE_INFORMATION> {
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: owned live handle and an initialized, correctly sized output.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(information)
+}
+
 fn validate_object_with_links(file: &File, kind: ObjectKind, allow_detached: bool) -> Result<()> {
     validate_local_device(file)?;
     let metadata = file.metadata()?;
@@ -435,11 +444,7 @@ fn validate_object_with_links(file: &File, kind: ObjectKind, allow_detached: boo
     {
         return Err(Error::UnsupportedObject);
     }
-    let mut information = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: owned live handle and an initialized, correctly sized output.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
-        return Err(io::Error::last_os_error().into());
-    }
+    let information = object_information(file)?;
     if kind == ObjectKind::File
         && (information.nNumberOfLinks > 1 || (!allow_detached && information.nNumberOfLinks == 0))
     {
@@ -657,7 +662,14 @@ impl SecurityPolicy {
     pub fn validate_private_file_snapshot(&self, file: &File) -> Result<()> {
         validate_object_with_links(file, ObjectKind::File, true)?;
         let descriptor = LocalDescriptor::from_file(file)?;
-        self.validate_private_descriptor(descriptor.bytes()?, ObjectKind::File)
+        // Read the link count after taking the ACL snapshot. A concurrent
+        // unlink can clear inherited flags between the first object check and
+        // GetSecurityInfo. Both pre/post-unlink flags qualify only at zero links.
+        match object_information(file)?.nNumberOfLinks {
+            0 => crate::descriptor::validate_detached_file(descriptor.bytes()?, &self.owner),
+            1 => self.validate_private_descriptor(descriptor.bytes()?, ObjectKind::File),
+            _ => Err(Error::UnsupportedObject),
+        }
     }
 
     fn open_existing_at(

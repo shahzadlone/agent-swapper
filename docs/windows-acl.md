@@ -513,6 +513,20 @@ The actual core fixture retains an old config read handle across replacement
 and requires both a private old snapshot and the new saved preferences. These
 snapshot additions need native results; the core is not yet wired to them.
 
+The first snapshot run at `4aee481` passed the protected-file case but refused
+the detached inherited-file descriptor in
+[CI run 41141525367](https://github.com/shahzadlone/agent-swapper/actions/runs/41141525367).
+A disposable local Windows reproduction using the same protected creation SDDL
+showed NTFS clearing the inherited ACE flags after final unlink while retaining
+the same three full-control grants and original bytes. A directory set up through
+automatic ACL propagation did not show that transformation on the same host.
+The zero-link snapshot path now accepts either uniformly explicit or uniformly
+inherited file ACEs, with the same exact trustees, owner set and rights. The
+handle's link count is read after the ACL snapshot; named files and required
+opens do not use this detached-only policy. Broad/mixed/unknown grants remain
+refusals. Portable mutation tests cover the additional layout; native hosted
+qualification remains required.
+
 A consumer-compatibility fixture now wraps the actual core `Store`,
 `ConfigStore` and `ProfileLease` in an externally retained candidate root. It
 creates only fictional profiles and data, verifies every registry/sidecar,

@@ -96,6 +96,13 @@ pub(crate) fn validate_inherited_directory(bytes: &[u8], owner: &Sid) -> Result<
     validate_layout(bytes, owner, ObjectKind::Directory, Layout::Inherited)
 }
 
+// Only a handle with zero links may use this policy. NTFS can clear inherited
+// ACE flags when retiring the final name without changing the effective grants.
+#[cfg(any(windows, test))]
+pub(crate) fn validate_detached_file(bytes: &[u8], owner: &Sid) -> Result<()> {
+    validate_layout(bytes, owner, ObjectKind::File, Layout::DetachedFile)
+}
+
 pub(crate) fn validate_ancestor(bytes: &[u8], owner: &Sid) -> Result<()> {
     validate_layout(bytes, owner, ObjectKind::Directory, Layout::Ancestor)
 }
@@ -117,6 +124,8 @@ pub(crate) fn validate_traversed_ancestor(bytes: &[u8], owner: &Sid) -> Result<(
 enum Layout {
     Protected,
     Inherited,
+    #[cfg(any(windows, test))]
+    DetachedFile,
     Ancestor,
     #[cfg(any(windows, test))]
     TraversedAncestor,
@@ -236,8 +245,19 @@ fn validate_layout(bytes: &[u8], owner: &Sid, kind: ObjectKind, layout: Layout) 
                 return Err(Error::UnexpectedDacl);
             }
         } else {
-            let expected_flags = if layout == Layout::Inherited { 0x10 } else { 0 }
-                | if kind == ObjectKind::Directory { 3 } else { 0 };
+            let expected_flags = match layout {
+                // Require a uniform explicit or inherited file layout. Neither
+                // form adds rights; all trustees/masks/counts remain exact.
+                #[cfg(any(windows, test))]
+                Layout::DetachedFile => *acl
+                    .get(9)
+                    .filter(|&&flags| matches!(flags, 0 | 0x10))
+                    .ok_or(Error::UnexpectedDacl)?,
+                _ => {
+                    (if layout == Layout::Inherited { 0x10 } else { 0 })
+                        | (if kind == ObjectKind::Directory { 3 } else { 0 })
+                }
+            };
             if ace[1] != expected_flags || mask != FILE_ALL_ACCESS {
                 return Err(Error::UnexpectedDacl);
             }
