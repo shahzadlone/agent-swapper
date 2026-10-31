@@ -74,6 +74,15 @@ also repeats the lifecycle property ten times after the normal suite, stopping
 on the first failure. CI annotations retain bounded stdout/stderr, failure
 categories and the tail containing any minimized input and replay seed.
 
+The Windows job at `356d653` timed out in the projection-rebuild property in
+[run 41156145862](https://github.com/shahzadlone/agent-swapper/actions/runs/41156145862).
+Its diagnostic showed a timeout, with no failed invariant or replay seed. The
+same property passed in the subsequent complete `88c10fa` pipeline, which does
+not explain the earlier timeout. Per-case setup, mutation and replay timing is
+now emitted to distinguish slow durable I/O from a stalled phase on a future
+failure. The 48 cases, assertions, serialization group and 180-second limit
+remain unchanged; no automatic retry masks the result.
+
 The separate journal crash matrix kills an owned subprocess at the event-log
 write, projection write, and immediately after commit for registration, rename,
 disable, removal, engine rebinding, native and external-session run intents,

@@ -1218,9 +1218,13 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(48))]
         #[test]
         fn projection_rebuild_matches_committed_events(operations in prop::collection::vec(any::<bool>(), 0..50)) {
+            let started = std::time::Instant::now();
+            eprintln!("projection property: begin operations={}", operations.len());
             let (_temp, mut s) = setup();
+            eprintln!("projection property: setup complete elapsed_ms={}", started.elapsed().as_millis());
             let p = s.register(Harness::Claude, "work".parse().unwrap()).unwrap();
             for enabled in operations { s.enable(&p.alias, enabled).unwrap(); }
+            eprintln!("projection property: mutations complete elapsed_ms={}", started.elapsed().as_millis());
             let before = s.profiles().unwrap();
             let events: Vec<String> = s.db.prepare("SELECT payload FROM main.event_log ORDER BY sequence").unwrap()
                 .query_map([], |r| r.get(0)).unwrap().collect::<std::result::Result<_,_>>().unwrap();
@@ -1229,6 +1233,7 @@ mod tests {
             for json in events { apply(&tx, &serde_json::from_str(&json).unwrap(), "2026-01-01T00:00:00.000Z").unwrap(); }
             tx.commit().unwrap();
             prop_assert_eq!(s.profiles().unwrap(), before);
+            eprintln!("projection property: replay verified elapsed_ms={}", started.elapsed().as_millis());
         }
     }
 }
