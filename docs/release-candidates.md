@@ -5,11 +5,29 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
+The combined Windows storage/export checkpoint at `f046e75` passed the complete
+`main` pipeline in [run 41159970590](https://github.com/shahzadlone/agent-swapper/actions/runs/41159970590):
+Linux, macOS and Windows tests, dependency policy, all three candidate builds,
+three matching rebuilds and preview provenance verification. This closes that
+integration checkpoint. Later changes still require their own completed run.
+
+| Release gate | Current boundary |
+| --- | --- |
+| Implemented preview, packaging and provenance | Qualified at the revision above; archives remain unsigned by the operating system |
+| Native account isolation and refresh | Unverified; dedicated login checks are deferred until the provider-free work is finished |
+| Process containment | Experimental Windows Job observations only; Linux and macOS production containment remain unfinished |
+| Optional gents engine | Attached-client fixture qualified; authentic runtime ownership and provider-pair replay remain open |
+| Automatic switching | Not implemented; local empty-scope observations do not authorize it |
+| Public distribution | No release published; signing, notarization and release-specific review remain open |
+
+These are separate gates. Successful fixture and packaging jobs cannot close
+the provider or automatic-switching gates in the [roadmap](roadmap.md).
+
 The retained-volume qualification checkpoint at `e84d0e5` passed the complete
 `main` pipeline in [run 41157492415](https://github.com/shahzadlone/agent-swapper/actions/runs/41157492415),
 including all platform tests, the disposable Windows root controls, candidate
 archives, three matching rebuilds, and preview provenance verification. The
-separate Windows handover changes require their own final integrated run.
+separate Windows handover changes subsequently passed the integrated run above.
 
 The Windows storage integration at `9002a4f` passed
 [CI run 41148708334](https://github.com/shahzadlone/agent-swapper/actions/runs/41148708334):

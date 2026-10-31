@@ -251,8 +251,10 @@ Gates:
   external side effects against sandboxed external targets.
 - Crash injection at every switch transition recovers consistently in 100% of
   runs.
-- Export/import: an encrypted round trip succeeds. No plaintext export path
-  exists. A wrong passphrase fails closed.
+- Account export/import: an encrypted round trip succeeds. No plaintext
+  credential-backup path exists. A wrong passphrase fails closed. Explicit
+  plaintext handover notes use the separate M1b pickup workflow; they are not
+  account backups or credential transfer.
 
 ## M3 - Controlled adapter promotion (per adapter, per cell)
 
@@ -394,7 +396,7 @@ Gate: every review finding is fixed or accepted in writing.
 
 Rejected by design:
 
-- plaintext exports;
+- plaintext credential or account backups;
 - secrets as positional arguments;
 - automatic reset redemption;
 - silent API-spend fallback;
