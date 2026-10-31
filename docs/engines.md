@@ -13,7 +13,7 @@ checks that your selection matches the profile; it never silently changes engine
 | Setup | Install the native CLI; authenticate the isolated profile | Install gents; initialize a dedicated home; configure/authenticate an agent; operate a local runtime |
 | Workspace | Passed as the native client's working directory | Configured on the gents agent; client cwd does **not** set it |
 | Continuity | Native resume where supported; manual handover between brands | Tracked UUIDs and explicit `--resume` with the bound agent; provider switching remains a gents operation |
-| Local supervision | Uncontained by default; opt-in Windows Jobs stop remaining local descendants | External runtime is not owned by AgentSwapper |
+| Local supervision | Uncontained by default; opt-in Windows Jobs stop their remaining members, with work outside the Job unverified | External runtime is not owned by AgentSwapper |
 | Main tradeoff | Session formats and features differ across vendors | Separate runtime to maintain; native plugins, sessions and permissions do not automatically transfer |
 | Lifecycle | Direct child observed by default; opt-in Windows Job emptiness recorded after cleanup | Chat client observed; external runtime work may continue after exit |
 | Verification | Provider isolation unverified on every OS | CLI contract tested with fixtures; real runtime/provider pairs unverified |

@@ -145,7 +145,7 @@ limitations.
 On Windows, the experimental launch path now captures console input/output modes
 through owned handles, including `CONIN$`/`CONOUT$` when standard streams are
 redirected. It restores and reads back those modes after the observed child exit;
-the optional Job path first stops its remaining local descendants. A failed
+the optional Job path first stops processes remaining in its owned Job. A failed
 restoration is reported after journaling the actual exit. This does not restore
 an entire screen buffer, a supervisor crash or external work. The six disposable
 console cases passed at `08facc1` in
@@ -189,8 +189,9 @@ aswp run work --experimental-native --experimental-containment windows-job
 ```
 
 Also available for `login`. The native target starts suspended until its owned
-Job assignment and PID record succeed. When the initial CLI exits, remaining
-local descendants are terminated and the Job is queried for emptiness. The
+Job assignment and PID record succeed. When the initial CLI exits, processes
+remaining in that Job are terminated and the Job is queried for emptiness. Work
+outside that Job remains unverified. The
 initial CLI's exit code is preserved. This changes background-child behavior;
 preview the plan before choosing it. Gents and other platforms refuse this option.
 The CLI first joins a process-lifetime root Job, which also affects other

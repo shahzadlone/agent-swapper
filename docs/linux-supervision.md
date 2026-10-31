@@ -439,6 +439,20 @@ Local tests cover this replacement case; the same successful hosted fixture uses
 the bound Rust check after client loss. No authenticated production manager or
 stop receipt is established by that result.
 
+The separate [read-only manager evaluation](../tools/linux-manager-evaluation/README.md)
+now queries an authenticated system-manager bus owner directly. It retains
+kernel process and cgroup handles through a bounded retirement observation,
+and the existing fixture requires both the Rust and Python observations to
+agree. At `181aab0`, the Ubuntu 22.04 and 24.04 jobs passed graceful stop,
+forced stop and client loss in
+[run 41164791650](https://github.com/shahzadlone/agent-swapper/actions/runs/41164791650).
+The native trials use the manager's invocation-specific object path rather
+than assuming it equals the reusable unit-name path. Subsequent metadata-overlay
+and socket-refusal controls need their own results. Its dependency graph remains
+outside the production workspace; independent implementation review, broader
+replacement/transport failure controls and production integration remain open.
+No normal launch, journal recovery or automatic switching uses these observations.
+
 Same-user cgroup migration is a release-blocking containment concern. This
 prototype requires the delegated parent `cgroup.procs` to be writable, and the
 target currently runs with the same user identity as the supervisor. The
