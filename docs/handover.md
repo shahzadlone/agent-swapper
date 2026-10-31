@@ -142,9 +142,24 @@ source-note ownership or hardlink restrictions; note inputs keep those checks.
 
 Outputs use a temporary file, fsync, and exclusive publication in the same
 directory. Existing files and symlinks are never overwritten. POSIX output mode
-is checked as private (0600); Windows ACL privacy is not verified. Cancellation
+is checked as private (0600). On Windows, exports now use a protected ACL
+supplied at file creation, with access for the current user, SYSTEM and
+Administrators. The existing destination folder and its ancestry stay retained
+through publication and temporary-file cleanup. Public read-only folder grants
+are accepted; grants allowing other users to mutate the destination folder are
+refused without changing its ACL. Fixed local NTFS and the current volume-root
+sharing restrictions apply. The publication, cleanup, filename and separate-user
+checks passed on the hosted Windows runner at `280fdac`; see
+[qualification evidence](windows-acl.md#protected-handover-publication-candidate).
+Overall Windows privacy
+remains unverified. Ambiguous output spellings report `handover_output_path`
+before creating files. Cancellation
 before publication removes the temporary file; after publication the committed
-artifact remains. Directory-sync
+artifact remains. On Windows, a failed temporary-file removal reports
+`handover_cleanup_failed` instead of successful cancellation; a protected
+`.aswp-` file may remain in the selected folder. A refused Windows destination
+policy reports `unprotected_handover_output`, separately from pickup filename
+validation. Directory-sync
 status is reported separately after publication: lack of support does not
 misreport an already-written file as a failed export. Explicit ciphertext
 exports are not a replacement for the future encrypted account-backup feature.

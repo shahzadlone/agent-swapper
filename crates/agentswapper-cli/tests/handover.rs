@@ -437,3 +437,22 @@ fn pickup_refuses_unsafe_plaintext_destinations_before_reading_password_or_pack(
         .code(125)
         .stderr(predicate::str::contains("outside authentication"));
 }
+
+#[cfg(windows)]
+#[test]
+fn pickup_reports_invalid_windows_filenames_before_reading_password_or_pack() {
+    let s = Sandbox::new();
+    let missing = s.temp.path().join("missing.age");
+    for name in ["HANDOVER.md:stream.md", "HANDOVER.md ", "NUL.age"] {
+        let output = s.project().join(name);
+        s.cmd()
+            .args(["handover", "pickup"])
+            .arg(&missing)
+            .arg("--output")
+            .arg(&output)
+            .args(["--target", "codex", "--json"])
+            .assert()
+            .code(125)
+            .stdout(predicate::str::contains("handover_output_path"));
+    }
+}

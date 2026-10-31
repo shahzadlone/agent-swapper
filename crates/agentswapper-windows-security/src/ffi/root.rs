@@ -14,6 +14,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 const MAX_COMPONENTS: usize = 128;
 const MAX_PATH_UNITS: usize = 32767;
 
+/// Validate one publication filename before a Win32 path-normalization call.
+/// Performs no filesystem access and accepts no directory/stream syntax.
+pub fn validate_publication_name(name: &OsStr) -> Result<()> {
+    wide_component(name).map(|_| ())
+}
+
 #[derive(Clone, Copy)]
 enum DirectoryPolicy {
     Private,
@@ -33,6 +39,7 @@ struct RetainedDirectory {
 enum RootOpen {
     CreateProtected,
     ExistingPrivate,
+    ExistingPublicationParent,
 }
 
 /// Experimental retained path from a fixed NTFS volume root to a validated
@@ -43,6 +50,10 @@ enum RootOpen {
 /// and broader native qualification remain separate gates.
 #[must_use = "keep the full ancestor chain alive while using the private path"]
 pub struct PrivateRoot {
+    retained: RetainedPath,
+}
+
+struct RetainedPath {
     root: File,
     _ancestors: Vec<RetainedDirectory>,
     path: PathBuf,
@@ -52,13 +63,56 @@ impl PrivateRoot {
     /// Normalized long DOS path obtained from the actual retained leaf handle.
     /// Use this path only while the guard remains alive.
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.retained.path
     }
 
     /// Borrow the private leaf for relative child operations. The handle
     /// requests inspection/traversal only and is not inheritable.
     pub fn directory(&self) -> &File {
-        &self.root
+        &self.retained.root
+    }
+}
+
+/// Retained existing directory for publishing individually protected files.
+/// Other users may read/list this directory, but its effective ACL cannot
+/// grant them mutation. Inherit-only grants may be broader; new files must
+/// have protected ACLs. This cannot revoke previously acquired handles. This is
+/// deliberately distinct from a private state root: its children are not
+/// assumed private unless created and checked with an explicit protected ACL.
+#[must_use = "retain the parent through file creation, publication and cleanup"]
+pub struct PublicationParent {
+    retained: RetainedPath,
+}
+
+/// One exclusively created, validated file paired with its actual path and
+/// borrowed parent custody. The caller owns publication or removal of the file.
+#[must_use = "publish or remove this newly created file while retaining its parent"]
+pub struct PublicationFile<'parent> {
+    file: File,
+    path: PathBuf,
+    parent: &'parent PublicationParent,
+}
+
+impl<'parent> PublicationFile<'parent> {
+    /// Transfer the paired handle/path and parent borrow into a cleanup owner.
+    /// Retain that borrow until publication or removal has finished.
+    pub fn into_parts(self) -> (File, PathBuf, &'parent PublicationParent) {
+        (self.file, self.path, self.parent)
+    }
+}
+
+impl PublicationParent {
+    /// Actual normalized parent path, usable only while this guard is retained.
+    pub fn path(&self) -> &Path {
+        &self.retained.path
+    }
+
+    /// Validate one ordinary filename before deriving a path under the guard.
+    pub fn child_path(&self, name: &OsStr) -> Result<PathBuf> {
+        wide_component(name)?;
+        let path = self.path().join(name);
+        wide_path(&path)?;
+        Ok(path)
     }
 }
 
@@ -71,7 +125,9 @@ impl SecurityPolicy {
     /// leave empty protected directories, never partially written private data.
     /// Paths are bounded to 128 components and 32766 UTF-16 units.
     pub fn open_or_create_private_root(&self, path: &Path) -> Result<PrivateRoot> {
-        self.open_root(path, RootOpen::CreateProtected)
+        Ok(PrivateRoot {
+            retained: self.open_root(path, RootOpen::CreateProtected)?,
+        })
     }
 
     /// Retain an existing private directory and all its ancestors without
@@ -80,10 +136,37 @@ impl SecurityPolicy {
     /// layout without rewriting its ACL; it never migrates broad legacy state.
     /// All device, reparse, ancestry and sharing restrictions still apply.
     pub fn open_existing_private_root(&self, path: &Path) -> Result<PrivateRoot> {
-        self.open_root(path, RootOpen::ExistingPrivate)
+        Ok(PrivateRoot {
+            retained: self.open_root(path, RootOpen::ExistingPrivate)?,
+        })
     }
 
-    fn open_root(&self, path: &Path, mode: RootOpen) -> Result<PrivateRoot> {
+    /// Retain an existing publication directory and its complete ancestry.
+    /// Allows effective public read-only grants and trusted owner-rights ACEs, refuses
+    /// all untrusted leaf mutation grants, and never repairs or creates paths.
+    pub fn open_publication_parent(&self, path: &Path) -> Result<PublicationParent> {
+        Ok(PublicationParent {
+            retained: self.open_root(path, RootOpen::ExistingPublicationParent)?,
+        })
+    }
+
+    /// Exclusively create and validate a protected file relative to a retained
+    /// publication parent. The ACL is supplied before any content is written.
+    pub fn create_publication_file<'parent>(
+        &self,
+        parent: &'parent PublicationParent,
+        name: &OsStr,
+    ) -> Result<PublicationFile<'parent>> {
+        reject_impersonation()?;
+        let path = parent.child_path(name)?;
+        self.validate_ancestor_handle(&parent.retained.root)?;
+        let descriptor = self.creation_descriptor(ObjectKind::File)?;
+        let file = create_at(&parent.retained.root, name, ObjectKind::File, &descriptor)?;
+        self.validate_handle(&file, ObjectKind::File)?;
+        Ok(PublicationFile { file, path, parent })
+    }
+
+    fn open_root(&self, path: &Path, mode: RootOpen) -> Result<RetainedPath> {
         reject_impersonation()?;
         wide_path(path)?;
         let mut components = path.components();
@@ -112,7 +195,8 @@ impl SecurityPolicy {
             policy: DirectoryPolicy::CreateSubdirectoryAncestor,
         };
         let mut ancestors = Vec::with_capacity(names.len());
-        for name in names {
+        let count = names.len();
+        for (index, name) in names.into_iter().enumerate() {
             // Precheck before creating even an empty child. AD4 is provisional
             // here: no guard or pathname reaches the caller until the complete
             // retained chain has passed the bottom-up checks below.
@@ -153,6 +237,11 @@ impl SecurityPolicy {
                 }
                 Err(error) => return Err(error),
             };
+            if mode == RootOpen::ExistingPublicationParent && index + 1 == count {
+                // The publication leaf must never use the AD4 exception.
+                // Refuse its ACL before trying a stronger sharing mode.
+                self.validate_ancestor_handle(&child)?;
+            }
             // A private DACL grants no ordinary other user mutation rights.
             // Its directory must permit owner writes: Windows replacement APIs
             // may open the target parent for writing. The same holds for public
@@ -206,6 +295,9 @@ impl SecurityPolicy {
                 self.validate_handle(&directory.file, ObjectKind::Directory)?
             }
             RootOpen::ExistingPrivate => self.validate_private_parent(&directory.file)?,
+            RootOpen::ExistingPublicationParent => {
+                self.validate_ancestor_handle(&directory.file)?
+            }
         }
         for ancestor in ancestors.iter().rev() {
             self.validate_retained_directory(ancestor)?;
@@ -216,7 +308,7 @@ impl SecurityPolicy {
         {
             return Err(Error::UnsupportedPath);
         }
-        Ok(PrivateRoot {
+        Ok(RetainedPath {
             root: directory.file,
             _ancestors: ancestors,
             path,

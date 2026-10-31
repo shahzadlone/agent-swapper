@@ -5,6 +5,12 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
+The retained-volume qualification checkpoint at `e84d0e5` passed the complete
+`main` pipeline in [run 41157492415](https://github.com/shahzadlone/agent-swapper/actions/runs/41157492415),
+including all platform tests, the disposable Windows root controls, candidate
+archives, three matching rebuilds, and preview provenance verification. The
+separate Windows handover changes require their own final integrated run.
+
 The Windows storage integration at `9002a4f` passed
 [CI run 41148708334](https://github.com/shahzadlone/agent-swapper/actions/runs/41148708334):
 all Linux/macOS/Windows tests, dependency policy, candidate packaging and all

@@ -377,6 +377,7 @@ fn validate_document_location(resolved: &Path, state_root: Option<&Path>) -> Res
 /// Validate a user-selected plaintext destination without creating local state
 /// or opening a credential file. Imported capsule paths are never destinations.
 pub fn validate_pickup_output(path: &Path, state_root: Option<&Path>) -> Result<PathBuf> {
+    validate_output_spelling(path)?;
     let absolute = std::path::absolute(path)?;
     if fs::symlink_metadata(&absolute).is_ok() {
         return Err(Error::OutputExists);
@@ -513,6 +514,30 @@ pub fn write_pickup(
     })
 }
 
+#[cfg(windows)]
+mod windows_publication;
+#[cfg(windows)]
+use windows_publication::publish_private_bytes;
+
+fn validate_output_spelling(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows_publication::validate_spelling(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let spelling = path.as_os_str().as_encoded_bytes();
+        if matches!(
+            spelling.rsplit(|byte| *byte == b'/').next(),
+            None | Some(b"" | b"." | b"..")
+        ) {
+            return Err(Error::HandoverOutputPath);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
 fn publish_private_bytes(
     path: &Path,
     bytes: &[u8],
@@ -522,6 +547,7 @@ fn publish_private_bytes(
     if interrupted() {
         return Err(Error::Cancelled);
     }
+    validate_output_spelling(path)?;
     let absolute = std::path::absolute(path)?;
     let parent = dunce::canonicalize(absolute.parent().ok_or(Error::UnsafePath)?)?;
     let output = parent.join(absolute.file_name().ok_or(Error::UnsafePath)?);
@@ -861,7 +887,6 @@ mod tests {
             "CLAUDE.md",
             "notes.md",
             "PICKUP.json",
-            "HANDOVER.md:stream.md",
             "HANDOVER\u{202e}.md",
         ] {
             assert!(matches!(
@@ -869,6 +894,15 @@ mod tests {
                 Err(Error::UnsafeHandoverOutput)
             ));
         }
+        // Windows rejects stream syntax at the raw filename boundary; POSIX
+        // reaches the portable pickup-name policy. Neither path may publish.
+        let stream = temp.path().join("HANDOVER.md:stream.md");
+        let error = validate_pickup_output(&stream, Some(&state)).unwrap_err();
+        #[cfg(windows)]
+        assert!(matches!(error, Error::HandoverOutputPath));
+        #[cfg(not(windows))]
+        assert!(matches!(error, Error::UnsafeHandoverOutput));
+        assert!(!stream.exists());
         assert!(matches!(
             validate_pickup_output(&state.join("HANDOVER.md"), Some(&state)),
             Err(Error::UnsafeHandoverOutput)
@@ -947,6 +981,125 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".aswp-")
         }));
+    }
+
+    #[test]
+    fn exports_refuse_directory_spellings_without_creating_files() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "HANDOVER_NEW.md/",
+            "HANDOVER_NEW.md/.",
+            "HANDOVER_NEW.md/..",
+        ] {
+            // Preserve the spelling even if the temporary parent is verbatim.
+            let mut raw = temp.path().as_os_str().to_owned();
+            raw.push("/");
+            raw.push(name);
+            let path = PathBuf::from(raw);
+            assert!(matches!(
+                write_ciphertext(&path, b"must not be written"),
+                Err(Error::HandoverOutputPath)
+            ));
+            assert!(matches!(
+                validate_pickup_output(&path, None),
+                Err(Error::HandoverOutputPath)
+            ));
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_exports_refuse_ambiguous_spelling_before_normalization() {
+        let temp = tempfile::tempdir().unwrap();
+        for spelling in [
+            r"Q:",
+            r"Q:relative.age",
+            r"\\?\Q:",
+            r"\\server\share",
+            r"\\.\NUL",
+            "NUL.age",
+            "file:stream",
+            "",
+        ] {
+            assert!(matches!(
+                windows_publication::validate_spelling(Path::new(spelling)),
+                Err(Error::HandoverOutputPath)
+            ));
+        }
+        let plain = dunce::canonicalize(temp.path()).unwrap();
+        let verbatim = PathBuf::from(format!(r"\\?\{}", plain.display()));
+        for parent in [&plain, &verbatim] {
+            for suffix in ["\\", "/", ".", " ", "\\."] {
+                let mut raw = parent.join("HANDOVER_NEW.md").into_os_string();
+                raw.push(suffix);
+                let raw = PathBuf::from(raw);
+                assert!(matches!(
+                    write_ciphertext(&raw, b"must not be written"),
+                    Err(Error::HandoverOutputPath)
+                ));
+                assert!(matches!(
+                    validate_pickup_output(&raw, None),
+                    Err(Error::HandoverOutputPath)
+                ));
+                assert_eq!(fs::read_dir(&plain).unwrap().count(), 0);
+            }
+        }
+        assert!(matches!(
+            write_ciphertext_cancellable(&plain.join("missing/entry.age"), b"cancelled", || true),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(fs::read_dir(&plain).unwrap().count(), 0);
+        let output = plain.join("valid.age");
+        assert_eq!(
+            write_ciphertext(&output, b"fictional ciphertext")
+                .unwrap()
+                .path,
+            output
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cancellation_reports_cleanup_failure_when_a_peer_retains_the_temporary_file() {
+        use std::{cell::RefCell, os::windows::fs::OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("cancelled.age");
+        let held = RefCell::new(None);
+        let result = write_ciphertext_cancellable(&destination, b"private cleanup canary", || {
+            let entry = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .find(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".aswp-handover-")
+                });
+            if let Some(entry) = entry {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(entry.path())
+                    .unwrap();
+                *held.borrow_mut() = Some((file, entry.path()));
+                true
+            } else {
+                false
+            }
+        });
+        assert!(matches!(result, Err(Error::HandoverCleanupFailed)));
+        assert!(!destination.exists());
+        let (file, path) = held.into_inner().unwrap();
+        agentswapper_windows_security::SecurityPolicy::for_current_process()
+            .unwrap()
+            .validate_handle(&file, agentswapper_windows_security::ObjectKind::File)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"private cleanup canary");
+        drop(file);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 
     proptest! {

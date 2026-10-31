@@ -179,6 +179,18 @@ pub enum Error {
     )]
     UnsafeHandoverOutput,
     #[error(
+        "handover output could not be protected; use a regular filename in an existing local NTFS folder that other users cannot modify"
+    )]
+    UnprotectedHandoverOutput,
+    #[error(
+        "handover output must name a regular file; directory spellings and ambiguous Windows filenames are unsupported"
+    )]
+    HandoverOutputPath,
+    #[error(
+        "temporary handover cleanup failed; no output was published, but a protected .aswp- file may remain in the destination folder"
+    )]
+    HandoverCleanupFailed,
+    #[error(
         "handover file must be regular; symbolic links and Windows cloud/reparse files are unsupported in this preview"
     )]
     UnsafeHandoverFile,
@@ -276,6 +288,9 @@ impl Error {
             Self::HandoverTooLarge => "handover_too_large",
             Self::UnsafeHandoverInput => "unsafe_handover_input",
             Self::UnsafeHandoverOutput => "unsafe_handover_output",
+            Self::UnprotectedHandoverOutput => "unprotected_handover_output",
+            Self::HandoverOutputPath => "handover_output_path",
+            Self::HandoverCleanupFailed => "handover_cleanup_failed",
             Self::UnsafeHandoverFile => "unsafe_handover_file",
             Self::InvalidHandover => "invalid_handover",
             Self::HandoverDecryption => "handover_decryption_failed",

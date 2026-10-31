@@ -826,6 +826,101 @@ and does not establish production privacy. Its complete pipeline, including
 candidate builds, separate-runner rebuild comparisons and preview provenance,
 also passed. Later code changes need their own results.
 
+### Protected handover publication candidate
+
+Windows handover exports previously used a general-purpose temporary file whose
+ACL could inherit public reads from the selected destination. The candidate
+now supplies the exact protected file ACL before writing any bytes, checks the
+actual handle, and retains the complete parent chain through exclusive rename
+and cleanup. This applies to both ciphertext and explicit plaintext pickup.
+
+`PublicationParent` is a separate type from `PrivateRoot`. Its existing leaf
+may grant public reads or trusted owner rights, but must refuse every effective
+untrusted mutation grant, including AD4. Inherit-only grants can be broader;
+new children require their own protected ACL. Existing mutation handles cannot
+be revoked by this check. The existing private-state leaf rules are not
+relaxed. No destination folders are created or repaired. Invalid single-file
+components and reparses remain refusals. The protected temporary file handle
+closes before rename or cleanup because it excludes deletion sharing; the
+parent guard and protected file ACL remain in force during that interval.
+The locked `tempfile 3.27.0` Windows implementation uses `SetFileAttributesW`
+and `MoveFileExW` without replacement or cross-volume copy flags for
+`TempPath::persist_noclobber`. The temporary and destination names share the same
+retained parent. Microsoft's [file security documentation](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
+distinguishes creation-time inherited descriptors from rename/move behavior;
+native tests must still check the resulting descriptor.
+
+Ordinary write, sync, cancellation and failed-publication paths explicitly
+close the file and check temporary-file removal. If removal fails, the caller
+receives `handover_cleanup_failed` rather than a successful cancellation or an
+unqualified publication error. Unwinding still uses best-effort RAII cleanup.
+A native core test deliberately retains a peer handle that denies deletion,
+requires cleanup-failure reporting, verifies that the remaining temporary file
+is protected and the destination absent, then releases the peer and removes
+the fixture. No file contents or secret paths are included in that error.
+
+New native fixtures call the real core publication APIs under owner-rights and
+public-read parents, inspect temporary and published descriptors, check
+cancellation cleanup and unchanged parent ACLs, and refuse broad/AD4 leaves.
+The separate-user fixture must reach a public control in each parent before
+private output reads, writes and deletes can count as denied. Existing core
+tests also require exclusive concurrent publication and cleanup on cancellation.
+At `88c10fa`, [CI run 41156399101](https://github.com/shahzadlone/agent-swapper/actions/runs/41156399101)
+passed the complete Windows test job, including the actual other-user output
+checks and cleanup-failure regression; Linux/macOS jobs passed too. The initial
+focused Opus 5.5 xhigh review found no confidentiality/integrity blocker within
+the stated trust model, but identified raw filename normalization before
+validation as a correctness blocker. It also requested stronger inheritance,
+race and ownership tests. These review changes require a new native run.
+
+Raw directory spellings are now refused before normalization at both export
+entry points; Windows also refuses trailing dots/spaces. POSIX retains its
+ordinary filename semantics but refuses terminal slash/dot-directory spellings.
+Internal operations keep the actual retained verbatim path; the reported path
+uses `dunce::simplified` only where that conversion is safe. A new paired-file
+type returns the checked file, path and parent borrow together, and the cleanup
+owner retains that borrow. Absolute, nonempty paths make `TempPath::try_from_path`
+infallible under the locked implementation; an earlier native validation
+failure may still leave an empty protected file, as documented for creation.
+
+Expanded native tests include private and inherit-only-public-write parents,
+zero-byte descriptor checks before content, a deterministic destination race,
+unchanged winning bytes/ACL, and separate-user child-injection refusal. The OW
+fixture now specifies the current user as owner. Existing protected/inherited
+root and core publication tests remain in the suite. The prior review's generic
+rights concern did not fail the native run; new fixtures use explicit file
+rights to remove that ambiguity. Both manifest dependencies and all-targets
+Windows type-checking were already present, and the callback requires no Send
+bound. A second focused Opus review found no new must-fix. Its remaining
+spelling feedback led to requiring an ordinary final filename before Windows
+normalization and refusing drive-relative forms. Both export entry points now
+use the boundary's pure component validator before normalization; filename
+failures use `handover_output_path`. The parent borrow is passed into the actual
+rename/removal helpers, and `PublicationFile` is marked must-use. These final
+changes passed all-targets Windows Clippy and await their native run.
+
+The complete Windows job at `18e68d5` passed in
+[run 41157494191](https://github.com/shahzadlone/agent-swapper/actions/runs/41157494191),
+including the expanded four-parent inheritance/race cases and separate-user
+injection refusals. The following `b97ceb7` run failed one old assertion that
+expected `unsafe_handover_output` for Windows stream syntax; the new pure
+filename validator correctly refused it earlier as `handover_output_path`.
+That case now requires the precise platform-specific error, and a CLI regression
+checks the new filename errors before password or pack access. It does not
+relax destination refusal. At `280fdac`,
+[run 41159003604](https://github.com/shahzadlone/agent-swapper/actions/runs/41159003604)
+passed all three platform test jobs and dependency/containment evidence jobs;
+candidate builds then started. The prepared merge also passed 270 local nextest
+tests and all-targets Windows Clippy, including the volume fixtures and export
+changes together. The final integrated `main` revision needs its own pipeline.
+
+The review also noted the previously documented post-creation validation
+failure case: it can leave an empty file before the core has received a
+validated handle. That error is a boundary refusal, not the later temporary
+cleanup error; no handover bytes have been written. This remains an explicit
+limitation of the creation primitive. None of these results promotes overall
+Windows privacy or qualifies vendor-owned files.
+
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle
 inheritance and unknown ACE forms conservatively, and refuse unsupported
