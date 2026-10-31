@@ -96,8 +96,9 @@ stream framing. At `574eaba`, the sequenced-packet activation, oversized-packet
 refusal, separate-user refusal, independent scopes and cleanup passed on both
 images in [run 41167663744](https://github.com/shahzadlone/agent-swapper/actions/runs/41167663744).
 An added control sends an otherwise valid packet with an unexpected harmless
-descriptor; its native result is pending. This experiment does not yet use the
-Rust guardian or carry real launch data.
+descriptor. At `e957bd0`, that refusal and the complete branch pipeline passed in
+[run 41167963827](https://github.com/shahzadlone/agent-swapper/actions/runs/41167963827).
+This experiment does not yet use the Rust guardian or carry real launch data.
 
 The next isolated Rust probe enables `SO_PASSCRED` before connecting, checks the
 root-manager listener, and receives a bounded offer with the actual message
@@ -113,7 +114,10 @@ authenticated `NoUnitForInvocationID` property error as a reason to perform a
 fresh lookup, never as retirement evidence by itself. This matches
 [systemd's invocation-path resolver](https://github.com/systemd/systemd/blob/v255/src/core/manager.c#L3013).
 Regression tests refuse an error from another sender or an unrelated error;
-both native image results for the correction remain pending.
+At `08a5fd1`, both images passed the corrected retirement, name-reuse and
+activation-binding trials in
+[run 41169464915](https://github.com/shahzadlone/agent-swapper/actions/runs/41169464915).
+The complete pipeline is still being followed.
 Local tests cover truncated, empty, late and uncredentialed packets, and prove
 that an unexpected transferred descriptor is closed on refusal. The distinction
 between connection-time peer credentials and message credentials is described
@@ -121,8 +125,46 @@ in the [Linux UNIX socket manual](https://man7.org/linux/man-pages/man7/unix.7.h
 This measures fixture identity only; it does not validate an installed guardian
 binary, authorize a journal transition or qualify production execution.
 
+## Source review and follow-up
+
+Opus 5.5 reviewed the `e957bd0` fixture and shared Rust transport on
+2026-10-31. It supported fixed-user activation as the next candidate for
+launches under the invoking user's own UID. That review predates the Rust
+binding probe above and does not approve its implementation or production use.
+
+The review requested proof that truncated ancillary data closes transferred
+descriptors. Inspection of pinned rustix's buffer destructor and a new shared
+transport regression test establish cleanup on both early-return paths: sixteen
+transferred file locks overflow the control buffer, and a separate oversized
+payload truncates data. Every independent lock can be reacquired after refusal.
+No descriptor leak was found in that existing implementation; the missing
+evidence was a regression test. This shared guardian protocol is not yet used
+by normal production launches.
+
+The fixture now requires an invocation-specific clean-EOF marker written by
+the cooperative guardian before its exit. A negative control deliberately
+causes a guardian protocol error: even though the writer stops and scope is
+removed, it must be refused as clean-disconnect evidence. The service/writer
+deadline is 60 seconds, guardian receive deadline 40 seconds, and the live
+pre-disconnect check must occur within 25 seconds. Cleanup waits up to five
+seconds for asynchronous scope removal. Native results for these review
+changes are pending.
+
+The Python fixture continues to trust the CI checkout and its local helper
+imports. Adding Python isolated mode while explicitly reintroducing that
+same import path would not remove this trust. Production must instead use a
+reviewed, root-owned Rust guardian executable and validated installation.
+
+Separate controlled bus listeners now test an authentication handshake that
+never replies and one that disconnects. They run only inside opted-in hosted
+mount namespaces. The stalled listener must observe EOF after the observer's
+deadline; both cases require exit 125 and no observation. Native results are
+pending. These are availability/refusal checks, not simulated manager-owner
+replacement or successful manager authentication.
+
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready
-for review. Opus implementation review is also outstanding while the current
-subscription session limit applies. Neither this design nor successful
-read-only observation enables automatic switching.
+for review. The next implementation gates are a Rust activated guardian,
+lease/journal/GO ordering, inherited descriptor hygiene and the service's inner
+PTY plus client relay. Neither this design nor successful read-only observation
+enables automatic switching.
