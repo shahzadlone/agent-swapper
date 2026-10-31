@@ -215,9 +215,15 @@ jobs:
           path: ~/.cargo/bin/cargo-deny*
           key: deny-audited-${{ runner.os }}-${{ runner.arch }}-rust1.98.0-${{ hashFiles('tools/cargo-deny-tool.lock') }}
       - run: cargo +1.98.0 deny --locked check
+      - name: Audit isolated manager observer dependencies
+        run: cargo +1.98.0 deny --manifest-path tools/linux-manager-evaluation/Cargo.toml --config deny.toml --locked check
 
   linux-manager-evidence:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -225,11 +231,20 @@ jobs:
           persist-credentials: false
       - name: Build Rust manager identity probe
         run: |
-          rustup toolchain install 1.98.0 --profile minimal
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
           cargo +1.98.0 build --locked -p agentswapper-core --example linux_manager_identity_probe
+      - name: Qualify read-only manager transport
+        run: |
+          python3 tools/platform_evidence.py
+          cargo +1.98.0 fmt --manifest-path tools/linux-manager-evaluation/Cargo.toml --check
+          cargo +1.98.0 clippy --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --all-targets -- -D warnings
+          cargo +1.98.0 test --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
+          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
+          python3 tools/linux-manager-evaluation/check_transport.py tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation --require-manager
       - name: Qualify root-owned service cleanup
         env:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe
+          ASWP_MANAGED_OBSERVER: ${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation
         run: |
           python3 -m unittest discover -s tools -p test_linux_managed_scope.py -v
           python3 tools/check_linux_managed_scope.py

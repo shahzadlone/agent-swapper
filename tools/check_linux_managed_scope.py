@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify a nondelegated systemd scope on a disposable hosted Linux runner."""
 import os
+import json
 from pathlib import Path
 import re
 import signal
@@ -91,6 +92,29 @@ def inspect_identity(unit, expected, uid, main_pid, expected_invocation=None):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              check=False, timeout=5)
     require(checked.returncode == 0, "Rust core refused manager identity")
+    observer = os.environ.get('ASWP_MANAGED_OBSERVER')
+    require(observer is not None, "Rust manager transport observer is not configured")
+    arguments = [observer, unit + '.service', str(uid), str(main_pid)]
+    if expected_invocation is not None:
+        arguments.append(expected_invocation)
+    observed = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              check=False, timeout=10)
+    require(observed.returncode == 0,
+            "Rust manager transport observation failed: " + observed.stderr[-2000:])
+    require(len(observed.stdout) <= 8192, "manager observation exceeds bounds")
+    report = json.loads(observed.stdout)
+    require(report['manager_uid'] == 0 and report['manager_pid'] == 1 and report['peer_uid'] == 0,
+            "manager transport identity disagrees")
+    fact = report['unit']
+    require(fact['unit'] == unit + '.service' and fact['invocation'] == invocation
+            and fact['user'] == uid and fact['pid'] == main_pid and fact['control_group'] == expected
+            and fact['delegate'] is False and fact['kill_mode'] == 'control-group',
+            "direct manager observation disagrees with differential snapshot")
+    # Only fixture metadata is reported. JSON escapes control characters before
+    # the workflow-command escape, keeping the annotation on a single line.
+    diagnostic = json.dumps(report, sort_keys=True).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    print('::notice title=Linux manager transport::' + diagnostic, flush=True)
     return invocation
 
 
@@ -291,6 +315,9 @@ def main():
     validator = Path(os.environ.get('ASWP_MANAGED_VALIDATOR', ''))
     require(validator.is_absolute() and validator.is_file() and not validator.is_symlink(),
             "Rust manager validator is missing or invalid")
+    observer = Path(os.environ.get('ASWP_MANAGED_OBSERVER', ''))
+    require(observer.is_absolute() and observer.is_file() and not observer.is_symlink(),
+            "Rust manager observer is missing or invalid")
     with tempfile.TemporaryDirectory(prefix='aswp-managed-') as temporary:
         for forced in (False, True):
             trial(Path(temporary), forced, run_id, attempt)
@@ -298,4 +325,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as error:
+        message = json.dumps(str(error)[-2000:], ensure_ascii=True)[1:-1].replace('%', '%25')
+        print('::error title=Linux managed scope::' + message, flush=True)
+        sys.exit(1)
