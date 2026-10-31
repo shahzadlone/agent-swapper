@@ -15,6 +15,8 @@ CASES = {
     'fake-proc': 'process metadata is not procfs',
     'socket-owner': 'bus path is not root-owned',
     'socket-peer': 'bus listener peer is not root',
+    'socket-stall': 'manager binding deadline exceeded',
+    'socket-close': 'manager observation unavailable or refused:',
 }
 PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_MANAGER_REFUSALS'
 
@@ -82,14 +84,17 @@ def mounted_case(case, binary, uid, gid):
                 source.mkdir(mode=0o755)
                 destination = '/proc'
             else:
-                os.chown(root, uid, gid)
+                root_listener = case in ('socket-stall', 'socket-close')
+                if not root_listener:
+                    os.chown(root, uid, gid)
                 source = root / 'bus'
-                listener = subprocess.Popen(['/usr/bin/python3', script, '--listen', str(source), str(uid), str(gid)],
+                role = '--listen-' + case.removeprefix('socket-') if root_listener else '--listen'
+                listener = subprocess.Popen(['/usr/bin/python3', script, role, str(source), str(uid), str(gid)],
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 with selectors.DefaultSelector() as selector:
                     selector.register(listener.stdout, selectors.EVENT_READ)
                     require(selector.select(5) and os.read(listener.stdout.fileno(), 1) == b'R',
-                            'ordinary listener did not become ready')
+                            'fixture listener did not become ready')
                 os.chown(root, 0, 0)
                 source.chmod(0o666)
                 if case == 'socket-peer':
@@ -101,6 +106,11 @@ def mounted_case(case, binary, uid, gid):
             detail = stderr.decode('utf-8', errors='replace')
             require(target.returncode == 125 and not stdout and CASES[case] in detail,
                     f'{case}: observer did not refuse at the expected check: ' + detail[-2000:])
+            if case in ('socket-stall', 'socket-close'):
+                events, errors = listener.communicate(timeout=3)
+                require(listener.returncode == 0 and not errors
+                        and events == (b'AE' if case == 'socket-stall' else b'AC'),
+                        'transport refusal did not reach the controlled handshake fault')
             print(f'::notice title=Linux manager refusal::{case}: intended check refused the controlled overlay; no observation issued', flush=True)
         finally:
             try:
@@ -112,15 +122,18 @@ def mounted_case(case, binary, uid, gid):
 def main():
     gate()
     args = sys.argv[1:]
-    if len(args) == 4 and args[0] in ('--probe-child', '--listen'):
+    if len(args) == 4 and args[0] in ('--probe-child', '--listen', '--listen-stall', '--listen-close'):
         require(os.geteuid() == 0, 'fixture child must start inside the owned root namespace')
+        require(os.readlink('/proc/self/ns/mnt') != os.readlink('/proc/1/ns/mnt'),
+                'fixture child did not enter a separate mount namespace')
         role, path, uid, gid = args
         uid, gid = identity(uid, gid)
         if role == '--probe-child':
             require(sys.stdin.buffer.read(2) == b'GO', 'missing fixture release')
             drop(uid, gid)
             os.execv(path, [path])
-        drop(uid, gid)
+        if role == '--listen':
+            drop(uid, gid)
         with socket.socket(socket.AF_UNIX) as listener:
             listener.settimeout(10)
             listener.bind(path)
@@ -128,8 +141,21 @@ def main():
             os.write(sys.stdout.fileno(), b'R')
             connection, _ = listener.accept()
             with connection:
-                connection.settimeout(5)
-                connection.recv(1)
+                connection.settimeout(11)
+                first = connection.recv(1)
+                if role != '--listen':
+                    require(first == b'\0', 'observer did not enter the D-Bus authentication handshake')
+                    os.write(sys.stdout.fileno(), b'A')
+                    if role == '--listen-stall':
+                        # Consume only a bounded auth request, replying with
+                        # nothing. EOF must come from the observer's deadline.
+                        total = 1
+                        while data := connection.recv(256):
+                            total += len(data)
+                            require(total <= 4096, 'unexpected unbounded authentication request')
+                        os.write(sys.stdout.fileno(), b'E')
+            if role == '--listen-close':
+                os.write(sys.stdout.fileno(), b'C')
         return
     if len(args) == 5 and args[0] == '--inside':
         _, case, binary, uid, gid = args
