@@ -123,6 +123,23 @@ fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
         "incomplete activation binding request",
     )?;
     let packet = activation_packet::receive(&socket, Instant::now() + Duration::from_secs(4))?;
+    let offer = validate_offer(&packet, prefix)?;
+    let sender_pid = packet.sender.pid.as_raw_nonzero().get() as u32;
+    Ok((
+        socket,
+        Fact {
+            listener_pid: 1,
+            listener_uid: 0,
+            sender_pid,
+            sender_uid: packet.sender.uid.as_raw(),
+            sender_gid: packet.sender.gid.as_raw(),
+            launch_data_sent: false,
+        },
+        offer,
+    ))
+}
+
+fn validate_offer(packet: &activation_packet::Packet, prefix: &str) -> io::Result<Offer> {
     let offer: Offer = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
     let sender_pid = packet.sender.pid.as_raw_nonzero().get() as u32;
     let own_uid = rustix::process::getuid().as_raw();
@@ -139,18 +156,7 @@ fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
             && offer.group == format!("/system.slice/{}", offer.unit),
         "activation offer disagrees with kernel sender or connection identity",
     )?;
-    Ok((
-        socket,
-        Fact {
-            listener_pid: 1,
-            listener_uid: 0,
-            sender_pid,
-            sender_uid: packet.sender.uid.as_raw(),
-            sender_gid: packet.sender.gid.as_raw(),
-            launch_data_sent: false,
-        },
-        offer,
-    ))
+    Ok(offer)
 }
 
 pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Report> {
@@ -201,6 +207,54 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offer_claims_cannot_replace_the_kernel_sender_or_calling_connection() -> io::Result<()> {
+        let prefix = "aswp-activation-123-1";
+        let credentials = net::UCred {
+            pid: rustix::process::getpid(),
+            uid: rustix::process::getuid(),
+            gid: rustix::process::getgid(),
+        };
+        let offer = serde_json::json!({
+            "unit": "aswp-activation-123-1@0-1000.service",
+            "invocation": "0123456789abcdef0123456789abcdef", "pid": std::process::id(),
+            "uid": credentials.uid.as_raw(), "peer_uid": credentials.uid.as_raw(),
+            "peer_pid": std::process::id(), "started": 1.0,
+            "group": "/system.slice/aswp-activation-123-1@0-1000.service"
+        });
+        let packet = |value: &serde_json::Value| -> io::Result<activation_packet::Packet> {
+            Ok(activation_packet::Packet {
+                bytes: serde_json::to_vec(value).map_err(io::Error::other)?,
+                sender: credentials,
+            })
+        };
+        assert!(validate_offer(&packet(&offer)?, prefix).is_ok());
+        for (field, value) in [
+            ("pid", serde_json::json!(1)),
+            ("uid", serde_json::json!(0)),
+            ("peer_pid", serde_json::json!(1)),
+            ("peer_uid", serde_json::json!(0)),
+            (
+                "unit",
+                serde_json::json!("aswp-activation-124-1@0-1000.service"),
+            ),
+            (
+                "invocation",
+                serde_json::json!("00000000000000000000000000000000"),
+            ),
+            ("group", serde_json::json!("/system.slice/another.service")),
+            ("unexpected", serde_json::json!(true)),
+        ] {
+            let mut changed = offer.clone();
+            changed[field] = value;
+            assert!(
+                validate_offer(&packet(&changed)?, prefix).is_err(),
+                "accepted changed {field}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn activation_names_cannot_escape_the_owned_template() {

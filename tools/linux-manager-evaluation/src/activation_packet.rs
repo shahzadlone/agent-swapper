@@ -119,24 +119,26 @@ mod tests {
 
     #[test]
     fn refusal_closes_unexpected_transferred_capabilities() -> io::Result<()> {
-        let (sender, receiver) = pair()?;
-        let (transferred, witness) = pair()?;
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
-        let mut ancillary = SendAncillaryBuffer::new(&mut space);
-        let rights = [transferred.as_fd()];
-        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
-        sendmsg(
-            &sender,
-            &[IoSlice::new(b"offer")],
-            &mut ancillary,
-            SendFlags::NOSIGNAL,
-        )?;
-        drop(transferred);
-        assert!(receive(&receiver, deadline()).is_err());
-        // The original sender is gone. EOF proves refusal did not retain the
-        // only transferred socket endpoint; no process-global FD count race.
-        let mut bytes = [0; 1];
-        assert_eq!(net::recv(&witness, &mut bytes, RecvFlags::DONTWAIT)?.0, 0);
+        for count in [1, 8] {
+            let (sender, receiver) = pair()?;
+            let (transferred, witness) = pair()?;
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(8))];
+            let mut ancillary = SendAncillaryBuffer::new(&mut space);
+            let rights = vec![transferred.as_fd(); count];
+            assert!(ancillary.push(SendAncillaryMessage::ScmRights(&rights)));
+            sendmsg(
+                &sender,
+                &[IoSlice::new(b"offer")],
+                &mut ancillary,
+                SendFlags::NOSIGNAL,
+            )?;
+            drop(transferred);
+            assert!(receive(&receiver, deadline()).is_err());
+            // The original sender is gone. EOF proves refusal did not retain the
+            // only transferred socket endpoint; no process-global FD count race.
+            let mut bytes = [0; 1];
+            assert_eq!(net::recv(&witness, &mut bytes, RecvFlags::DONTWAIT)?.0, 0);
+        }
         Ok(())
     }
 
