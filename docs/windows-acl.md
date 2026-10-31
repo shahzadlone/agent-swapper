@@ -769,6 +769,16 @@ failures use `handover_output_path`. The parent borrow is passed into the actual
 rename/removal helpers, and `PublicationFile` is marked must-use. These final
 changes passed all-targets Windows Clippy and await their native run.
 
+The complete Windows job at `18e68d5` passed in
+[run 41157494191](https://github.com/shahzadlone/agent-swapper/actions/runs/41157494191),
+including the expanded four-parent inheritance/race cases and separate-user
+injection refusals. The following `b97ceb7` run failed one old assertion that
+expected `unsafe_handover_output` for Windows stream syntax; the new pure
+filename validator correctly refused it earlier as `handover_output_path`.
+That case now requires the precise platform-specific error, and a CLI regression
+checks the new filename errors before password or pack access. It does not
+relax destination refusal. The corrected final source still needs its full run.
+
 The review also noted the previously documented post-creation validation
 failure case: it can leave an empty file before the core has received a
 validated handle. That error is a boundary refusal, not the later temporary

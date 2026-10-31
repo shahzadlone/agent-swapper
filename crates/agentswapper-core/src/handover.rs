@@ -887,7 +887,6 @@ mod tests {
             "CLAUDE.md",
             "notes.md",
             "PICKUP.json",
-            "HANDOVER.md:stream.md",
             "HANDOVER\u{202e}.md",
         ] {
             assert!(matches!(
@@ -895,6 +894,15 @@ mod tests {
                 Err(Error::UnsafeHandoverOutput)
             ));
         }
+        // Windows rejects stream syntax at the raw filename boundary; POSIX
+        // reaches the portable pickup-name policy. Neither path may publish.
+        let stream = temp.path().join("HANDOVER.md:stream.md");
+        let error = validate_pickup_output(&stream, Some(&state)).unwrap_err();
+        #[cfg(windows)]
+        assert!(matches!(error, Error::HandoverOutputPath));
+        #[cfg(not(windows))]
+        assert!(matches!(error, Error::UnsafeHandoverOutput));
+        assert!(!stream.exists());
         assert!(matches!(
             validate_pickup_output(&state.join("HANDOVER.md"), Some(&state)),
             Err(Error::UnsafeHandoverOutput)
