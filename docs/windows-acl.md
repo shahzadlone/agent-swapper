@@ -605,8 +605,8 @@ test job. Both actual-root SET operations returned **success (0)**; tag removal,
 matched nonempty controls, canaries, account removal and disk cleanup passed.
 This was Windows Server 2025 build `10.0.26100`, hosted image
 `win25-vs2026` / `20261021.278.1`. It establishes root mutability for the tested
-tag and APIs, not arbitrary tags or other OS builds. Candidate rebuild jobs
-were still running when this result was recorded. The follow-up source review
+tag and APIs, not arbitrary tags or other OS builds. Its complete
+platform/candidate/rebuild pipeline subsequently passed. The follow-up source review
 of the device-descriptor delta was withheld by Opus's safety filter and is not
 counted as a completed review; the earlier fixture reviews predate that delta.
 
@@ -614,10 +614,24 @@ A follow-up root-specific protection regression retains the production anchor's
 access/share flags on this same owned volume. It requires a preexisting AD4
 writer to block guard admission, then verifies later AD4/MAXIMUM_ALLOWED opens
 are refused while the guard lives. Metadata-only basic/extended operations must
-fail with access denied between successful nonempty controls. Its native result
-is pending, and the wrapper requires its additional custody notice before it
-can pass. Platform evidence now also records the Windows UBR update revision
-when readable; it is configuration metadata, not loaded-driver attestation.
+fail with access denied between successful nonempty controls. At `1b50756`,
+[CI run 41155932227](https://github.com/shahzadlone/agent-swapper/actions/runs/41155932227)
+passed that regression and the complete Windows test job. Preexisting AD4
+writers blocked guard admission; later AD4 and MAXIMUM_ALLOWED opens failed
+with sharing violation (32); metadata-only SET requests failed with access
+denied (5), bracketed by successful matched controls. Both unguarded actual-root
+operations again succeeded (0). Canaries, temporary-account removal, detach and
+image deletion passed before the custody notice was emitted. The runner was
+Windows Server 2025 `10.0.26100`, UBR `33650`, image
+`win25-vs2026/20261021.278.1`. UBR is configuration metadata, not loaded-driver
+attestation. Its full platform/candidate/rebuild pipeline subsequently passed.
+
+The preceding `e7ea2cc` run stopped in the synthetic PowerShell runner-contract
+test, before any disk step. It did not expose its Python traceback, so the
+underlying cause is unknown. The runner tests now publish bounded diagnostics
+on failure and allow a bounded 30-second PowerShell startup instead of 15.
+All six synthetic cases passed locally through Windows PowerShell 5.1, and the
+contract step passed in `1b50756`. No disk operations run in these mock cases.
 
 The review's suggestion to use `SetKernelObjectSecurity` was rejected:
 [Microsoft explicitly directs filesystem callers to SetSecurityInfo instead](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setkernelobjectsecurity).
