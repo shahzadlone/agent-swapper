@@ -1,11 +1,12 @@
 //! Experimental Windows ACL primitives, not a complete private-path boundary.
 //!
-//! Windows core state access consumes this boundary; native integration and
-//! independent review gates remain open before claiming production privacy.
+//! Windows core state access consumes this boundary. Native consumer tests and
+//! source reviews are recorded in docs/windows-acl.md; production privacy is
+//! not promoted while volume-root compatibility and vendor files are unqualified.
 //! Handle validation is a snapshot, not a guarantee against later ACL changes.
 //! Single-object APIs require a trusted, stable parent. A separate retained
-//! root candidate now acquires the full directory chain; its native qualification,
-//! vendor-created descendants and production storage integration remain gates.
+//! root guard acquires the full directory chain and remains owned by the core
+//! store, configuration operation or profile lease throughout pathname access.
 
 mod descriptor;
 #[cfg(windows)]

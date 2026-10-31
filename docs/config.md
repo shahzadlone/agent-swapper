@@ -83,8 +83,10 @@ The file is synchronized before replacement. On Unix, the parent directory is
 synchronized afterward; if that fails, `config_durability_uncertain` explicitly
 reports that the new preferences were applied. Read them back before retrying.
 The parents of newly created state directories are not synchronized, so first-save
-power-loss durability is unverified. Windows directory durability is best effort
-and ACL privacy remains unverified.
+power-loss durability is unverified. Windows directory durability is best effort.
+Windows reads/updates retain validated NTFS directory guards and check actual
+file ACLs. Native tests passed; volume-root compatibility and the broader privacy
+claim remain unqualified. See [Windows storage evidence](windows-acl.md).
 On Unix, read snapshots remain valid when atomic replacement unlinks the old file; lock
 files still require one link. Regular-file and handle checks reject symlinks, reparse points, hardlinks and
 nonregular files; Unix owner/private-mode checks also apply. These checks and OS

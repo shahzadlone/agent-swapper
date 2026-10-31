@@ -299,7 +299,11 @@ explicit state. Otherwise use the platform's local application-data directory.
 On POSIX, state directories must be owner-only and files must have private modes;
 symlinks inside the state tree, hardlinked registry/lease files, and ownership
 mismatches are refused. Trusted parent-directory links are resolved first.
-Windows reparse paths are rejected, but ACL privacy has not been verified.
+Windows state access validates NTFS ownership/ACLs and retains directory guards;
+broad ACLs and reparse paths are refused without repair. The volume-root guard
+can conflict with unrelated directory writers. Vendor-file privacy remains
+unqualified and `doctor` still reports `acl_not_verified`; see
+[Windows storage evidence](windows-acl.md).
 Use local storage: network filesystems and WSL mounted Windows drives have not
 passed SQLite/lease validation. Registry aliases, run metadata, and mapping
 paths are plaintext local metadata. No credential or transcript import exists.

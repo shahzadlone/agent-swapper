@@ -130,6 +130,10 @@ Implemented, unreleased:
 - POSIX private modes/owner checks, link refusal, per-profile OS leases, and
   durable run intents that block reuse after supervisor loss, and explicit
   stopped-process attestation for manual recovery;
+- Windows NTFS ACL validation with retained directory guards for registry,
+  settings and leases; native consumer tests and focused source reviews passed
+  at `9002a4f`, with volume-root compatibility and vendor-file privacy still
+  unqualified;
 - durable PID/spawn observations and bounded run history with conservative
   process-custody states;
 - native launch plans, argument redaction, direct argv forwarding, known

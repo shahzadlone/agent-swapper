@@ -7,8 +7,9 @@ successfully created directory alone is not evidence that other principals
 cannot read or modify it. See Microsoft's [file security reference](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
 
 The current integration connects the boundary to Windows registry and settings
-access; it still needs native qualification and independent review before a
-privacy claim. A `Store` retains the actual root and all ancestor handles until
+access. Its native consumer tests and focused independent source reviews passed
+at `9002a4f`; actual volume-root compatibility and vendor-created files remain
+unqualified, so production privacy is not promoted. A `Store` retains the actual root and all ancestor handles until
 its SQLite connection closes. Profile leases share ownership of that guard,
 so dropping the store cannot expose a still-held lock to path replacement.
 Configuration reads and updates retain a guard for the entire operation.
@@ -669,7 +670,7 @@ A private-directory positive control must allow an owner write handle, concurren
 root reopening and child rename while refusing rename of the retained directory.
 Actual settings replacement and registry use passed with this refined sharing
 policy at `07c35cb`, including the public AD4 and private-directory controls.
-Independent review and production integration qualification remain separate;
+Independent review and production integration were separate gates at that revision;
 the older successful synthetic SQLite probe did not qualify this consumer behavior.
 The same run also caught a missing version on the local core test dependency;
 that dependency now has an exact workspace-version requirement and still adds
