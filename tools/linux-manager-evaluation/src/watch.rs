@@ -106,7 +106,9 @@ fn collection_race(error: &io::Error, sender: &str) -> io::Result<bool> {
         Some(zbus::Error::MethodError(name, _, reply))
             if matches!(
                 name.as_str(),
-                "org.freedesktop.DBus.Error.UnknownObject" | "org.freedesktop.systemd1.NoSuchUnit"
+                "org.freedesktop.DBus.Error.UnknownObject"
+                    | "org.freedesktop.systemd1.NoSuchUnit"
+                    | "org.freedesktop.systemd1.NoUnitForInvocationID"
             ) =>
         {
             checked_reply(reply.clone(), sender)?;
@@ -152,6 +154,43 @@ pub(crate) async fn retire(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collected_invocation_property_error_only_allows_an_authenticated_recheck()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = Message::method_call(
+            "/org/freedesktop/systemd1/unit/0123456789abcdef0123456789abcdef",
+            "Get",
+        )
+        .build(&(UNIT_INTERFACE, "ActiveState"))?;
+        let error = |sender: &str, name: &str| -> Result<io::Error, Box<dyn std::error::Error>> {
+            let reply = Message::error(&request.header(), name)
+                .sender(sender)
+                .build(&"collected")?;
+            Ok(io::Error::other(zbus::Error::MethodError(
+                name.to_owned().try_into()?,
+                None,
+                reply,
+            )))
+        };
+        for name in [
+            ABSENT,
+            "org.freedesktop.DBus.Error.UnknownObject",
+            "org.freedesktop.systemd1.NoSuchUnit",
+        ] {
+            assert!(collection_race(&error(":1.42", name)?, ":1.42")?);
+            assert!(collection_race(&error(":1.43", name)?, ":1.42").is_err());
+        }
+        assert!(!collection_race(
+            &error(":1.42", "org.freedesktop.DBus.Error.AccessDenied")?,
+            ":1.42"
+        )?);
+        assert!(!collection_race(
+            &io::Error::new(io::ErrorKind::TimedOut, "stalled"),
+            ":1.42"
+        )?);
+        Ok(())
+    }
 
     #[test]
     fn absence_requires_an_authenticated_error_for_the_exact_operation()

@@ -105,7 +105,15 @@ sender's kernel credentials. It requires that sender to match the manager's
 `MainPID`, ordinary user and invocation, with the expected protected template,
 no drop-ins, and retained process/cgroup handles. It then disconnects and waits
 for authenticated retirement of that original scope. It sends no GO, launch
-envelope or descriptor and must create no worker. Native results are pending.
+envelope or descriptor and must create no worker. This passed on Ubuntu 22.04
+at `6d8747d` in [run 41169249761](https://github.com/shahzadlone/agent-swapper/actions/runs/41169249761).
+Ubuntu 24.04 stopped in the preceding retirement trial: an invocation was
+collected between lookup and a property read. The observer now recognizes the
+authenticated `NoUnitForInvocationID` property error as a reason to perform a
+fresh lookup, never as retirement evidence by itself. This matches
+[systemd's invocation-path resolver](https://github.com/systemd/systemd/blob/v255/src/core/manager.c#L3013).
+Regression tests refuse an error from another sender or an unrelated error;
+both native image results for the correction remain pending.
 Local tests cover truncated, empty, late and uncredentialed packets, and prove
 that an unexpected transferred descriptor is closed on refusal. The distinction
 between connection-time peer credentials and message credentials is described

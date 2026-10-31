@@ -563,8 +563,13 @@ async fn inspect(
                 .ok_or_else(|| io::Error::other("watch requires a kernel binding"))?;
             report.phase = "bound";
             write_report(&report)?;
-            report.retirement =
-                Some(watch::retire(&connection, owner.as_str(), unit, binding).await?);
+            report.retirement = Some(
+                watch::retire(&connection, owner.as_str(), unit, binding)
+                    .await
+                    .map_err(|error| {
+                        io::Error::other(format!("retirement observation failed: {error}"))
+                    })?,
+            );
             report.phase = "retired";
         }
         Ok(report)
