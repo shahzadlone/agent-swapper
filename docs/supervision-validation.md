@@ -107,3 +107,69 @@ this evidence. See [custody](custody.md) and the [support matrix](support-matrix
 The next Linux guardian design and its separately bounded fixture checks are
 documented in [Linux supervision](linux-supervision.md). They do not promote the
 production Linux custody state.
+
+### Selected-parent qualification
+
+Microsoft's [process-attribute reference](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
+documents that `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS` selects a different parent
+and that inherited attributes include its Job. Ordinary-child inheritance must
+not be generalized to every process a target can arrange to create. The local
+empty-Job receipt remains restricted to that Job; it enables no automatic switch.
+
+The dedicated `ffi::process_tests::alternate_parent_custody` fixture starts only
+owned test processes. Its controller creates an outside peer before installing
+its nested root, then admits a target through the production per-run backend.
+That target starts both an ordinary writer and a writer selecting the fresh
+peer as parent, with no inherited handles. Opening the peer requires ordinary
+`PROCESS_CREATE_PROCESS` and query access; its creation time must match the live
+controller-owned handle. The fixture changes no privileges or process DACLs.
+
+Both writers must answer fresh challenges while holding lifetime locks before
+the inner stop request. After the inner empty receipt, the ordinary writer must
+have stopped and the outside peer must answer a fresh file challenge. The alternate writer must
+either stop or answer its own fresh challenge while still holding its lifetime
+lock. Both outcomes are recorded as measurements, not a promotion. After separate
+outer production Job cleanup, all writer locks must be released and that Job
+must be observed empty before success. This does not attribute each death to
+a particular Job; the controller root and explicit peer cleanup may also act.
+All children have deadlines, isolated fixture files and an authentication-free
+environment. Failed
+launches, missing evidence and timeouts fail qualification without a custody
+conclusion. The outer cleanup guard attempts termination and an empty query on
+unwinding as well. The native attribute FFI is test-only in the Windows security crate; core and CLI
+keep their unsafe-code prohibition.
+
+The initial fixture at `4e9cde4` passed the native Windows job in
+[run 41160842489](https://github.com/shahzadlone/agent-swapper/actions/runs/41160842489/job/124417809223).
+On Windows Server 2025 `10.0.26100`, UBR `33650`, x86_64 MSVC, Rust 1.98.0,
+runner image `win25-vs2026/20261021.278.1`, the alternate-parent writer answered
+after the inner empty receipt while the ordinary writer stopped and the peer
+continued. All fixture writers were subsequently observed stopped and the
+outer Job empty. This measures the inner per-run boundary, not the independent
+root's crash boundary. That initial notice over-attributed cleanup to the outer
+Job; the source-review correction below states only the observations.
+
+The corrected fixture at `c5ef0af` passed the complete branch pipeline in
+[run 41162311992](https://github.com/shahzadlone/agent-swapper/actions/runs/41162311992),
+including native Windows execution with the before-stop challenges and unwind
+cleanup, all three platform suites, candidate archives and matching rebuilds.
+On the same recorded Windows build and runner image, the alternate-parent
+writer again executed after the inner empty receipt, the ordinary writer
+stopped and the peer continued. All fixture writers were subsequently observed
+stopped and the outer Job empty. Branch preview attestation was intentionally
+skipped; integrated `main` provenance requires its own run.
+
+Opus 5.5 xhigh reviewed the design, recommended explicit before-stop liveness,
+inconclusive failures and unwind cleanup, and agreed to keep the result scoped
+to the tested build. Its suggested removal of the test process's root is not
+compatible with the production backend's root-required admission invariant;
+both root installs are retained. This is source/design review, not native
+qualification or an automatic-switching gate.
+
+A subsequent Opus 5.5 xhigh source audit found no concrete memory-safety or
+Win32 correctness blocker. It identified causal overstatement in the cleanup
+notice; the notice now reports stopped writers and an empty outer Job without
+claiming which cleanup killed them. The fixture must run in its own nextest
+process, as configured in CI, because installing the root affects the entire
+process. Membership-buffer overflow remains source-audited, not a native
+thousands-of-processes stress result.

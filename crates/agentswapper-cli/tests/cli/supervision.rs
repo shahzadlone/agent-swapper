@@ -121,7 +121,12 @@ fn windows_job_preview_and_root_exit_preserve_status_and_record_empty_scope() {
         .timeout(Duration::from_secs(20))
         .assert()
         .code(42)
-        .stderr(predicate::str::contains("descendants will be terminated"));
+        .stderr(predicate::str::contains(
+            "Processes remaining in this run's Windows Job will be terminated",
+        ))
+        .stderr(predicate::str::contains(
+            "Work outside that Job is unverified",
+        ));
     assert_leaf_stopped(s.temp.path());
     let runs = history(&s);
     let run = &runs["data"][0];
