@@ -260,7 +260,7 @@ impl Fixture {
     }
 }
 
-fn granted_access(file: &File) -> u32 {
+pub(super) fn granted_access(file: &File) -> u32 {
     let mut information = FILE_ACCESS_INFORMATION::default();
     let mut status_block = IO_STATUS_BLOCK::default();
     // SAFETY: live synchronous handle, correctly aligned/initialized fixed-size

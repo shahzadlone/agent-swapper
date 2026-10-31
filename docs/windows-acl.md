@@ -526,9 +526,139 @@ The actual volume-root handle still excludes writes for the guard's lifetime.
 This can refuse startup when a directory writer already exists and block trusted
 operations that open that root for writing, including root-targeted renames.
 This is an availability/compatibility limit, not a promise to withstand denial
-of service. Root reparse behavior remains unqualified; do not remove its write
-exclusion based on ordinary-directory tests. Any mutation probe requires a newly
+of service. The disposable-volume probe below demonstrates that a standard user
+with AD4 can set a directory-bit reparse tag on an actual NTFS volume root;
+its write exclusion must not be removed based on an immutability assumption.
+Any mutation probe requires a newly
 owned disposable volume, never an existing machine's volume root.
+
+A separate CI-only ownership fixture creates a new empty 64 MiB VHD beneath
+a fresh private temporary directory, attaches it without a drive letter or
+permanent lifetime, queries the device through its owned native handle, then
+detaches it and removes only its own image/directory. It never initializes or
+formats a disk, opens a physical device, or modifies a filesystem root. It accepts
+no existing image or disk selection. Native creation uses a protected DACL;
+the image pathname relies on that ACL and its validated parent chain, while
+attachment, identification and detachment use the returned handle.
+
+This ignored test requires both hosted-runner/identity opt-ins and a separate
+`ASWP_CI_VOLUME_FIXTURE=1` opt-in. The CI step runs exactly this one test with one
+thread and a two-minute timeout: enabling `SeManageVolumePrivilege` changes the
+process token, so parallel identity tests must not share that process. The
+privilege is restored after each attach/detach operation; a failed restoration
+aborts the test process. Closing the last non-permanent attachment handle is
+the fallback if explicit detach fails. Success requires explicit detach, handle
+close, image removal with a bounded sharing-violation retry, a NotFound metadata
+result, and temporary-directory removal.
+
+A focused Opus 5.5 xhigh review of this fixture found no FFI ownership defect or
+operation targeting an existing disk. Its required isolation and exact-removal
+checks are included, along with an already-enabled privilege control. The empty-disk native step passed at `6c80e11` in
+[CI run 41150053873](https://github.com/shahzadlone/agent-swapper/actions/runs/41150053873);
+its complete platform/candidate/rebuild pipeline subsequently passed. This factory is
+not evidence about volume-root reparse behavior and is not part of the product
+runtime.
+
+A second ignored fixture has completed a focused Opus source review and is
+enabled in a separate exact-test CI step. It passed at `26c1dcd` in
+[CI run 41151606943](https://github.com/shahzadlone/agent-swapper/actions/runs/41151606943);
+the complete platform/candidate/rebuild pipeline subsequently passed.
+It exclusively creates a fresh image through that factory, initializes and
+formats that image using explicit Storage CIM objects, and refuses ambiguous
+image/disk/partition associations or system/boot/clustered/nonvirtual devices.
+The parent retains its native attachment handle while the fixed PowerShell
+child runs. The review caught PowerShell display-property ambiguity, unbounded
+child lifetime and a pathname-based canary write. The fixture now reads raw CIM
+properties, uses the already-qualified suspended-admission Windows Job backend,
+enforces a 90-second child deadline and observes local scope emptiness before
+continuing. A process-lifetime root Job covers supervisor death; OS storage
+services invoked by CIM are not owned by that Job. Input/output files are
+private, consumed output is bounded, and the canary is created exclusively
+relative to the retained root with its handle validated before writing. The
+canary is disposed of with the owned image, not unlinked after releasing its
+handle. Before any canary filesystem operation, native volume extents must
+identify exactly that physical disk, and the opened root must resolve to the
+returned volume GUID. No existing image/drive selector is exposed. This stage
+does not change a root ACL or attempt a reparse operation. Formatting is gated by
+CIM association checks; the native extent/root checks happen afterward and gate
+filesystem use, not the earlier format operation.
+
+The third ignored fixture measures basic and extended directory-bit reparse
+operations on the newly owned volume's actual root. Its focused Opus review
+found no handle/DACL-pointer ownership defect, but required stronger controls.
+The revised fixture grants only its freshly created standard account read/AD4
+access, checks effective `MAXIMUM_ALLOWED` mutation rights as well as the actual
+measurement handle's rights, and binds reopened handles to the original volume
+serial and 128-bit file IDs. Matched nonempty-directory operations must succeed
+both before and after each root attempt. Both objects must begin untagged;
+observation/removal failures fail the test rather than count as a SET refusal.
+Zero is reserved for actual installation followed by verified removal. Canaries,
+account removal and disk cleanup precede result reporting.
+
+Each of the three CI steps now requires exactly one passing test and its expected
+result notices. The third requires an additional `ASWP_CI_ROOT_MUTATION_FIXTURE`
+opt-in, an isolated test process and its own timeout. The first instrumented root run at `afb4f37`,
+[41152814793](https://github.com/shahzadlone/agent-swapper/actions/runs/41152814793),
+failed with access denied (5) on the standard user's initial readable-canary
+control, before any reparse measurement. The preceding uninstrumented root run
+also failed; neither is evidence of root reparse refusal. The fixture now
+admits only that fresh fixture SID with the same
+read/traverse/AD4 mask in the attachment descriptor. The image file remains
+private. Device access to this newly created disk is a test capability, so the
+private-file read check measures the file DACL, not whole-volume privacy against
+raw-device access. The other two disk stages keep their original private device
+descriptor. Either root success or a nonzero native refusal is recorded as an OS/tag
+observation, never an automatic production-policy promotion.
+
+At `0aa0047`, [CI run 41153576081](https://github.com/shahzadlone/agent-swapper/actions/runs/41153576081)
+passed the three native disk steps, diagnostic-runner contract and full Windows
+test job. Both actual-root SET operations returned **success (0)**; tag removal,
+matched nonempty controls, canaries, account removal and disk cleanup passed.
+This was Windows Server 2025 build `10.0.26100`, hosted image
+`win25-vs2026` / `20261021.278.1`. It establishes root mutability for the tested
+tag and APIs, not arbitrary tags or other OS builds. Its complete
+platform/candidate/rebuild pipeline subsequently passed. The follow-up source review
+of the device-descriptor delta was withheld by Opus's safety filter and is not
+counted as a completed review; the earlier fixture reviews predate that delta.
+
+A follow-up root-specific protection regression retains the production anchor's
+access/share flags on this same owned volume. It requires a preexisting AD4
+writer to block guard admission, then verifies later AD4/MAXIMUM_ALLOWED opens
+are refused while the guard lives. Metadata-only basic/extended operations must
+fail with access denied between successful nonempty controls. At `1b50756`,
+[CI run 41155932227](https://github.com/shahzadlone/agent-swapper/actions/runs/41155932227)
+passed that regression and the complete Windows test job. Preexisting AD4
+writers blocked guard admission; later AD4 and MAXIMUM_ALLOWED opens failed
+with sharing violation (32); metadata-only SET requests failed with access
+denied (5), bracketed by successful matched controls. Both unguarded actual-root
+operations again succeeded (0). Canaries, temporary-account removal, detach and
+image deletion passed before the custody notice was emitted. The runner was
+Windows Server 2025 `10.0.26100`, UBR `33650`, image
+`win25-vs2026/20261021.278.1`. UBR is configuration metadata, not loaded-driver
+attestation. Its full platform/candidate/rebuild pipeline subsequently passed.
+
+The preceding `e7ea2cc` run stopped in the synthetic PowerShell runner-contract
+test, before any disk step. It did not expose its Python traceback, so the
+underlying cause is unknown. The runner tests now publish bounded diagnostics
+on failure and allow a bounded 30-second PowerShell startup instead of 15.
+All six synthetic cases passed locally through Windows PowerShell 5.1, and the
+contract step passed in `1b50756`. No disk operations run in these mock cases.
+
+The review's suggestion to use `SetKernelObjectSecurity` was rejected:
+[Microsoft explicitly directs filesystem callers to SetSecurityInfo instead](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setkernelobjectsecurity).
+The retained handle targets only the verified newly owned root. DACL propagation
+may affect OS-created children on that same disposable volume; no existing
+machine volume is modified. The inherited image descriptor already admits
+SYSTEM and Administrators as well as the current user. `validate_object` checks
+object/device/filesystem properties, not a private root DACL; the review's
+conjectured rejection of an Administrators-owned formatted root did not apply.
+
+The implementation follows Microsoft
+[Initialize-Disk](https://learn.microsoft.com/en-us/powershell/module/storage/initialize-disk),
+[New-Partition](https://learn.microsoft.com/en-us/powershell/module/storage/new-partition),
+[Format-Volume](https://learn.microsoft.com/en-us/powershell/module/storage/format-volume)
+and [native volume extent](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_volume_disk_extents)
+interfaces. These documented operations do not replace measured native results.
 
 Other review questions were checked against source: inherited private roots are
 admitted; `reject_links` tolerates missing components; registry opens pass a bare

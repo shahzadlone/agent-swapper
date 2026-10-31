@@ -8,6 +8,23 @@ import subprocess
 from pathlib import Path
 
 
+def windows_update_build_revision():
+    if os.name != "nt":
+        return None
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY,
+        ) as key:
+            value, kind = winreg.QueryValueEx(key, "UBR")
+        return value if kind == winreg.REG_DWORD and isinstance(value, int) else None
+    except OSError:
+        return None
+
+
 def main():
     rust = subprocess.run(
         ["rustc", "+1.98.0", "-Vv"], check=True, text=True,
@@ -24,6 +41,7 @@ def main():
         "os": platform.system(),
         "release": platform.release(),
         "build": platform.version(),
+        "windows_update_build_revision": windows_update_build_revision(),
         "architecture": platform.machine(),
         "macos": platform.mac_ver()[0],
         "rust": rust,

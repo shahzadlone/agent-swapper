@@ -91,6 +91,34 @@ jobs:
           ASWP_CI_IDENTITY_FIXTURE: '1'
         run: |
           cargo +1.98.0 nextest run --locked -p agentswapper-windows-security --profile ci --run-ignored only -E 'test(=ffi::identity_tests::separate_identity_cannot_access_private_objects)' --success-output immediate --no-output-indent
+      - name: Windows volume evidence runner contract
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        run: python tools/test_windows_volume_runner.py
+      - name: Windows disposable empty disk ownership
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
+        timeout-minutes: 2
+        env:
+          ASWP_CI_IDENTITY_FIXTURE: '1'
+          ASWP_CI_VOLUME_FIXTURE: '1'
+        run: ./tools/run_windows_volume_probe.ps1 -Kind empty
+      - name: Windows owned filesystem identity
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
+        timeout-minutes: 3
+        env:
+          ASWP_CI_IDENTITY_FIXTURE: '1'
+          ASWP_CI_VOLUME_FIXTURE: '1'
+          ASWP_CI_FORMAT_OWNED_VOLUME: '1'
+        run: ./tools/run_windows_volume_probe.ps1 -Kind filesystem
+      - name: Windows owned volume root measurement
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
+        timeout-minutes: 3
+        env:
+          ASWP_CI_IDENTITY_FIXTURE: '1'
+          ASWP_CI_VOLUME_FIXTURE: '1'
+          ASWP_CI_FORMAT_OWNED_VOLUME: '1'
+          ASWP_CI_ROOT_MUTATION_FIXTURE: '1'
+        run: ./tools/run_windows_volume_probe.ps1 -Kind root
       - name: Windows native console restoration
         if: runner.os == 'Windows'
         timeout-minutes: 3

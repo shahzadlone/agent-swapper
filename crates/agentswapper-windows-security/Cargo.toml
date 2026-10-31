@@ -18,11 +18,12 @@ proptest.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
+serde_json.workspace = true
 agentswapper-core = { path = "../agentswapper-core", version = "=0.1.0-dev" }
 rusqlite = { version = "0.41", features = ["bundled"] }
 getrandom = "=0.4.3"
 zeroize.workspace = true
-windows-sys = { version = "=0.61.2", features = ["Win32_NetworkManagement_NetManagement", "Win32_System_Ioctl"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_NetworkManagement_NetManagement", "Win32_System_Ioctl", "Win32_Storage_Vhd"] }
 
 # The only exception to the workspace's forbid rule is ffi.rs. The core,
 # CLI, descriptor parser and policy remain entirely safe Rust.
