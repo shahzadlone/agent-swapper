@@ -149,7 +149,10 @@ through publication and temporary-file cleanup. Public read-only folder grants
 are accepted; grants allowing other users to mutate the destination folder are
 refused without changing its ACL. Fixed local NTFS and the current volume-root
 sharing restrictions apply. This new publication path is awaiting native
-qualification; overall Windows privacy remains unverified. Cancellation
+qualification of the latest review changes; the previous implementation passed
+native publication and separate-user access tests. Overall Windows privacy
+remains unverified. Ambiguous output spellings report `handover_output_path`
+before creating files. Cancellation
 before publication removes the temporary file; after publication the committed
 artifact remains. On Windows, a failed temporary-file removal reports
 `handover_cleanup_failed` instead of successful cancellation; a protected

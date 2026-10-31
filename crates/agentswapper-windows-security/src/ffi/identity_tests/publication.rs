@@ -47,12 +47,31 @@ impl Fixture {
         for (name, sddl) in [
             (
                 "owner-rights",
-                "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)".to_owned(),
+                format!(
+                    "O:{}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)",
+                    policy.owner.sddl()
+                ),
             ),
             (
                 "public-read",
                 format!(
-                    "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;WD)",
+                    "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x001200a9;;;WD)",
+                    policy.owner.sddl(),
+                    policy.owner.sddl()
+                ),
+            ),
+            (
+                "private",
+                format!(
+                    "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
+                    policy.owner.sddl(),
+                    policy.owner.sddl()
+                ),
+            ),
+            (
+                "inherit-only-write",
+                format!(
+                    "O:{}D:P(A;OICI;FA;;;{})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICIIO;FA;;;WD)",
                     policy.owner.sddl(),
                     policy.owner.sddl()
                 ),
@@ -61,6 +80,16 @@ impl Fixture {
             let parent = fixture.path().join(name);
             let descriptor = LocalDescriptor::from_sddl(&sddl).unwrap();
             let directory = create(&parent, ObjectKind::Directory, &descriptor).unwrap();
+            let guard = policy.open_publication_parent(&parent).unwrap();
+            let (empty, empty_path, _parent) = policy
+                .create_publication_file(&guard, OsStr::new("before-bytes.txt"))
+                .unwrap()
+                .into_parts();
+            assert_eq!(empty.metadata().unwrap().len(), 0);
+            policy.validate_handle(&empty, ObjectKind::File).unwrap();
+            drop(empty);
+            std::fs::remove_file(empty_path).unwrap();
+            drop(guard);
             let original = LocalDescriptor::from_file(&directory)
                 .unwrap()
                 .bytes()
@@ -68,7 +97,7 @@ impl Fixture {
                 .to_vec();
             let control = parent.join("public-control.txt");
             let public = LocalDescriptor::from_sddl(&format!(
-                "O:{}D:P(A;;FA;;;{})(A;;GR;;;WD)",
+                "O:{}D:P(A;;FA;;;{})(A;;FR;;;WD)",
                 policy.owner.sddl(),
                 policy.owner.sddl()
             ))
@@ -79,6 +108,10 @@ impl Fixture {
             controls.push(control);
             let encrypted =
                 write_ciphertext(&parent.join("fixture.age"), b"fictional ciphertext").unwrap();
+            assert_eq!(
+                std::fs::read(&encrypted.path).unwrap(),
+                b"fictional ciphertext"
+            );
             let pickup = write_pickup(
                 &parent.join("HANDOVER_PICKUP.md"),
                 &pack,
@@ -123,6 +156,59 @@ impl Fixture {
             assert!(matches!(result, Err(agentswapper_core::Error::Cancelled)));
             assert!(observed.get());
             assert!(!cancelled.exists());
+            // Create a destination after the early existence check, forcing
+            // the authoritative no-clobber rename and its cleanup path.
+            let race = parent.join("raced.age");
+            let created = Cell::new(false);
+            let result = write_ciphertext_cancellable(&race, b"must not replace", || {
+                if !created.get()
+                    && std::fs::read_dir(&parent).unwrap().any(|entry| {
+                        entry
+                            .unwrap()
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".aswp-handover-")
+                    })
+                {
+                    let mut file = create(
+                        &race,
+                        ObjectKind::File,
+                        &policy.creation_descriptor(ObjectKind::File).unwrap(),
+                    )
+                    .unwrap();
+                    file.write_all(b"destination race canary").unwrap();
+                    created.set(true);
+                }
+                false
+            });
+            assert!(created.get());
+            assert!(matches!(
+                result,
+                Err(agentswapper_core::Error::OutputExists)
+            ));
+            let race_file = File::open(&race).unwrap();
+            policy
+                .validate_handle(&race_file, ObjectKind::File)
+                .unwrap();
+            let before = LocalDescriptor::from_file(&race_file)
+                .unwrap()
+                .bytes()
+                .unwrap()
+                .to_vec();
+            assert!(matches!(
+                write_ciphertext(&race, b"must not replace"),
+                Err(agentswapper_core::Error::OutputExists)
+            ));
+            assert_eq!(std::fs::read(&race).unwrap(), b"destination race canary");
+            assert_eq!(
+                LocalDescriptor::from_file(&race_file)
+                    .unwrap()
+                    .bytes()
+                    .unwrap(),
+                before
+            );
+            drop(race_file);
+            std::fs::remove_file(race).unwrap();
             assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 3);
             assert_eq!(
                 LocalDescriptor::from_file(&directory)
@@ -177,6 +263,10 @@ impl Fixture {
                 std::fs::read(control).unwrap(),
                 b"reachable handover control"
             );
+            denied(
+                File::create(control.parent().unwrap().join("injected.txt")),
+                "inject publication directory",
+            );
         }
         for file in &self.files {
             denied(File::open(file), "read published handover");
@@ -187,7 +277,7 @@ impl Fixture {
             denied(std::fs::remove_file(file), "delete published handover");
         }
         println!(
-            "::notice title=Windows handover separate identity::temporary standard user reached both parent controls but could not read/write/delete actual ciphertext or plaintext pickup exports after publication handles closed"
+            "::notice title=Windows handover separate identity::temporary standard user reached every parent control but could not inject children or read/write/delete actual ciphertext or plaintext pickup exports after publication handles closed"
         );
     }
 }
@@ -198,7 +288,7 @@ impl Custody {
             assert_eq!(std::fs::read(path).unwrap(), *bytes);
         }
         println!(
-            "::notice title=Windows handover publication::actual core exports and temporary files had protected ACLs under public-read and OW parents; cancellation removed temps; broad and AD4 leaf grants refused without repair; original artifacts preserved"
+            "::notice title=Windows handover publication::protected creation and actual exports passed under private, public-read, OW and inherit-only-write parents; cancellation and losing-publication cleanup passed; broad and AD4 leaves refused without repair; original artifacts preserved"
         );
     }
 }

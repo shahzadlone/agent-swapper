@@ -705,8 +705,10 @@ actual handle, and retains the complete parent chain through exclusive rename
 and cleanup. This applies to both ciphertext and explicit plaintext pickup.
 
 `PublicationParent` is a separate type from `PrivateRoot`. Its existing leaf
-may grant public reads or trusted owner rights, but must refuse every untrusted
-mutation grant, including AD4. The existing private-state leaf rules are not
+may grant public reads or trusted owner rights, but must refuse every effective
+untrusted mutation grant, including AD4. Inherit-only grants can be broader;
+new children require their own protected ACL. Existing mutation handles cannot
+be revoked by this check. The existing private-state leaf rules are not
 relaxed. No destination folders are created or repaired. Invalid single-file
 components and reparses remain refusals. The protected temporary file handle
 closes before rename or cleanup because it excludes deletion sharing; the
@@ -733,8 +735,34 @@ cancellation cleanup and unchanged parent ACLs, and refuse broad/AD4 leaves.
 The separate-user fixture must reach a public control in each parent before
 private output reads, writes and deletes can count as denied. Existing core
 tests also require exclusive concurrent publication and cleanup on cancellation.
-Native results and the focused source review are pending; this does not promote
-the overall Windows privacy claim or qualify vendor-owned files.
+At `88c10fa`, [CI run 41156399101](https://github.com/shahzadlone/agent-swapper/actions/runs/41156399101)
+passed the complete Windows test job, including the actual other-user output
+checks and cleanup-failure regression; Linux/macOS jobs passed too. The initial
+focused Opus 5.5 xhigh review found no confidentiality/integrity blocker within
+the stated trust model, but identified raw filename normalization before
+validation as a correctness blocker. It also requested stronger inheritance,
+race and ownership tests. These review changes require a new native run.
+
+Raw directory spellings are now refused before normalization at both export
+entry points; Windows also refuses trailing dots/spaces. POSIX retains its
+ordinary filename semantics but refuses terminal slash/dot-directory spellings.
+Internal operations keep the actual retained verbatim path; the reported path
+uses `dunce::simplified` only where that conversion is safe. A new paired-file
+type returns the checked file, path and parent borrow together, and the cleanup
+owner retains that borrow. Absolute, nonempty paths make `TempPath::try_from_path`
+infallible under the locked implementation; an earlier native validation
+failure may still leave an empty protected file, as documented for creation.
+
+Expanded native tests include private and inherit-only-public-write parents,
+zero-byte descriptor checks before content, a deterministic destination race,
+unchanged winning bytes/ACL, and separate-user child-injection refusal. The OW
+fixture now specifies the current user as owner. Existing protected/inherited
+root and core publication tests remain in the suite. The prior review's generic
+rights concern did not fail the native run; new fixtures use explicit file
+rights to remove that ambiguity. Both manifest dependencies and all-targets
+Windows type-checking were already present, and the callback requires no Send
+bound. A focused review of the corrective delta is pending. None of these
+results promotes overall Windows privacy or qualifies vendor-owned files.
 
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle

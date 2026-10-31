@@ -16,7 +16,7 @@ mod descriptor;
 )]
 mod ffi;
 #[cfg(windows)]
-pub use ffi::{PrivateRoot, PublicationParent};
+pub use ffi::{PrivateRoot, PublicationFile, PublicationParent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {

@@ -68,12 +68,30 @@ impl PrivateRoot {
 }
 
 /// Retained existing directory for publishing individually protected files.
-/// Other users may read/list this directory, but cannot mutate it. This is
+/// Other users may read/list this directory, but its effective ACL cannot
+/// grant them mutation. Inherit-only grants may be broader; new files must
+/// have protected ACLs. This cannot revoke previously acquired handles. This is
 /// deliberately distinct from a private state root: its children are not
 /// assumed private unless created and checked with an explicit protected ACL.
 #[must_use = "retain the parent through file creation, publication and cleanup"]
 pub struct PublicationParent {
     retained: RetainedPath,
+}
+
+/// One exclusively created, validated file paired with its actual path and
+/// borrowed parent custody. The caller owns publication or removal of the file.
+pub struct PublicationFile<'parent> {
+    file: File,
+    path: PathBuf,
+    parent: &'parent PublicationParent,
+}
+
+impl<'parent> PublicationFile<'parent> {
+    /// Transfer the paired handle/path and parent borrow into a cleanup owner.
+    /// Retain that borrow until publication or removal has finished.
+    pub fn into_parts(self) -> (File, PathBuf, &'parent PublicationParent) {
+        (self.file, self.path, self.parent)
+    }
 }
 
 impl PublicationParent {
@@ -117,7 +135,7 @@ impl SecurityPolicy {
     }
 
     /// Retain an existing publication directory and its complete ancestry.
-    /// Allows public read-only grants and trusted owner-rights ACEs, refuses
+    /// Allows effective public read-only grants and trusted owner-rights ACEs, refuses
     /// all untrusted leaf mutation grants, and never repairs or creates paths.
     pub fn open_publication_parent(&self, path: &Path) -> Result<PublicationParent> {
         Ok(PublicationParent {
@@ -127,18 +145,18 @@ impl SecurityPolicy {
 
     /// Exclusively create and validate a protected file relative to a retained
     /// publication parent. The ACL is supplied before any content is written.
-    pub fn create_publication_file(
+    pub fn create_publication_file<'parent>(
         &self,
-        parent: &PublicationParent,
+        parent: &'parent PublicationParent,
         name: &OsStr,
-    ) -> Result<File> {
+    ) -> Result<PublicationFile<'parent>> {
         reject_impersonation()?;
-        parent.child_path(name)?;
+        let path = parent.child_path(name)?;
         self.validate_ancestor_handle(&parent.retained.root)?;
         let descriptor = self.creation_descriptor(ObjectKind::File)?;
         let file = create_at(&parent.retained.root, name, ObjectKind::File, &descriptor)?;
         self.validate_handle(&file, ObjectKind::File)?;
-        Ok(file)
+        Ok(PublicationFile { file, path, parent })
     }
 
     fn open_root(&self, path: &Path, mode: RootOpen) -> Result<RetainedPath> {

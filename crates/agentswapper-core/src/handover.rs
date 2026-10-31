@@ -377,6 +377,7 @@ fn validate_document_location(resolved: &Path, state_root: Option<&Path>) -> Res
 /// Validate a user-selected plaintext destination without creating local state
 /// or opening a credential file. Imported capsule paths are never destinations.
 pub fn validate_pickup_output(path: &Path, state_root: Option<&Path>) -> Result<PathBuf> {
+    validate_output_spelling(path)?;
     let absolute = std::path::absolute(path)?;
     if fs::symlink_metadata(&absolute).is_ok() {
         return Err(Error::OutputExists);
@@ -514,10 +515,27 @@ pub fn write_pickup(
 }
 
 #[cfg(windows)]
-#[path = "handover/windows_publication.rs"]
 mod windows_publication;
 #[cfg(windows)]
 use windows_publication::publish_private_bytes;
+
+fn validate_output_spelling(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        windows_publication::validate_spelling(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let spelling = path.as_os_str().as_encoded_bytes();
+        if matches!(
+            spelling.rsplit(|byte| *byte == b'/').next(),
+            None | Some(b"" | b"." | b"..")
+        ) {
+            return Err(Error::HandoverOutputPath);
+        }
+        Ok(())
+    }
+}
 
 #[cfg(not(windows))]
 fn publish_private_bytes(
@@ -529,6 +547,7 @@ fn publish_private_bytes(
     if interrupted() {
         return Err(Error::Cancelled);
     }
+    validate_output_spelling(path)?;
     let absolute = std::path::absolute(path)?;
     let parent = dunce::canonicalize(absolute.parent().ok_or(Error::UnsafePath)?)?;
     let output = parent.join(absolute.file_name().ok_or(Error::UnsafePath)?);
@@ -954,6 +973,63 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".aswp-")
         }));
+    }
+
+    #[test]
+    fn exports_refuse_directory_spellings_without_creating_files() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "HANDOVER_NEW.md/",
+            "HANDOVER_NEW.md/.",
+            "HANDOVER_NEW.md/..",
+        ] {
+            let path = temp.path().join(name);
+            assert!(matches!(
+                write_ciphertext(&path, b"must not be written"),
+                Err(Error::HandoverOutputPath)
+            ));
+            assert!(matches!(
+                validate_pickup_output(&path, None),
+                Err(Error::HandoverOutputPath)
+            ));
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_exports_refuse_ambiguous_spelling_before_normalization() {
+        let temp = tempfile::tempdir().unwrap();
+        let plain = dunce::canonicalize(temp.path()).unwrap();
+        let verbatim = PathBuf::from(format!(r"\\?\{}", plain.display()));
+        for parent in [&plain, &verbatim] {
+            for suffix in ["\\", "/", ".", " ", "\\."] {
+                let mut raw = parent.join("HANDOVER_NEW.md").into_os_string();
+                raw.push(suffix);
+                let raw = PathBuf::from(raw);
+                assert!(matches!(
+                    write_ciphertext(&raw, b"must not be written"),
+                    Err(Error::HandoverOutputPath)
+                ));
+                assert!(matches!(
+                    validate_pickup_output(&raw, None),
+                    Err(Error::HandoverOutputPath)
+                ));
+                assert_eq!(fs::read_dir(&plain).unwrap().count(), 0);
+            }
+        }
+        assert!(matches!(
+            write_ciphertext_cancellable(&plain.join("missing/entry.age"), b"cancelled", || true),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(fs::read_dir(&plain).unwrap().count(), 0);
+        let output = plain.join("valid.age");
+        assert_eq!(
+            write_ciphertext(&output, b"fictional ciphertext")
+                .unwrap()
+                .path,
+            output
+        );
     }
 
     #[cfg(windows)]

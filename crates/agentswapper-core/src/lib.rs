@@ -183,6 +183,10 @@ pub enum Error {
     )]
     UnprotectedHandoverOutput,
     #[error(
+        "handover output must name a regular file; directory spellings and ambiguous Windows filenames are unsupported"
+    )]
+    HandoverOutputPath,
+    #[error(
         "temporary handover cleanup failed; no output was published, but a protected .aswp- file may remain in the destination folder"
     )]
     HandoverCleanupFailed,
@@ -285,6 +289,7 @@ impl Error {
             Self::UnsafeHandoverInput => "unsafe_handover_input",
             Self::UnsafeHandoverOutput => "unsafe_handover_output",
             Self::UnprotectedHandoverOutput => "unprotected_handover_output",
+            Self::HandoverOutputPath => "handover_output_path",
             Self::HandoverCleanupFailed => "handover_cleanup_failed",
             Self::UnsafeHandoverFile => "unsafe_handover_file",
             Self::InvalidHandover => "invalid_handover",

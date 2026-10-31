@@ -1,8 +1,20 @@
 //! Windows publication uses a retained parent and an ACL supplied at creation.
 
 use super::{Error, PublishedPack, Result};
-use agentswapper_windows_security::{Error as SecurityError, SecurityPolicy};
-use std::{ffi::OsStr, fs::File, io::Write, path::Path};
+use agentswapper_windows_security::{Error as SecurityError, PublicationParent, SecurityPolicy};
+use std::{ffi::OsStr, fs::File, io::Write, os::windows::ffi::OsStrExt, path::Path};
+
+pub(super) fn validate_spelling(path: &Path) -> Result<()> {
+    // GetFullPathNameW and Path::file_name can erase these before the native
+    // validator sees them. A spelling naming a directory must not create a file.
+    if matches!(
+        path.as_os_str().encode_wide().last(),
+        None | Some(32 | 46 | 47 | 92)
+    ) {
+        return Err(Error::HandoverOutputPath);
+    }
+    Ok(())
+}
 
 fn map_security(error: SecurityError) -> Error {
     match error {
@@ -13,14 +25,15 @@ fn map_security(error: SecurityError) -> Error {
 
 // Declaration order closes the handle before pathname cleanup on every early
 // return. Its handle excludes deletion sharing, including our own renames.
-struct PendingFile {
+struct PendingFile<'parent> {
     file: File,
     path: tempfile::TempPath,
+    _parent: &'parent PublicationParent,
 }
 
-impl PendingFile {
+impl PendingFile<'_> {
     fn discard(self) -> Result<()> {
-        let Self { file, path } = self;
+        let Self { file, path, .. } = self;
         drop(file);
         discard_path(path)
     }
@@ -39,6 +52,7 @@ pub(super) fn publish_private_bytes(
     if interrupted() {
         return Err(Error::Cancelled);
     }
+    validate_spelling(path)?;
     let absolute = std::path::absolute(path)?;
     let policy = SecurityPolicy::for_current_process().map_err(map_security)?;
     // Do not canonicalize through links before acquiring the native chain.
@@ -49,18 +63,20 @@ pub(super) fn publish_private_bytes(
         .child_path(absolute.file_name().ok_or(Error::UnsafeHandoverOutput)?)
         .map_err(map_security)?;
     output.to_str().ok_or(Error::NonUtf8Path)?;
+    // Advisory early error only; exclusive rename is the authoritative check.
     if std::fs::symlink_metadata(&output).is_ok() {
         return Err(Error::OutputExists);
     }
     let name = format!("{prefix}{}", uuid::Uuid::new_v4());
-    let temporary = parent.child_path(OsStr::new(&name)).map_err(map_security)?;
     // No retry/adoption on collision, and no inherited-permission window.
-    let file = policy
+    let (file, temporary, borrowed_parent) = policy
         .create_publication_file(&parent, OsStr::new(&name))
-        .map_err(map_security)?;
+        .map_err(map_security)?
+        .into_parts();
     let mut pending = PendingFile {
         file,
         path: tempfile::TempPath::try_from_path(temporary)?,
+        _parent: borrowed_parent,
     };
     if let Err(error) = pending
         .file
@@ -74,11 +90,15 @@ pub(super) fn publish_private_bytes(
         pending.discard()?;
         return Err(Error::Cancelled);
     }
-    let PendingFile { file, path } = pending;
+    let PendingFile {
+        file,
+        path: temporary,
+        ..
+    } = pending;
     drop(file);
     // Parent custody and the file's protected DACL remain in force while the
     // handle is closed. Same-user/admin mutation is outside this boundary.
-    if let Err(error) = path.persist_noclobber(&output) {
+    if let Err(error) = temporary.persist_noclobber(&output) {
         discard_path(error.path)?;
         return Err(if error.error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::OutputExists
@@ -87,7 +107,7 @@ pub(super) fn publish_private_bytes(
         });
     }
     Ok(PublishedPack {
-        path: output,
+        path: dunce::simplified(&output).to_owned(),
         directory_synced: false,
     })
 }
