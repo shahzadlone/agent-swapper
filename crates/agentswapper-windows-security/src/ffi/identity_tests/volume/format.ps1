@@ -17,9 +17,10 @@ foreach ($pair in @(
         throw 'Owned-volume fixture opt-in missing'
     }
 }
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 if ($request.image -notmatch '^[A-Za-z]:\\.+\\new-empty\.vhd$' -or
-    $request.physical -notmatch '^\\\\\.\\PhysicalDrive[0-9]+$') {
+    $request.physical -notmatch '^\\\\\.\\PhysicalDrive[0-9]+\z') {
     throw 'Unexpected owned image/device spelling'
 }
 $expectedNumber = [uint32]$request.physical.Substring(17)
@@ -35,22 +36,30 @@ function Get-OwnedDisk {
     if ($disks.Count -ne 1) { throw 'Ambiguous image-to-disk association' }
     $disk = $disks[0]
     if ($disk.Number -ne $expectedNumber -or $disk.Size -ne $expectedSize -or
-        [uint16]$disk.BusType -ne 15 -or $disk.IsBoot -or
+        $disk.CimInstanceProperties['BusType'].Value -ne 15 -or $disk.IsBoot -or
         $disk.IsSystem -or $disk.IsClustered -or $disk.IsOffline -or $disk.IsReadOnly) {
-        throw 'Owned disk failed type/size/system-state checks'
+        throw "Owned disk checks: number=$($disk.Number) size=$($disk.Size) bus=$($disk.CimInstanceProperties['BusType'].Value) boot=$($disk.IsBoot) system=$($disk.IsSystem) clustered=$($disk.IsClustered) offline=$($disk.IsOffline) readonly=$($disk.IsReadOnly)"
     }
     return $disk
 }
 
 $disk = Get-OwnedDisk
-if ($disk.PartitionStyle -ne 'RAW' -or $disk.NumberOfPartitions -ne 0) {
-    throw 'Owned disk is not new and empty'
+if ($disk.CimInstanceProperties['PartitionStyle'].Value -ne 0 -or $disk.NumberOfPartitions -ne 0) {
+    throw "Owned disk not empty: style=$($disk.CimInstanceProperties['PartitionStyle'].Value) partitions=$($disk.NumberOfPartitions)"
 }
 $identity = $disk.ObjectId
 Initialize-Disk -InputObject $disk -PartitionStyle GPT -Confirm:$false -ErrorAction Stop
 $disk = Get-OwnedDisk
-if ($disk.ObjectId -cne $identity -or $disk.PartitionStyle -ne 'GPT') {
+if ($disk.ObjectId -cne $identity -or $disk.CimInstanceProperties['PartitionStyle'].Value -ne 2) {
     throw 'Disk identity changed during initialization'
+}
+$reserved = @($disk | Get-Partition -ErrorAction Stop)
+if ($reserved.Count -gt 1) { throw 'Unexpected partitions after initialization' }
+foreach ($part in $reserved) {
+    if ($part.GptType -ine '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' -or
+        $part.DiskNumber -ne $expectedNumber -or $part.IsBoot -or $part.IsSystem) {
+        throw 'Initialized disk contains a non-reserved partition'
+    }
 }
 $partitions = @(New-Partition -InputObject $disk -UseMaximumSize -ErrorAction Stop)
 if ($partitions.Count -ne 1) { throw 'Unexpected new partition count' }
@@ -72,7 +81,7 @@ $disk = Get-OwnedDisk
 $verified = @(Get-Volume -Partition $partition -ErrorAction Stop)
 if ($disk.ObjectId -cne $identity -or $verified.Count -ne 1 -or
     $verified[0].ObjectId -cne $volumes[0].ObjectId -or
-    $verified[0].FileSystemType -ne 'NTFS' -or
+    $verified[0].FileSystem -ne 'NTFS' -or
     $verified[0].Path -notmatch '^\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\$') {
     throw 'Formatted volume identity/type failed verification'
 }

@@ -130,7 +130,7 @@ fn owned_volume_root_directory_tag_behavior_has_matched_other_user_controls() {
         Some("1")
     );
     let policy = SecurityPolicy::for_current_process().unwrap();
-    let fixture = OwnedNtfsVolume::create(&policy).unwrap();
+    let fixture = OwnedNtfsVolume::create(&policy, RootAccess::SetFixtureDacl).unwrap();
     let (account, token) = FixtureAccount::create().unwrap();
     // Public read/traverse plus AD4, with no other public mutation grant.
     // No inheritable test grants. Any OS-created children belong to this same

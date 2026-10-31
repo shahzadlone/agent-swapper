@@ -2,6 +2,8 @@
 //! existing image, drive, volume or physical disk selector is accepted.
 
 use super::*;
+use agentswapper_core::supervision::windows_job::{WindowsJob, install_process_root};
+use std::io::{Read, Seek};
 use std::process::{Command, Stdio};
 use windows_sys::Win32::{
     Storage::FileSystem::{
@@ -20,12 +22,20 @@ struct OwnedNtfsVolume {
     disk: OwnedDisk,
 }
 
+enum RootAccess {
+    Inspect,
+    SetFixtureDacl,
+}
+
 impl OwnedNtfsVolume {
-    fn create(policy: &SecurityPolicy) -> io::Result<Self> {
+    fn create(policy: &SecurityPolicy, access: RootAccess) -> io::Result<Self> {
         require_volume_fixture()?;
         if std::env::var("ASWP_CI_FORMAT_OWNED_VOLUME").ok().as_deref() != Some("1") {
             return Err(io::Error::other("owned-volume format opt-in missing"));
         }
+        // Exact ignored test only: this permanently places the fixture process
+        // in a kill-on-close root Job before any formatter can be spawned.
+        install_process_root()?;
         let disk = OwnedDisk::create(policy)?;
         let physical = disk.physical_path()?;
         let physical = physical
@@ -52,30 +62,65 @@ impl OwnedNtfsVolume {
                 .ok_or_else(|| io::Error::other("Windows system root missing"))?,
         )
         .join("System32/WindowsPowerShell/v1.0/powershell.exe");
-        let mut child = Command::new(powershell)
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                include_str!("format.ps1"),
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        // Fixed script, structured stdin, no shell interpolation of paths. The
-        // owned attachment remains live until this synchronous child exits.
-        let sent = child.stdin.take().unwrap().write_all(&request);
-        let output = child.wait_with_output()?;
-        sent?;
-        if !output.status.success() {
+        let mut input = private_io_file(&disk, policy, "format-input.json")?;
+        let mut output = private_io_file(&disk, policy, "format-output.txt")?;
+        let mut error = private_io_file(&disk, policy, "format-error.txt")?;
+        input.write_all(&request)?;
+        input.rewind()?;
+        let mut command = Command::new(powershell);
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            include_str!("format.ps1"),
+        ]);
+        command
+            .stdin(Stdio::from(input.try_clone()?))
+            .stdout(Stdio::from(output.try_clone()?))
+            .stderr(Stdio::from(error.try_clone()?));
+        // The qualified backend assigns the suspended child before resuming
+        // it. Root-Job inheritance also covers death before local assignment.
+        let mut child = WindowsJob::create()?.spawn(command, |_| Ok(()))?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => break Err(error),
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    break Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "owned-volume formatter timeout",
+                    ));
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        };
+        // Every result, including query errors/timeouts, must retire local
+        // writers before the owned disk can detach or output can be consumed.
+        if let Err(error) = child.stop_and_observe() {
+            eprintln!("::error title=Owned volume formatter custody::{error}");
+            // No successful cleanup receipt. Process death closes the root
+            // Job and non-permanent disk handles; fail the ephemeral fixture.
+            std::process::abort();
+        }
+        let status = status?;
+        error.rewind()?;
+        let mut diagnostic = Vec::new();
+        (&mut error).take(4096).read_to_end(&mut diagnostic)?;
+        if !status.success() {
             return Err(io::Error::other(format!(
                 "owned-volume formatter failed: {}",
-                String::from_utf8_lossy(&output.stderr[..output.stderr.len().min(4096)])
+                String::from_utf8_lossy(&diagnostic)
             )));
         }
-        let spelling = std::str::from_utf8(&output.stdout).map_err(io::Error::other)?;
+        output.rewind()?;
+        let mut bytes = Vec::new();
+        (&mut output).take(4097).read_to_end(&mut bytes)?;
+        if bytes.len() > 4096 {
+            return Err(io::Error::other("oversized formatter output"));
+        }
+        let spelling = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
         let spelling = spelling.trim();
         let Some(guid) = spelling
             .strip_prefix(r"\\?\Volume{")
@@ -104,8 +149,12 @@ impl OwnedNtfsVolume {
         if disk.physical_path()? != Path::new(physical) {
             return Err(io::Error::other("owned disk device changed"));
         }
+        let extra = match access {
+            RootAccess::Inspect => 0,
+            RootAccess::SetFixtureDacl => WRITE_DAC,
+        };
         let root = std::fs::OpenOptions::new()
-            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | WRITE_DAC)
+            .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | extra)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(&path)?;
@@ -152,6 +201,16 @@ impl OwnedNtfsVolume {
     }
 }
 
+fn private_io_file(disk: &OwnedDisk, policy: &SecurityPolicy, name: &str) -> io::Result<File> {
+    policy
+        .create_new_at(
+            disk.root.as_ref().unwrap().directory(),
+            OsStr::new(name),
+            ObjectKind::File,
+        )
+        .map_err(io::Error::other)
+}
+
 fn verify_extent(volume: &File, number: u32) -> io::Result<()> {
     let mut extents = VOLUME_DISK_EXTENTS::default();
     let mut returned = 0;
@@ -195,13 +254,25 @@ fn verify_extent(volume: &File, number: u32) -> io::Result<()> {
 #[ignore = "formats only its own new empty VHD; separate explicit disposable Windows CI opt-in"]
 fn newly_owned_ntfs_volume_has_verified_identity_and_removal() {
     let policy = SecurityPolicy::for_current_process().unwrap();
-    let fixture = OwnedNtfsVolume::create(&policy).unwrap();
+    let fixture = OwnedNtfsVolume::create(&policy, RootAccess::Inspect).unwrap();
     // The first filesystem operation follows both CIM association and native
     // physical-extent checks. This is not yet a root ACL/reparse probe.
-    let canary = fixture.path.join("owned-volume-canary.txt");
-    std::fs::write(&canary, b"new owned volume only").unwrap();
-    assert_eq!(std::fs::read(&canary).unwrap(), b"new owned volume only");
-    std::fs::remove_file(&canary).unwrap();
+    let mut canary = create_at(
+        &fixture.root,
+        OsStr::new("owned-volume-canary.txt"),
+        ObjectKind::File,
+        &policy.creation_descriptor(ObjectKind::File).unwrap(),
+    )
+    .unwrap();
+    policy.validate_handle(&canary, ObjectKind::File).unwrap();
+    canary.write_all(b"new owned volume only").unwrap();
+    canary.rewind().unwrap();
+    let mut bytes = Vec::new();
+    canary.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"new owned volume only");
+    drop(canary);
+    // Do not unlink by a name after releasing custody. Removing our owned
+    // image after detach also disposes of the fixture's canary.
     fixture.finish().unwrap();
     println!(
         "::notice title=Windows owned NTFS identity::only newly created empty image initialized/formatted; CIM association, native disk extent, root identity, canary and explicit detach/removal passed; no existing disk selected"
