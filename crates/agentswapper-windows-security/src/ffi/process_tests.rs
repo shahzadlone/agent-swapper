@@ -5,7 +5,7 @@
 //! the production per-run backend to start the target. All fixture roles have
 //! deadlines and an authentication-free environment. No Job handles are shared.
 
-use agentswapper_core::supervision::windows_job::{WindowsJob, install_process_root};
+use agentswapper_core::supervision::windows_job::{JobChild, WindowsJob, install_process_root};
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
@@ -93,6 +93,26 @@ impl Drop for Peer {
     }
 }
 
+struct Backstop(Option<JobChild>);
+impl Backstop {
+    fn finish(&mut self) -> io::Result<()> {
+        self.0
+            .take()
+            .ok_or_else(|| io::Error::other("backstop already consumed"))?
+            .stop_and_observe()
+            .map(|_| ())
+    }
+}
+impl Drop for Backstop {
+    fn drop(&mut self) {
+        // Attempt bounded termination AND the empty query on unwinding too.
+        // Failure cannot create evidence: only explicit finish can succeed.
+        if let Some(scope) = self.0.take() {
+            let _ = scope.stop_and_observe();
+        }
+    }
+}
+
 fn marker(dir: &Path, role: &str, suffix: &str) -> PathBuf {
     dir.join(format!("{role}-{suffix}"))
 }
@@ -106,13 +126,18 @@ fn writer(dir: &Path, role: &str) -> io::Result<()> {
     lease.try_lock().map_err(io::Error::other)?;
     fs::write(marker(dir, role, "ready"), b"ready")?;
     let started = Instant::now();
-    let mut answered = false;
+    let mut answered_before = false;
+    let mut answered_after = false;
     while started.elapsed() < LIFETIME {
-        if !answered && marker(dir, role, "challenge").exists() {
+        if !answered_before && marker(dir, role, "before-challenge").exists() {
+            fs::write(marker(dir, role, "before-response"), b"alive before stop")?;
+            answered_before = true;
+        }
+        if !answered_after && marker(dir, role, "challenge").exists() {
             // Challenge is created only after the inner stop receipt. This
             // establishes new execution, rather than a stale buffered heartbeat.
             fs::write(marker(dir, role, "response"), b"alive after receipt")?;
-            answered = true;
+            answered_after = true;
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -325,6 +350,15 @@ fn controller(dir: &Path) -> io::Result<()> {
     let target = WindowsJob::create()?.spawn(target_command, |_| Ok(()))?;
     let normal = observe(dir, "normal")?;
     let alternate = observe(dir, "alternate")?;
+    // Establish execution after both ready markers, before issuing any stop.
+    // A failed spawn or stalled startup is inconclusive, never a stopped result.
+    for (role, file) in [("normal", &normal), ("alternate", &alternate)] {
+        fs::write(marker(dir, role, "before-challenge"), b"before stop")?;
+        until(STEP, || {
+            Ok(marker(dir, role, "before-response").exists().then_some(()))
+        })?;
+        require(alive(file)?, "writer stopped before the inner stop request")?;
+    }
     target.stop_and_observe()?;
     stopped(dir, "normal", &normal)?;
     fs::write(marker(dir, "peer", "challenge"), b"after inner receipt")?;
@@ -383,14 +417,34 @@ fn fixture_entry() -> io::Result<()> {
 #[test]
 #[ignore = "dedicated process: installs a lifetime root Job; invoked explicitly in Windows CI"]
 fn alternate_parent_custody() -> io::Result<()> {
+    let result = measure();
+    if result.is_err() {
+        println!(
+            "::error title=Windows alternate-parent custody::qualification failed; no custody conclusion"
+        );
+    }
+    result
+}
+
+fn measure() -> io::Result<()> {
+    // Run only with nextest's exact per-test filter (as CI does). Do not run
+    // this alongside other tests in a shared cargo-test harness process.
     let dir = tempfile::tempdir()?;
     install_process_root()?;
-    let mut outer = WindowsJob::create()?.spawn(command(dir.path(), "controller")?, |_| Ok(()))?;
-    let result = until(TOTAL, || outer.try_wait());
+    let mut outer = Backstop(Some(
+        WindowsJob::create()?.spawn(command(dir.path(), "controller")?, |_| Ok(()))?,
+    ));
+    let result = until(TOTAL, || {
+        outer
+            .0
+            .as_mut()
+            .ok_or_else(|| io::Error::other("backstop absent"))?
+            .try_wait()
+    });
     // Consume and retire the outer Job even when the controller failed/timed
     // out. Its peer is the alternate writer's selected parent, so this backstop
     // also owns that writer independently of the controller's inner root.
-    outer.stop_and_observe()?;
+    outer.finish()?;
     for role in ["normal", "alternate", "peer"] {
         let path = marker(dir.path(), role, "lock");
         if path.exists() {
@@ -401,10 +455,10 @@ fn alternate_parent_custody() -> io::Result<()> {
     require(result?.success(), "fixture controller failed")?;
     match fs::read(dir.path().join("observation"))?.as_slice() {
         b"survived" => println!(
-            "::notice title=Windows alternate-parent custody::owned alternate-parent writer executed after inner Job empty receipt; normal writer stopped; outside peer continued; outer Job retired all fixture writers"
+            "::notice title=Windows alternate-parent custody::owned alternate-parent writer executed after inner Job empty receipt; normal writer stopped; outside peer continued; all fixture writers observed stopped; outer Job observed empty"
         ),
         b"stopped" => println!(
-            "::notice title=Windows alternate-parent custody::owned alternate-parent and normal writers stopped with inner Job; outside peer continued; outer Job retired all fixture writers"
+            "::notice title=Windows alternate-parent custody::owned alternate-parent and normal writers stopped with inner Job; outside peer continued; all fixture writers observed stopped; outer Job observed empty"
         ),
         _ => return Err(io::Error::other("missing bounded custody observation")),
     }

@@ -177,7 +177,12 @@ The later root-required refusal passed the Windows test step at `21ff67d` in
 Dependency cleanup after a nested-wrapper failure can use an unbounded
 wait. The backend does not constrain work requested through WMI, COM, Task
 Scheduler, services or other outside processes, and does not defend against a
-malicious process with the same OS identity. Provider credential isolation,
+malicious process with the same OS identity. A selected outside parent can also
+leave a writer outside the per-run Job: the bounded
+[selected-parent fixture](supervision-validation.md#selected-parent-qualification)
+observed this on the recorded Windows build. An empty local Job is not a
+certificate that every process arranged by an agent has stopped.
+Provider credential isolation,
 workspace fencing and cross-brand context continuity remain separate gates.
 
 Additional Windows unit tests inject failure after admission returns success,
