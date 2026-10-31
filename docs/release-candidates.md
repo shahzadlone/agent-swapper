@@ -5,7 +5,19 @@ dependency jobs pass. It does not publish a GitHub release or establish that
 provider isolation, automatic switching, signing, or platform notarization is
 ready. Treat these archives as test artifacts.
 
-The latest recorded complete pipeline is `07c35cb`:
+The Windows storage integration at `9002a4f` passed
+[CI run 41148708334](https://github.com/shahzadlone/agent-swapper/actions/runs/41148708334):
+all Linux/macOS/Windows tests, dependency policy, candidate packaging and all
+three separate-runner byte comparisons. It is now merged into `main`. Core
+registry/configuration access and profile leases retain the native directory
+guards. Three focused Opus source reviews and their follow-up native controls
+are recorded in [Windows ACL evidence](windows-acl.md#production-integration-review-follow-up).
+That branch run intentionally skipped preview attestation; the subsequent
+`main` pipeline must produce its own provenance. The actual volume-root guard
+still excludes writes and has a documented compatibility limit. Doctor continues
+to report `acl_not_verified`; real-provider isolation is not promoted.
+
+The preceding complete pipeline with preview provenance is `07c35cb`:
 [CI run 41143637065](https://github.com/shahzadlone/agent-swapper/actions/runs/41143637065)
 passed Linux/macOS dashboard transitions, Windows native console restoration
 and ConPTY launches/rename/unregister, 100 Windows registry stress iterations,

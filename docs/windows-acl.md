@@ -509,7 +509,13 @@ the token-default owner and an explicit current-user owner. The query now
 relinquishes Box ownership **before** the native call and forms only raw field
 pointers; ownership is recovered only after a non-pending return. This also
 avoids creating a Box uniqueness borrow during a hypothetical late completion.
-Those follow-up controls need their own native results.
+Those follow-up controls passed at `9002a4f` in
+[CI run 41148708334](https://github.com/shahzadlone/agent-swapper/actions/runs/41148708334).
+Both Windows ACL steps, including the separate-user/core consumer fixture,
+ConPTY dashboard and handover transitions, journal/concurrency stress, and all
+three platform test/candidate/rebuild jobs passed. The integration is merged
+into `main`; the branch run skipped preview attestation by design. These results
+do not resolve the actual volume-root limit or qualify real vendor processes.
 
 The actual volume-root handle still excludes writes for the guard's lifetime.
 This can refuse startup when a directory writer already exists and block trusted
@@ -533,8 +539,9 @@ consumer checks, and dashboard ConPTY transitions passed in
 [CI run 41147086157](https://github.com/shahzadlone/agent-swapper/actions/runs/41147086157).
 Its handover pack check failed after input-mode restoration, and Linux/macOS
 Clippy caught a newly collapsible condition after dead-code removal; the run
-was not successful overall. The condition is corrected, and the refined ancestor
-sharing and defensive volume-query changes need their own native results.
+was not successful overall. The condition is corrected; the refined ancestor
+sharing and defensive volume-query changes subsequently passed at `9002a4f`
+as recorded above.
 
 ## Inherited descendants
 
