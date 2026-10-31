@@ -547,7 +547,9 @@ not evidence about volume-root reparse behavior and is not part of the product
 runtime.
 
 A second ignored fixture has completed a focused Opus source review and is
-enabled in a separate exact-test CI step; its first native result is pending.
+enabled in a separate exact-test CI step. It passed at `26c1dcd` in
+[CI run 41151606943](https://github.com/shahzadlone/agent-swapper/actions/runs/41151606943);
+the other pipeline jobs were still running when this step was recorded.
 It exclusively creates a fresh image through that factory, initializes and
 formats that image using explicit Storage CIM objects, and refuses ambiguous
 image/disk/partition associations or system/boot/clustered/nonvirtual devices.
@@ -564,10 +566,36 @@ canary is disposed of with the owned image, not unlinked after releasing its
 handle. Before any canary filesystem operation, native volume extents must
 identify exactly that physical disk, and the opened root must resolve to the
 returned volume GUID. No existing image/drive selector is exposed. This stage
-does not change a root ACL or attempt a reparse operation. The separate root
-measurement remains disabled pending its own review. Formatting is gated by
+does not change a root ACL or attempt a reparse operation. Formatting is gated by
 CIM association checks; the native extent/root checks happen afterward and gate
 filesystem use, not the earlier format operation.
+
+The third ignored fixture measures basic and extended directory-bit reparse
+operations on the newly owned volume's actual root. Its focused Opus review
+found no handle/DACL-pointer ownership defect, but required stronger controls.
+The revised fixture grants only its freshly created standard account read/AD4
+access, checks effective `MAXIMUM_ALLOWED` mutation rights as well as the actual
+measurement handle's rights, and binds reopened handles to the original volume
+serial and 128-bit file IDs. Matched nonempty-directory operations must succeed
+both before and after each root attempt. Both objects must begin untagged;
+observation/removal failures fail the test rather than count as a SET refusal.
+Zero is reserved for actual installation followed by verified removal. Canaries,
+account removal and disk cleanup precede result reporting.
+
+Each of the three CI steps now requires exactly one passing test and its expected
+result notices. The third requires an additional `ASWP_CI_ROOT_MUTATION_FIXTURE`
+opt-in, an isolated test process and its own timeout. Its first native result is
+pending. Either root success or a nonzero native refusal is recorded as an OS/tag
+observation, never an automatic production-policy promotion.
+
+The review's suggestion to use `SetKernelObjectSecurity` was rejected:
+[Microsoft explicitly directs filesystem callers to SetSecurityInfo instead](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setkernelobjectsecurity).
+The retained handle targets only the verified newly owned root. DACL propagation
+may affect OS-created children on that same disposable volume; no existing
+machine volume is modified. The inherited image descriptor already admits
+SYSTEM and Administrators as well as the current user. `validate_object` checks
+object/device/filesystem properties, not a private root DACL; the review's
+conjectured rejection of an Administrators-owned formatted root did not apply.
 
 The implementation follows Microsoft
 [Initialize-Disk](https://learn.microsoft.com/en-us/powershell/module/storage/initialize-disk),

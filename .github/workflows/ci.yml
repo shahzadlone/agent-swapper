@@ -98,7 +98,12 @@ jobs:
           ASWP_CI_IDENTITY_FIXTURE: '1'
           ASWP_CI_VOLUME_FIXTURE: '1'
         run: |
-          cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::owned_empty_virtual_disk_attaches_and_cleans_up_without_formatting -- --ignored --exact --test-threads=1 --nocapture
+          $report = & cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::owned_empty_virtual_disk_attaches_and_cleans_up_without_formatting -- --ignored --exact --test-threads=1 --nocapture
+          $code = $LASTEXITCODE
+          $report | Write-Output
+          if ($code -ne 0) { exit $code }
+          if (-not ($report -match '^test result: ok\. 1 passed; 0 failed;')) { throw 'Empty-disk fixture did not run exactly once' }
+          if (-not ($report -match '::notice title=Windows disposable disk ownership::')) { throw 'Empty-disk cleanup evidence missing' }
       - name: Windows owned filesystem identity
         if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
         timeout-minutes: 3
@@ -107,7 +112,29 @@ jobs:
           ASWP_CI_VOLUME_FIXTURE: '1'
           ASWP_CI_FORMAT_OWNED_VOLUME: '1'
         run: |
-          cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::formatted::newly_owned_ntfs_volume_has_verified_identity_and_removal -- --ignored --exact --test-threads=1 --nocapture
+          $report = & cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::formatted::newly_owned_ntfs_volume_has_verified_identity_and_removal -- --ignored --exact --test-threads=1 --nocapture
+          $code = $LASTEXITCODE
+          $report | Write-Output
+          if ($code -ne 0) { exit $code }
+          if (-not ($report -match '^test result: ok\. 1 passed; 0 failed;')) { throw 'Owned-filesystem fixture did not run exactly once' }
+          if (-not ($report -match '::notice title=Windows owned NTFS identity::')) { throw 'Owned-filesystem cleanup evidence missing' }
+      - name: Windows owned volume root measurement
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
+        timeout-minutes: 3
+        env:
+          ASWP_CI_IDENTITY_FIXTURE: '1'
+          ASWP_CI_VOLUME_FIXTURE: '1'
+          ASWP_CI_FORMAT_OWNED_VOLUME: '1'
+          ASWP_CI_ROOT_MUTATION_FIXTURE: '1'
+        run: |
+          $report = & cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::formatted::root_probe::owned_volume_root_directory_tag_behavior_has_matched_other_user_controls -- --ignored --exact --test-threads=1 --nocapture
+          $code = $LASTEXITCODE
+          $report | Write-Output
+          if ($code -ne 0) { exit $code }
+          if (-not ($report -match '^test result: ok\. 1 passed; 0 failed;')) { throw 'Root measurement did not run exactly once' }
+          foreach ($kind in @('basic', 'extended')) {
+            if (-not ($report -match "::notice title=Owned volume root reparse measurement::${kind}:")) { throw "Missing $kind root measurement and cleanup evidence" }
+          }
       - name: Windows native console restoration
         if: runner.os == 'Windows'
         timeout-minutes: 3
