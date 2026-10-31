@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+"""Fixed-user activation experiment; disposable hosted CI only, never installation."""
+import errno
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+
+from check_linux_managed_scope import check_controls, membership, private_directory, wait_for
+
+PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_SOCKET_ACTIVATION'
+
+
+def require(ok, message):
+    if not ok:
+        raise RuntimeError(message)
+
+
+def fixture_prefix():
+    require(sys.platform == 'linux' and os.environ.get('GITHUB_ACTIONS') == 'true'
+            and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+            and os.environ.get('ASWP_CI_SOCKET_ACTIVATION') == '1',
+            'socket activation fixture requires opted-in disposable hosted CI')
+    run, attempt = os.environ.get('GITHUB_RUN_ID', ''), os.environ.get('GITHUB_RUN_ATTEMPT', '')
+    require(re.fullmatch(r'[0-9]{1,24}', run) and re.fullmatch(r'[0-9]{1,8}', attempt),
+            'invalid hosted run identity')
+    return f'aswp-activation-{run}-{attempt}'
+
+
+def endpoint(prefix):
+    return Path('/run') / (prefix + '.sock')
+
+
+def ordinary_ids(uid, gid):
+    uid, gid = int(uid), int(gid)
+    require(0 < uid < 2**31 and 0 < gid < 2**31, 'ordinary target UID and GID required')
+    return uid, gid
+
+
+def unit_files(prefix, directory, uid, gid):
+    uid, gid = ordinary_ids(uid, gid)
+    script = Path(__file__).resolve()
+    for path in (script, directory):
+        require(path.is_absolute() and re.fullmatch(r'/[A-Za-z0-9_./-]+', str(path))
+                and '..' not in path.parts, 'fixture path cannot be represented as a fixed unit argument')
+    require(re.fullmatch(r'aswp-activation-[0-9]{1,24}-[0-9]{1,8}', prefix), 'invalid fixture unit prefix')
+    socket_unit = f'''[Unit]
+Description=AgentSwapper disposable activation fixture
+[Socket]
+ListenStream={endpoint(prefix)}
+SocketUser={uid}
+SocketGroup={gid}
+SocketMode=0600
+Accept=yes
+MaxConnections=4
+TriggerLimitIntervalSec=30s
+TriggerLimitBurst=16
+RemoveOnStop=yes
+'''
+    service_unit = f'''[Unit]
+Description=AgentSwapper disposable fixed-user guardian
+CollectMode=inactive-or-failed
+[Service]
+Type=exec
+User={uid}
+Group={gid}
+ExecStart=/usr/bin/python3 {script} --service {directory} {uid} %n
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+Slice=system.slice
+Delegate=no
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStartSec=10s
+TimeoutStopSec=2s
+RuntimeMaxSec=30s
+NoNewPrivileges=yes
+UMask=0077
+'''
+    return {prefix + '.socket': socket_unit, prefix + '@.service': service_unit}
+
+
+def systemctl(*args, check=True):
+    environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C',
+                   'SYSTEMD_COLORS': '0', 'DBUS_SYSTEM_BUS_ADDRESS': 'unix:path=/run/dbus/system_bus_socket'}
+    result = subprocess.run(['/usr/bin/systemctl', '--system', '--no-pager', *args], stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, encoding='utf-8', errors='replace',
+                            timeout=12, check=False, env=environment)
+    require(len(result.stdout) <= 65536 and len(result.stderr) <= 65536, 'manager diagnostic exceeds bounds')
+    require(not check or result.returncode == 0,
+            'fixture manager command failed: ' + result.stderr[-1500:])
+    return result
+
+
+def admin(verb, directory, uid, gid):
+    prefix = fixture_prefix()
+    require(os.geteuid() == 0 and verb in ('install', 'cleanup'), 'invalid fixture administrator role')
+    uid, gid = ordinary_ids(uid, gid)
+    private_directory(directory, uid)
+    files = unit_files(prefix, directory, uid, gid)
+    ownership = json.dumps({'uid': uid, 'gid': gid, 'directory': str(directory), 'units': files}, sort_keys=True)
+    marker = Path('/run') / (prefix + '.owner')
+    parent = Path('/run/systemd/system')
+    metadata = parent.lstat()
+    require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0,
+            'runtime unit directory is not root-owned and protected')
+    if verb == 'install':
+        require(not endpoint(prefix).exists(), 'fixture activation endpoint already exists')
+        for name in files:
+            require(not os.path.lexists(parent / name), 'fixture unit name already exists')
+        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            stream.write(ownership)
+        for name, contents in files.items():
+            fd = os.open(parent / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+            with os.fdopen(fd, 'w') as stream:
+                stream.write(contents)
+        systemctl('daemon-reload')
+        systemctl('start', prefix + '.socket')
+        return
+    if not os.path.lexists(marker):
+        # Installation refused before reserving anything. Never stop or remove
+        # a pre-existing unit merely because its name matches this fixture.
+        return
+    marker_meta = marker.lstat()
+    require(stat.S_ISREG(marker_meta.st_mode) and marker_meta.st_uid == 0
+            and marker_meta.st_mode & 0o077 == 0 and marker.read_text() == ownership,
+            'fixture ownership marker is absent, changed or not protected')
+    for name, contents in files.items():
+        path = parent / name
+        if os.path.lexists(path):
+            metadata = path.lstat()
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
+                    and metadata.st_mode & 0o022 == 0 and path.read_text() == contents,
+                    'fixture unit changed; refusing service control')
+    # All names are reserved to this run. Stop activation before collecting its
+    # service instances; no wildcard includes any unrelated unit prefix.
+    systemctl('stop', prefix + '.socket', check=False)
+    listing = systemctl('list-units', '--all', '--plain', '--no-legend', '--full', prefix + '@*.service')
+    for row in listing.stdout.splitlines():
+        name = row.split()[0]
+        require(re.fullmatch(re.escape(prefix) + r'@[A-Za-z0-9_.:\\-]+\.service', name),
+                'unexpected activation service name')
+        systemctl('stop', name)
+    require(not any(p.name.startswith(prefix + '@') for p in Path('/sys/fs/cgroup/system.slice').iterdir()),
+            'activation scope still exists after cleanup')
+    for name, contents in files.items():
+        path = parent / name
+        if os.path.lexists(path):
+            require(not path.is_symlink() and path.read_text() == contents,
+                    'fixture unit changed; refusing to remove it')
+            path.unlink()
+    systemctl('daemon-reload')
+    require(not endpoint(prefix).exists(), 'activation endpoint survived cleanup')
+    marker.unlink()
+
+
+def service(directory, uid, unit):
+    started = time.monotonic()
+    uid = int(uid)
+    require(os.getuid() == os.geteuid() == uid != 0, 'activated guardian is not the fixed ordinary user')
+    private_directory(directory)
+    require(re.fullmatch(r'aswp-activation-[0-9]{1,24}-[0-9]{1,8}@[A-Za-z0-9_.:\\-]+\.service', unit),
+            'invalid activated fixture unit')
+    invocation = os.environ.get('INVOCATION_ID', '')
+    require(re.fullmatch(r'[0-9a-f]{32}', invocation) and invocation != '0' * 32,
+            'activation did not supply an invocation identity')
+    group = '/system.slice/' + unit
+    require(membership() == group, 'activated guardian is outside its expected scope')
+    check_controls(Path('/sys/fs/cgroup' + group))
+    with socket.socket(fileno=os.dup(sys.stdin.fileno())) as connection:
+        connection.settimeout(8)
+        peer_pid, peer_uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        require(peer_uid == uid and peer_pid > 0, 'activation client identity differs')
+        request = bytearray()
+        while len(request) < 3:
+            data = connection.recv(3 - len(request))
+            require(data, 'activation client closed before release')
+            request.extend(data)
+        require(request == b'GO\n', 'invalid fixture activation request')
+        run = directory / invocation
+        run.mkdir(mode=0o700)
+        subprocess.Popen(['/usr/bin/python3', str(Path(__file__).resolve()), '--writer', str(run)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True, start_new_session=True)
+        wait_for(lambda: (run / 'heartbeat').exists(), seconds=5)
+        report = {'unit': unit, 'invocation': invocation, 'pid': os.getpid(), 'uid': uid,
+                  'group': group, 'peer_uid': peer_uid, 'peer_pid': peer_pid, 'started': started}
+        connection.sendall(json.dumps(report).encode() + b'\n')
+        connection.settimeout(20)
+        require(connection.recv(1) == b'', 'unexpected fixture activation command')
+    # Exiting the main service process lets KillMode=control-group retire its
+    # detached writer. The client never sends a numeric process kill request.
+
+
+def writer(directory):
+    private_directory(directory)
+    require(os.geteuid() != 0 and os.getsid(0) == os.getpid(), 'fixture writer is not an ordinary detached process')
+    deadline = time.monotonic() + 30
+    counter = 0
+    while time.monotonic() < deadline:
+        temporary = directory / 'heartbeat.tmp'
+        temporary.write_text(str(counter))
+        temporary.replace(directory / 'heartbeat')
+        counter += 1
+        time.sleep(0.02)
+    (directory / 'voluntary-exit').write_text('deadline')
+
+
+def deny_other_user():
+    prefix = fixture_prefix()
+    require(os.geteuid() == 0, 'separate-user probe requires the disposable fixture authority')
+    target = endpoint(prefix)
+    require(target.stat().st_uid != 65534, 'fixture owner conflicts with the negative-control UID')
+    os.setgroups([])
+    os.setgid(65534)
+    os.setuid(65534)
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(3)
+        try:
+            connection.connect(str(target))
+        except PermissionError as error:
+            require(error.errno == errno.EACCES, 'unexpected separate-user refusal')
+        else:
+            raise RuntimeError('another ordinary UID could connect to the fixture socket')
+    print('::notice title=Linux fixed-user activation::different ordinary UID refused at socket permission check', flush=True)
+
+
+def activate(prefix, directory):
+    connection = socket.socket(socket.AF_UNIX)
+    try:
+        connection.settimeout(8)
+        connection.connect(str(endpoint(prefix)))
+        peer_pid, peer_uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        require(peer_uid == 0 and peer_pid == 1, 'activation listener is not the system manager')
+        connection.sendall(b'GO\n')
+        data = bytearray()
+        while not data.endswith(b'\n'):
+            part = connection.recv(1024)
+            require(part, 'activation guardian closed before its report')
+            data.extend(part)
+            require(len(data) <= 4096, 'activation report exceeds bounds')
+        report = json.loads(data)
+        require(re.fullmatch(re.escape(prefix) + r'@[A-Za-z0-9_.:\\-]+\.service', report['unit'])
+                and re.fullmatch(r'[0-9a-f]{32}', report['invocation'])
+                and report['uid'] == report['peer_uid'] == os.getuid()
+                and report['peer_pid'] == os.getpid() and report['pid'] > 1,
+                'activation identities disagree')
+        scope = Path('/sys/fs/cgroup/system.slice') / report['unit']
+        require(report['group'] == '/system.slice/' + report['unit'], 'activation group disagrees')
+        check_controls(scope)
+        # Differential fixture metadata only; this is not the authenticated
+        # production observer or a receipt that can authorize transfer.
+        properties = systemctl('show', report['unit'], '--property=User,MainPID,InvocationID,Delegate,KillMode', '--no-pager')
+        fields = dict(line.split('=', 1) for line in properties.stdout.splitlines())
+        require(fields == {'User': str(os.getuid()), 'MainPID': str(report['pid']),
+                           'InvocationID': report['invocation'], 'Delegate': 'no', 'KillMode': 'control-group'},
+                'activated manager properties disagree')
+        descriptor = os.open(scope, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        return connection, report, descriptor
+    except BaseException:
+        connection.close()
+        raise
+
+
+def retired(directory, report, descriptor):
+    scope = Path('/sys/fs/cgroup' + report['group'])
+    wait_for(lambda: not scope.exists(), seconds=5)
+    try:
+        events = os.open('cgroup.events', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+    except FileNotFoundError:
+        pass
+    else:
+        os.close(events)
+        raise RuntimeError('original activation scope was not removed')
+    heartbeat = directory / report['invocation'] / 'heartbeat'
+    before = heartbeat.read_text()
+    time.sleep(0.15)
+    require(heartbeat.read_text() == before, 'activation worker survived original scope removal')
+    require(not (heartbeat.parent / 'voluntary-exit').exists(), 'writer reached its own deadline before retirement')
+
+
+def live_before_disconnect(directory, report):
+    heartbeat = directory / report['invocation'] / 'heartbeat'
+    before = heartbeat.read_text()
+    wait_for(lambda: heartbeat.read_text() != before, seconds=2)
+    require(0 <= time.monotonic() - report['started'] < 20,
+            'disconnect is too close to the fixture runtime deadline')
+    require('populated 1' in Path('/sys/fs/cgroup' + report['group'], 'cgroup.events').read_text().splitlines(),
+            'activation scope was not populated before disconnect')
+
+
+def suite():
+    prefix = fixture_prefix()
+    require(os.geteuid() != 0, 'activation suite requires an ordinary runner')
+    script = str(Path(__file__).resolve())
+    connections, descriptors = [], []
+    with tempfile.TemporaryDirectory(prefix='aswp-activation-') as temporary:
+        directory = Path(temporary)
+        admin_args = ['sudo', '-n', '--preserve-env=' + PRESERVE,
+                      '/usr/bin/timeout', '--kill-after=3s', '40s', '/usr/bin/python3', script,
+                      '--admin']
+        identity_args = [str(directory), str(os.getuid()), str(os.getgid())]
+        try:
+            subprocess.run(admin_args + ['install'] + identity_args, check=True, timeout=50)
+            meta = endpoint(prefix).lstat()
+            require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
+                    'activation socket ownership or mode differs')
+            first, first_report, first_fd = activate(prefix, directory)
+            connections.append(first)
+            descriptors.append(first_fd)
+            second, second_report, second_fd = activate(prefix, directory)
+            connections.append(second)
+            descriptors.append(second_fd)
+            require(first_report['invocation'] != second_report['invocation']
+                    and first_report['unit'] != second_report['unit'], 'connections share an activation invocation')
+            subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE, '/usr/bin/python3', script, '--deny-other-user'],
+                           check=True, timeout=8)
+            before = (directory / second_report['invocation'] / 'heartbeat').read_text()
+            live_before_disconnect(directory, first_report)
+            first.close()
+            retired(directory, first_report, first_fd)
+            wait_for(lambda: (directory / second_report['invocation'] / 'heartbeat').read_text() != before, seconds=3)
+            require(Path('/sys/fs/cgroup' + second_report['group']).exists(), 'first disconnect retired the other connection')
+            live_before_disconnect(directory, second_report)
+            second.close()
+            retired(directory, second_report, second_fd)
+            print('::notice title=Linux fixed-user activation::two ordinary connections received distinct root-managed scopes; both refused migration writes; each disconnect was followed by stopped detached writer and original scope removal; sibling continued; no production launch qualification', flush=True)
+        finally:
+            for connection in connections:
+                connection.close()
+            for descriptor in descriptors:
+                os.close(descriptor)
+            subprocess.run(admin_args + ['cleanup'] + identity_args, check=True, timeout=50)
+    print('::notice title=Linux fixed-user activation cleanup::temporary socket, template units, service instances and fixture files removed', flush=True)
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) == 4 and args[0] == '--service':
+        service(Path(args[1]), args[2], args[3])
+    elif len(args) == 2 and args[0] == '--writer':
+        writer(Path(args[1]))
+    elif len(args) == 5 and args[0] == '--admin':
+        admin(args[1], Path(args[2]), args[3], args[4])
+    elif args == ['--deny-other-user']:
+        deny_other_user()
+    else:
+        require(not args, 'unexpected activation fixture arguments')
+        suite()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        diagnostic = json.dumps(str(error)[-2000:], ensure_ascii=True)[1:-1].replace('%', '%25')
+        print('::error title=Linux fixed-user activation::' + diagnostic, flush=True)
+        sys.exit(1)
