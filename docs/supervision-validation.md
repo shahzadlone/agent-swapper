@@ -104,6 +104,31 @@ processes. Same-user malicious interference, external services, filesystem and
 credential isolation, actual provider versions and account refresh remain outside
 this evidence. See [custody](custody.md) and the [support matrix](support-matrix.md).
 
+### Selected-parent qualification
+
+Microsoft's [process-attribute reference](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
+documents that `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS` selects a different parent
+and that inherited attributes include its Job. Ordinary-child inheritance must
+not be generalized to every process a target can arrange to create. The local
+empty-Job receipt remains restricted to that Job; it enables no automatic switch.
+
+The dedicated `ffi::process_tests::alternate_parent_custody` fixture starts only
+owned test processes. Its controller creates an outside peer before installing
+its nested root, then admits a target through the production per-run backend.
+That target starts both an ordinary writer and a writer selecting the fresh
+peer as parent, with no inherited handles. Opening the peer requires ordinary
+`PROCESS_CREATE_PROCESS` and query access; its creation time must match the live
+controller-owned handle. The fixture changes no privileges or process DACLs.
+
+After the inner empty receipt, the ordinary writer must have stopped and the
+outside peer must answer a fresh file challenge. The alternate writer must
+either stop or answer its own fresh challenge while still holding its lifetime
+lock. Both outcomes are recorded as measurements, not a promotion. A separate
+outer production Job must retire all writers before success. All children have
+deadlines, isolated fixture files and an authentication-free environment. The
+native attribute FFI is test-only in the Windows security crate; core and CLI
+keep their unsafe-code prohibition. Native results are pending.
+
 The next Linux guardian design and its separately bounded fixture checks are
 documented in [Linux supervision](linux-supervision.md). They do not promote the
 production Linux custody state.

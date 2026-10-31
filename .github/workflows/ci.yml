@@ -84,6 +84,11 @@ jobs:
         timeout-minutes: 2
         run: |
           cargo +1.98.0 test --locked -p agentswapper-windows-security ffi::tests:: -- --nocapture
+      - name: Windows alternate-parent custody qualification
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: |
+          cargo +1.98.0 nextest run --locked -p agentswapper-windows-security --profile ci --run-ignored only -E 'test(=ffi::process_tests::alternate_parent_custody)' --success-output immediate --no-output-indent
       - name: Windows ACL separate identity
         if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
         timeout-minutes: 3

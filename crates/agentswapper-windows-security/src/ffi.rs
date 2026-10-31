@@ -750,6 +750,11 @@ impl SecurityPolicy {
 
 #[cfg(test)]
 mod identity_tests;
+
+// Native process-attribute calls stay in this crate's audited FFI boundary;
+// the fixture exercises the core backend without adding unsafe core code.
+#[cfg(test)]
+mod process_tests;
 mod root;
 pub use root::{PrivateRoot, PublicationFile, PublicationParent, validate_publication_name};
 #[cfg(test)]

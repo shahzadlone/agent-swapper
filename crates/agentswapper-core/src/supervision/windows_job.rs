@@ -26,9 +26,10 @@ const CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(10);
 static ROOT: OnceLock<std::result::Result<Job, String>> = OnceLock::new();
 
-/// Permanently place this process in a kill-on-close root Job. Every child
-/// created afterwards inherits the Job unless an existing external Job permits
-/// breakaway. This affects the whole process and its descendants, not just one
+/// Permanently place this process in a kill-on-close root Job. Ordinary child
+/// creation using this process as the parent inherits its Job hierarchy. A
+/// selected outside parent or an external service is outside that guarantee.
+/// This affects the whole process and its ordinary descendants, not just one
 /// invocation; embedded callers must opt in deliberately. Failure is sticky and
 /// must prevent a contained launch. The non-inherited handle stays open until
 /// process termination; closing it sooner would terminate the caller itself.
@@ -154,7 +155,7 @@ impl JobChild {
         self.child.inner_mut().wait()
     }
 
-    /// Terminate remaining local descendants and observe an empty Job within
+    /// Terminate remaining Job members and observe an empty Job within
     /// five seconds. Consumes admission authority even on failure. Query errors,
     /// including membership-buffer overflow, never produce an empty receipt.
     pub fn stop_and_observe(self) -> io::Result<StoppedScope> {
