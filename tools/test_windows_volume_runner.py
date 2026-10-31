@@ -19,6 +19,7 @@ function cargo {
 """
 BASIC = "::notice title=Owned volume root reparse measurement::basic: OS result 5"
 EXTENDED = "::notice title=Owned volume root reparse measurement::extended: OS result 5"
+CUSTODY = "::notice title=Owned volume root custody::controls and cleanup passed"
 PASSED = "test result: ok. 1 passed; 0 failed; 0 ignored; 9 filtered out"
 
 
@@ -40,24 +41,24 @@ class VolumeRunnerTests(unittest.TestCase):
         )
 
     def test_prefixed_notice_is_republished_at_column_zero(self):
-        result = self.invoke(["test fixture ... " + BASIC, EXTENDED, PASSED])
+        result = self.invoke(["test fixture ... " + BASIC, EXTENDED, CUSTODY, PASSED])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(BASIC, result.stdout.splitlines())
 
     def test_zero_matches_cannot_supply_evidence(self):
-        result = self.invoke([BASIC, EXTENDED, "test result: ok. 0 passed; 0 failed;"])
+        result = self.invoke([BASIC, EXTENDED, CUSTODY, "test result: ok. 0 passed; 0 failed;"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exactly one passing test required", result.stdout)
 
     def test_missing_or_duplicate_measurement_fails(self):
-        for lines in ([BASIC, PASSED], [BASIC, BASIC, EXTENDED, PASSED]):
+        for lines in ([BASIC, PASSED], [BASIC, BASIC, EXTENDED, CUSTODY, PASSED], [BASIC, EXTENDED, PASSED]):
             with self.subTest(lines=lines):
                 result = self.invoke(lines)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unique result/cleanup notice required", result.stdout)
 
     def test_failed_cargo_cannot_hide_behind_success_text(self):
-        result = self.invoke([BASIC, EXTENDED, PASSED, "failure 50%\nnew line"], 101)
+        result = self.invoke([BASIC, EXTENDED, CUSTODY, PASSED, "failure 50%\nnew line"], 101)
         self.assertNotEqual(result.returncode, 0)
         annotation = [line for line in result.stdout.splitlines() if line.startswith("::error")]
         self.assertEqual(len(annotation), 1)

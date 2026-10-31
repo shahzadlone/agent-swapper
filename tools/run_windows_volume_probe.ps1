@@ -22,7 +22,8 @@ switch ($Kind) {
         $testName = $prefix + 'formatted::root_probe::owned_volume_root_directory_tag_behavior_has_matched_other_user_controls'
         $notices = @(
             '::notice title=Owned volume root reparse measurement::basic:',
-            '::notice title=Owned volume root reparse measurement::extended:'
+            '::notice title=Owned volume root reparse measurement::extended:',
+            '::notice title=Owned volume root custody::'
         )
     }
 }

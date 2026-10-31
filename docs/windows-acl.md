@@ -515,8 +515,10 @@ The actual volume-root handle still excludes writes for the guard's lifetime.
 This can refuse startup when a directory writer already exists and block trusted
 operations that open that root for writing, including root-targeted renames.
 This is an availability/compatibility limit, not a promise to withstand denial
-of service. Root reparse behavior remains unqualified; do not remove its write
-exclusion based on ordinary-directory tests. Any mutation probe requires a newly
+of service. The disposable-volume probe below demonstrates that a standard user
+with AD4 can set a directory-bit reparse tag on an actual NTFS volume root;
+its write exclusion must not be removed based on an immutability assumption.
+Any mutation probe requires a newly
 owned disposable volume, never an existing machine's volume root.
 
 A separate CI-only ownership fixture creates a new empty 64 MiB VHD beneath
@@ -542,14 +544,14 @@ A focused Opus 5.5 xhigh review of this fixture found no FFI ownership defect or
 operation targeting an existing disk. Its required isolation and exact-removal
 checks are included, along with an already-enabled privilege control. The empty-disk native step passed at `6c80e11` in
 [CI run 41150053873](https://github.com/shahzadlone/agent-swapper/actions/runs/41150053873);
-its remaining pipeline jobs were still running when recorded. This factory is
+its complete platform/candidate/rebuild pipeline subsequently passed. This factory is
 not evidence about volume-root reparse behavior and is not part of the product
 runtime.
 
 A second ignored fixture has completed a focused Opus source review and is
 enabled in a separate exact-test CI step. It passed at `26c1dcd` in
 [CI run 41151606943](https://github.com/shahzadlone/agent-swapper/actions/runs/41151606943);
-the other pipeline jobs were still running when this step was recorded.
+the complete platform/candidate/rebuild pipeline subsequently passed.
 It exclusively creates a fresh image through that factory, initializes and
 formats that image using explicit Storage CIM objects, and refuses ambiguous
 image/disk/partition associations or system/boot/clustered/nonvirtual devices.
@@ -584,19 +586,38 @@ account removal and disk cleanup precede result reporting.
 
 Each of the three CI steps now requires exactly one passing test and its expected
 result notices. The third requires an additional `ASWP_CI_ROOT_MUTATION_FIXTURE`
-opt-in, an isolated test process and its own timeout. Its first native result is
-pending. The first instrumented root run at `afb4f37`,
+opt-in, an isolated test process and its own timeout. The first instrumented root run at `afb4f37`,
 [41152814793](https://github.com/shahzadlone/agent-swapper/actions/runs/41152814793),
 failed with access denied (5) on the standard user's initial readable-canary
 control, before any reparse measurement. The preceding uninstrumented root run
-also failed; neither is evidence of root reparse refusal. The suspected device
-boundary is being tested by giving only that fresh fixture SID the same
+also failed; neither is evidence of root reparse refusal. The fixture now
+admits only that fresh fixture SID with the same
 read/traverse/AD4 mask in the attachment descriptor. The image file remains
 private. Device access to this newly created disk is a test capability, so the
 private-file read check measures the file DACL, not whole-volume privacy against
 raw-device access. The other two disk stages keep their original private device
 descriptor. Either root success or a nonzero native refusal is recorded as an OS/tag
 observation, never an automatic production-policy promotion.
+
+At `0aa0047`, [CI run 41153576081](https://github.com/shahzadlone/agent-swapper/actions/runs/41153576081)
+passed the three native disk steps, diagnostic-runner contract and full Windows
+test job. Both actual-root SET operations returned **success (0)**; tag removal,
+matched nonempty controls, canaries, account removal and disk cleanup passed.
+This was Windows Server 2025 build `10.0.26100`, hosted image
+`win25-vs2026` / `20261021.278.1`. It establishes root mutability for the tested
+tag and APIs, not arbitrary tags or other OS builds. Candidate rebuild jobs
+were still running when this result was recorded. The follow-up source review
+of the device-descriptor delta was withheld by Opus's safety filter and is not
+counted as a completed review; the earlier fixture reviews predate that delta.
+
+A follow-up root-specific protection regression retains the production anchor's
+access/share flags on this same owned volume. It requires a preexisting AD4
+writer to block guard admission, then verifies later AD4/MAXIMUM_ALLOWED opens
+are refused while the guard lives. Metadata-only basic/extended operations must
+fail with access denied between successful nonempty controls. Its native result
+is pending, and the wrapper requires its additional custody notice before it
+can pass. Platform evidence now also records the Windows UBR update revision
+when readable; it is configuration metadata, not loaded-driver attestation.
 
 The review's suggestion to use `SetKernelObjectSecurity` was rejected:
 [Microsoft explicitly directs filesystem callers to SetSecurityInfo instead](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setkernelobjectsecurity).

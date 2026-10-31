@@ -238,7 +238,7 @@ fn owned_volume_root_directory_tag_behavior_has_matched_other_user_controls() {
     drop(control);
     let control = matched;
     let path = fixture.path.clone();
-    let results = std::thread::spawn(move || {
+    let (results, preexisting_writer, token) = std::thread::spawn(move || {
         // SAFETY: this fixture owns the fresh standard-user logon token. The
         // thread-bound guard restores its identity before any result/unwind.
         assert_ne!(unsafe { ImpersonateLoggedOnUser(token.as_raw_handle()) }, 0);
@@ -311,11 +311,75 @@ fn owned_volume_root_directory_tag_behavior_has_matched_other_user_controls() {
             measure_tag(&control, &payload, input, operation).unwrap();
             results.push((label, result));
         }
-        results
+        (results, root, token)
+    })
+    .join()
+    .unwrap();
+    // Match the production volume anchor's share-accounted access and sharing.
+    // A preexisting AD4 writer must prevent this guard from being admitted.
+    let mut guarded_options = std::fs::OpenOptions::new();
+    guarded_options
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    assert_eq!(
+        guarded_options
+            .open(&fixture.path)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(32)
+    );
+    drop(preexisting_writer);
+    let guard = guarded_options.open(&fixture.path).unwrap();
+    assert_eq!(identity(&guard), root_id);
+    let path = fixture.path.clone();
+    let guarded = std::thread::spawn(move || {
+        // SAFETY: same owned fixture token; restoration is thread-bound and
+        // precedes returning or unwinding back to the owning test thread.
+        assert_ne!(unsafe { ImpersonateLoggedOnUser(token.as_raw_handle()) }, 0);
+        let _restore = RestoreIdentity(PhantomData);
+        for access in [FILE_ADD_SUBDIRECTORY, MAXIMUM_ALLOWED] {
+            assert_eq!(
+                reparse::open_directory(&path, access)
+                    .unwrap_err()
+                    .raw_os_error(),
+                Some(32)
+            );
+        }
+        let metadata = reparse::open_directory(&path, FILE_READ_ATTRIBUTES).unwrap();
+        assert_eq!(identity(&metadata), root_id);
+        let control = reparse::open_directory(
+            &path.join("nonempty-ad4"),
+            FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY,
+        )
+        .unwrap();
+        assert_eq!(identity(&control), control_id);
+        let mut payload = vec![0_u8; 24];
+        payload[..4].copy_from_slice(&0x1000_0042_u32.to_le_bytes());
+        getrandom::fill(&mut payload[8..]).unwrap();
+        payload[8] |= 1;
+        let mut extended = vec![0_u8; 32];
+        extended.extend_from_slice(&payload);
+        for (operation, input) in [
+            (FSCTL_SET_REPARSE_POINT, &payload),
+            (FSCTL_SET_REPARSE_POINT_EX, &extended),
+        ] {
+            measure_tag(&control, &payload, input, operation).unwrap();
+            denied(
+                measure_tag(&metadata, &payload, input, operation),
+                "metadata-only mutation of guarded owned volume root",
+            );
+            assert_eq!(
+                metadata.metadata().unwrap().file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+                0
+            );
+            measure_tag(&control, &payload, input, operation).unwrap();
+        }
     })
     .join();
+    drop(guard);
     account.remove().unwrap();
-    let results = results.unwrap();
+    guarded.unwrap();
     for path in [
         fixture.path.join("root-canary.txt"),
         fixture.path.join("nonempty-ad4/child-canary.txt"),
@@ -333,4 +397,7 @@ fn owned_volume_root_directory_tag_behavior_has_matched_other_user_controls() {
             "::notice title=Owned volume root reparse measurement::{label}: OS result {code} (0 means installed and removed); matched nonempty directory control succeeded under standard user with AD4-only mutation grant; canaries and cleanup passed; tested tag/OS only, no policy promotion"
         );
     }
+    println!(
+        "::notice title=Owned volume root custody::preexisting AD4 writer prevented guard admission; retained read-only sharing refused later AD4 and MAXIMUM_ALLOWED opens with sharing violation; metadata-only basic/extended SET refused with access denied between successful matched controls; canaries and cleanup passed"
+    );
 }
