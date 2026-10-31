@@ -74,6 +74,13 @@ def mounted_case(case, binary, uid, gid):
             # private namespace overlay. It executes the observer as the user.
             target = subprocess.Popen(['/usr/bin/python3', script, '--probe-child', binary, str(uid), str(gid)],
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # The child must validate its real namespace view before a fake
+            # procfs overlay hides /proc/self/ns/mnt. Its ready byte is fixture
+            # synchronization, consumed here rather than observer output.
+            with selectors.DefaultSelector() as selector:
+                selector.register(target.stdout, selectors.EVENT_READ)
+                require(selector.select(5) and os.read(target.stdout.fileno(), 1) == b'R',
+                        'probe child did not validate its private namespace')
             if case == 'map-overlay':
                 source = root / 'uid_map'
                 source.write_text('         0          0 4294967295\n')
@@ -129,6 +136,7 @@ def main():
         role, path, uid, gid = args
         uid, gid = identity(uid, gid)
         if role == '--probe-child':
+            os.write(sys.stdout.fileno(), b'R')
             require(sys.stdin.buffer.read(2) == b'GO', 'missing fixture release')
             drop(uid, gid)
             os.execv(path, [path])
