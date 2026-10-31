@@ -21,7 +21,10 @@ ignored, and the harness verifies an override listener receives no connection.
 
 All manager calls use its unique bus name. Success replies require the expected
 sender. Unit reads bracket properties with the invocation ID and recheck the
-bus owner; both object-path lookup methods must agree. The unit must be an
+bus owner. `GetUnit` and `GetUnitByInvocationID` intentionally return different
+object paths: the latter addresses one invocation and expires with it. The
+observer reads properties through that invocation path and cross-checks its
+identity with the named unit before and after. The unit must be an
 active transient `aswp-managed-*.service` with the expected user/PID/cgroup,
 `Delegate=false` and `KillMode=control-group`. The optional cgroup
 `user.invocation_id` xattr is recorded only by length, equality and errno, and
@@ -54,6 +57,15 @@ disposable Ubuntu 22.04 and 24.04 must pass `--require-manager`, then compare
 the live unit snapshots during graceful stop, forced stop and client loss.
 Those native results are pending. The only service creation remains the
 existing explicitly gated hosted fixture. Never spoof its CI guards locally.
+
+The first Ubuntu 22.04 run at `94b52d9` authenticated the root socket listener
+and root/PID-1 manager, with no `ProcessFD` credential. Its live-unit check
+refused because the initial code incorrectly required the two lookup paths to
+be equal. The correction follows systemd's
+[invocation-path implementation](https://github.com/systemd/systemd/blob/v249/src/core/dbus-manager.c)
+and requires its own completed native run; the failed run is not unit-observer
+qualification. The earlier architecture review made the same incorrect path
+assumption, so its recommendation was not adopted unchanged.
 
 Opus 5.5 xhigh reviewed the next-stage architecture and recommended this
 measurement before selecting a production peer policy. Later checkpoints need

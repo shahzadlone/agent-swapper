@@ -309,19 +309,31 @@ async fn snapshot(
     owner: &str,
     expected: &Expected,
 ) -> io::Result<UnitFact> {
-    let path = manager_call(connection, owner, "GetUnit", &(&expected.unit,)).await?;
+    let name_path = manager_call(connection, owner, "GetUnit", &(&expected.unit,)).await?;
     require(
-        path.as_str() == unit_path(&expected.unit),
+        name_path.as_str() == unit_path(&expected.unit),
         "unexpected unit object path",
     )?;
     let first = Vec::<u8>::try_from(
-        property(connection, owner, &path, UNIT_INTERFACE, "InvocationID").await?,
+        property(
+            connection,
+            owner,
+            &name_path,
+            UNIT_INTERFACE,
+            "InvocationID",
+        )
+        .await?,
     )
     .map_err(io::Error::other)?;
     require(
         first.len() == 16 && first.iter().any(|b| *b != 0),
         "invalid invocation bytes",
     )?;
+    // systemd intentionally returns an invocation-specific object path here.
+    // It differs from GetUnit's name path and expires with this invocation.
+    // Bind the properties read through that object, rather than assuming the
+    // two path strings must match or continuing to address a reusable name.
+    let path = manager_call(connection, owner, "GetUnitByInvocationID", &(&first,)).await?;
     let id = String::try_from(property(connection, owner, &path, UNIT_INTERFACE, "Id").await?)
         .map_err(io::Error::other)?;
     let active =
@@ -351,17 +363,26 @@ async fn snapshot(
     )
     .map_err(io::Error::other)?;
     let invocation = first.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let named_last = Vec::<u8>::try_from(
+        property(
+            connection,
+            owner,
+            &name_path,
+            UNIT_INTERFACE,
+            "InvocationID",
+        )
+        .await?,
+    )
+    .map_err(io::Error::other)?;
     require(
         first == last
+            && first == named_last
             && expected
                 .invocation
                 .as_ref()
                 .is_none_or(|v| v == &invocation),
         "invocation changed",
     )?;
-    let by_invocation =
-        manager_call(connection, owner, "GetUnitByInvocationID", &(&first,)).await?;
-    require(by_invocation == path, "invocation lookup disagrees")?;
     require(
         id == expected.unit
             && active == "active"
