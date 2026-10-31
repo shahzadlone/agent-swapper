@@ -515,7 +515,11 @@ Those follow-up controls passed at `9002a4f` in
 Both Windows ACL steps, including the separate-user/core consumer fixture,
 ConPTY dashboard and handover transitions, journal/concurrency stress, and all
 three platform test/candidate/rebuild jobs passed. The integration is merged
-into `main`; the branch run skipped preview attestation by design. These results
+into `main`; the branch run skipped preview attestation by design. The complete
+`main` pipeline at the same commit subsequently passed, including preview
+provenance verification, in
+[CI run 41150225182](https://github.com/shahzadlone/agent-swapper/actions/runs/41150225182).
+These results
 do not resolve the actual volume-root limit or qualify real vendor processes.
 
 The actual volume-root handle still excludes writes for the guard's lifetime.

@@ -12,8 +12,13 @@ three separate-runner byte comparisons. It is now merged into `main`. Core
 registry/configuration access and profile leases retain the native directory
 guards. Three focused Opus source reviews and their follow-up native controls
 are recorded in [Windows ACL evidence](windows-acl.md#production-integration-review-follow-up).
-That branch run intentionally skipped preview attestation; the subsequent
-`main` pipeline must produce its own provenance. The actual volume-root guard
+That branch run intentionally skipped preview attestation. The subsequent
+`main` runs at `9002a4f`
+([41150225182](https://github.com/shahzadlone/agent-swapper/actions/runs/41150225182))
+and `9493794`
+([41150628906](https://github.com/shahzadlone/agent-swapper/actions/runs/41150628906))
+passed the full pipeline, including preview provenance verification.
+The actual volume-root guard
 still excludes writes and has a documented compatibility limit. Doctor continues
 to report `acl_not_verified`; real-provider isolation is not promoted.
 
@@ -36,8 +41,9 @@ under an externally retained root guard,
 the dependency policy, all three candidate builds, separate-runner byte
 comparisons and preview provenance verification. Subsequent changes need their
 own completed run. The ACL candidate was not linked into the CLI at that
-revision. The subsequent production integration needs its own native results
-and independent review; this run does not establish production storage privacy.
+revision. The subsequent production integration required its own native results
+and independent review, recorded above; this earlier run alone does not establish
+production storage privacy.
 Real-provider qualification, automated
 subscription switching, platform containment and signed public distribution
 remain separate unfinished gates.
