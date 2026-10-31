@@ -182,17 +182,25 @@ def service(directory, uid, unit):
                 'activation control socket is not sequenced-packet')
         peer_pid, peer_uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         require(peer_uid == uid and peer_pid > 0, 'activation client identity differs')
-        request, ancillary, flags, _ = connection.recvmsg(4, 0)
-        require(request == b'GO\n' and not ancillary
+        request, ancillary, flags, _ = connection.recvmsg(6, 0)
+        require(request in (b'GO\n', b'BIND\n') and not ancillary
                 and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC), 'invalid fixture activation request')
+        report = {'unit': unit, 'invocation': invocation, 'pid': os.getpid(), 'uid': uid,
+                  'group': group, 'peer_uid': peer_uid, 'peer_pid': peer_pid, 'started': started}
+        if request == b'BIND\n':
+            # The Rust observer authenticates this message's SCM_CREDENTIALS,
+            # then binds the claimed invocation through the system manager.
+            # This branch accepts no launch request and creates no worker.
+            connection.sendall(json.dumps(report).encode() + b'\n')
+            connection.settimeout(12)
+            require(connection.recv(1) == b'', 'bind-only probe sent launch data')
+            return
         run = directory / invocation
         run.mkdir(mode=0o700)
         subprocess.Popen(['/usr/bin/python3', str(Path(__file__).resolve()), '--writer', str(run)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          close_fds=True, start_new_session=True)
         wait_for(lambda: (run / 'heartbeat').exists(), seconds=5)
-        report = {'unit': unit, 'invocation': invocation, 'pid': os.getpid(), 'uid': uid,
-                  'group': group, 'peer_uid': peer_uid, 'peer_pid': peer_pid, 'started': started}
         connection.sendall(json.dumps(report).encode() + b'\n')
         connection.settimeout(20)
         require(connection.recv(1) == b'', 'unexpected fixture activation command')
@@ -310,6 +318,24 @@ def suite():
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')
+            observer = os.environ.get('ASWP_MANAGED_OBSERVER')
+            require(observer and Path(observer).is_absolute(), 'Rust activation observer path is required')
+            observed = subprocess.run([observer, '--activation-probe', prefix], stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=40, check=False)
+            require(observed.returncode == 0, 'Rust activation binding failed: ' + observed.stderr[-2000:])
+            require(len(observed.stdout) <= 16384, 'activation observer report exceeds bounds')
+            records = [json.loads(line) for line in observed.stdout.splitlines()]
+            require(len(records) == 2 and [r['phase'] for r in records] == ['activation_bound', 'activation_retired']
+                    and records[0]['unit'] == records[1]['unit']
+                    and records[0]['activation'] == records[1]['activation']
+                    and records[0]['activation']['sender_pid'] == records[0]['unit']['pid']
+                    and records[0]['activation']['sender_uid'] == os.getuid()
+                    and records[0]['activation']['launch_data_sent'] is False
+                    and records[1]['retirement']['original_directory_removed'] is True
+                    and records[1]['retirement']['main_pidfd_exited'] is True,
+                    'Rust activation binding or retirement evidence differs')
+            require(not any(directory.iterdir()), 'bind-only observation started a worker')
+            print('::notice title=Linux activation binding::kernel message sender matched manager MainPID and invocation; original scope retired after disconnect; no launch data or worker', flush=True)
             with open('/dev/null', 'rb') as harmless:
                 faults = [('oversized control packet', b'GO\nextra', []),
                           ('unexpected descriptor', b'GO\n',

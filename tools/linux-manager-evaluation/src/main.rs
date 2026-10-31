@@ -1,6 +1,8 @@
 //! Read-only transport qualification. No service creation or custody receipt.
 #![forbid(unsafe_code)]
 
+mod activation;
+mod activation_packet;
 mod kernel;
 mod watch;
 
@@ -94,6 +96,13 @@ struct Expected {
     user: u32,
     pid: u32,
     invocation: Option<String>,
+    kind: UnitKind,
+}
+
+#[derive(Debug)]
+enum UnitKind {
+    Transient,
+    Activated { fragment: String },
 }
 
 impl Expected {
@@ -135,6 +144,7 @@ impl Expected {
             user,
             pid,
             invocation,
+            kind: UnitKind::Transient,
         }))
     }
 }
@@ -324,6 +334,24 @@ async fn snapshot(
     let transient =
         bool::try_from(property(connection, owner, &path, UNIT_INTERFACE, "Transient").await?)
             .map_err(io::Error::other)?;
+    match &expected.kind {
+        UnitKind::Transient => require(transient, "expected a transient fixture unit")?,
+        UnitKind::Activated { fragment } => {
+            let actual = String::try_from(
+                property(connection, owner, &path, UNIT_INTERFACE, "FragmentPath").await?,
+            )
+            .map_err(io::Error::other)?;
+            let drop_ins = Vec::<String>::try_from(
+                property(connection, owner, &path, UNIT_INTERFACE, "DropInPaths").await?,
+            )
+            .map_err(io::Error::other)?;
+            require(
+                !transient && actual == *fragment && drop_ins.is_empty(),
+                "activation template or drop-ins differ",
+            )?;
+            activation::protected_fragment(fragment)?;
+        }
+    }
     let pid =
         u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
             .map_err(io::Error::other)?;
@@ -368,7 +396,6 @@ async fn snapshot(
     require(
         id == expected.unit
             && active == "active"
-            && transient
             && pid == expected.pid
             && user == expected.user.to_string()
             && group == format!("/system.slice/{}", expected.unit)
@@ -413,6 +440,8 @@ struct Report {
     dbus_override_ignored: bool,
     unit: Option<UnitFact>,
     retirement: Option<kernel::Retirement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activation: Option<activation::Fact>,
 }
 
 async fn admit(
@@ -491,6 +520,7 @@ async fn admit(
             dbus_override_ignored: std::env::var_os("DBUS_SYSTEM_BUS_ADDRESS").is_some(),
             unit,
             retirement: None,
+            activation: None,
         };
         Ok((owner_before, report, kernel))
     }
@@ -546,6 +576,29 @@ async fn inspect(
 
 fn run() -> io::Result<Report> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "--activation-probe") {
+        require(
+            args.len() == 2,
+            "activation probe requires one fixture prefix",
+        )?;
+        let paths = prerequisites()?;
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(35),
+                    activation::inspect(paths, &args[1]),
+                )
+                .await
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "activation observation deadline exceeded",
+                    )
+                })?
+            });
+    }
     let watch = args.first().is_some_and(|arg| arg == "--watch");
     if watch {
         args.remove(0);

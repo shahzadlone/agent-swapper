@@ -265,6 +265,7 @@ jobs:
         timeout-minutes: 3
         env:
           ASWP_CI_SOCKET_ACTIVATION: '1'
+          ASWP_MANAGED_OBSERVER: ${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation
         run: python3 tools/check_linux_socket_activation.py
 
   linux-namespace-evidence:

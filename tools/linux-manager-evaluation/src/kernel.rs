@@ -276,7 +276,9 @@ impl Binding {
     pub(crate) fn bind(unit: &str, user: u32, pid: u32) -> io::Result<Self> {
         // The caller has already restricted the unit to one safe fixture name.
         require(
-            !unit.contains('/') && unit.starts_with("aswp-managed-") && unit.ends_with(".service"),
+            !unit.contains('/')
+                && unit.ends_with(".service")
+                && (unit.starts_with("aswp-managed-") || crate::activation::valid_scope_unit(unit)),
             "invalid scope leaf",
         )?;
         let mut dir = rustix::fs::open("/", DIRECTORY, Mode::empty())?;

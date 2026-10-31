@@ -99,6 +99,20 @@ An added control sends an otherwise valid packet with an unexpected harmless
 descriptor; its native result is pending. This experiment does not yet use the
 Rust guardian or carry real launch data.
 
+The next isolated Rust probe enables `SO_PASSCRED` before connecting, checks the
+root-manager listener, and receives a bounded offer with the actual message
+sender's kernel credentials. It requires that sender to match the manager's
+`MainPID`, ordinary user and invocation, with the expected protected template,
+no drop-ins, and retained process/cgroup handles. It then disconnects and waits
+for authenticated retirement of that original scope. It sends no GO, launch
+envelope or descriptor and must create no worker. Native results are pending.
+Local tests cover truncated, empty, late and uncredentialed packets, and prove
+that an unexpected transferred descriptor is closed on refusal. The distinction
+between connection-time peer credentials and message credentials is described
+in the [Linux UNIX socket manual](https://man7.org/linux/man-pages/man7/unix.7.html).
+This measures fixture identity only; it does not validate an installed guardian
+binary, authorize a journal transition or qualify production execution.
+
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready
 for review. Opus implementation review is also outstanding while the current
