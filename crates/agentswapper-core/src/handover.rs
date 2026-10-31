@@ -983,7 +983,11 @@ mod tests {
             "HANDOVER_NEW.md/.",
             "HANDOVER_NEW.md/..",
         ] {
-            let path = temp.path().join(name);
+            // Preserve the spelling even if the temporary parent is verbatim.
+            let mut raw = temp.path().as_os_str().to_owned();
+            raw.push("/");
+            raw.push(name);
+            let path = PathBuf::from(raw);
             assert!(matches!(
                 write_ciphertext(&path, b"must not be written"),
                 Err(Error::HandoverOutputPath)
@@ -1000,6 +1004,21 @@ mod tests {
     #[test]
     fn windows_exports_refuse_ambiguous_spelling_before_normalization() {
         let temp = tempfile::tempdir().unwrap();
+        for spelling in [
+            r"Q:",
+            r"Q:relative.age",
+            r"\\?\Q:",
+            r"\\server\share",
+            r"\\.\NUL",
+            "NUL.age",
+            "file:stream",
+            "",
+        ] {
+            assert!(matches!(
+                windows_publication::validate_spelling(Path::new(spelling)),
+                Err(Error::HandoverOutputPath)
+            ));
+        }
         let plain = dunce::canonicalize(temp.path()).unwrap();
         let verbatim = PathBuf::from(format!(r"\\?\{}", plain.display()));
         for parent in [&plain, &verbatim] {

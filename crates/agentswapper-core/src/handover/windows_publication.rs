@@ -2,7 +2,13 @@
 
 use super::{Error, PublishedPack, Result};
 use agentswapper_windows_security::{Error as SecurityError, PublicationParent, SecurityPolicy};
-use std::{ffi::OsStr, fs::File, io::Write, os::windows::ffi::OsStrExt, path::Path};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io::Write,
+    os::windows::ffi::OsStrExt,
+    path::{Component, Path, Prefix},
+};
 
 pub(super) fn validate_spelling(path: &Path) -> Result<()> {
     // GetFullPathNameW and Path::file_name can erase these before the native
@@ -13,7 +19,18 @@ pub(super) fn validate_spelling(path: &Path) -> Result<()> {
     ) {
         return Err(Error::HandoverOutputPath);
     }
-    Ok(())
+    let Some(Component::Normal(name)) = path.components().next_back() else {
+        return Err(Error::HandoverOutputPath);
+    };
+    let mut components = path.components();
+    if matches!(components.next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+        && components.next() != Some(Component::RootDir)
+    {
+        // Drive-relative spelling depends on an unrelated drive's saved cwd.
+        return Err(Error::HandoverOutputPath);
+    }
+    agentswapper_windows_security::validate_publication_name(name)
+        .map_err(|_| Error::HandoverOutputPath)
 }
 
 fn map_security(error: SecurityError) -> Error {
@@ -33,14 +50,34 @@ struct PendingFile<'parent> {
 
 impl PendingFile<'_> {
     fn discard(self) -> Result<()> {
-        let Self { file, path, .. } = self;
+        let Self {
+            file,
+            path,
+            _parent: parent,
+        } = self;
         drop(file);
-        discard_path(path)
+        discard_path(path, parent)
     }
 }
 
-fn discard_path(path: tempfile::TempPath) -> Result<()> {
+fn discard_path(path: tempfile::TempPath, _parent: &PublicationParent) -> Result<()> {
     path.close().map_err(|_| Error::HandoverCleanupFailed)
+}
+
+fn persist_path(
+    temporary: tempfile::TempPath,
+    output: &Path,
+    parent: &PublicationParent,
+) -> Result<()> {
+    if let Err(error) = temporary.persist_noclobber(output) {
+        discard_path(error.path, parent)?;
+        return Err(if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::OutputExists
+        } else {
+            Error::Io(error.error)
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn publish_private_bytes(
@@ -57,11 +94,11 @@ pub(super) fn publish_private_bytes(
     let policy = SecurityPolicy::for_current_process().map_err(map_security)?;
     // Do not canonicalize through links before acquiring the native chain.
     let parent = policy
-        .open_publication_parent(absolute.parent().ok_or(Error::UnsafeHandoverOutput)?)
+        .open_publication_parent(absolute.parent().ok_or(Error::HandoverOutputPath)?)
         .map_err(map_security)?;
     let output = parent
-        .child_path(absolute.file_name().ok_or(Error::UnsafeHandoverOutput)?)
-        .map_err(map_security)?;
+        .child_path(absolute.file_name().ok_or(Error::HandoverOutputPath)?)
+        .map_err(|_| Error::HandoverOutputPath)?;
     output.to_str().ok_or(Error::NonUtf8Path)?;
     // Advisory early error only; exclusive rename is the authoritative check.
     if std::fs::symlink_metadata(&output).is_ok() {
@@ -93,19 +130,12 @@ pub(super) fn publish_private_bytes(
     let PendingFile {
         file,
         path: temporary,
-        ..
+        _parent: retained_parent,
     } = pending;
     drop(file);
     // Parent custody and the file's protected DACL remain in force while the
     // handle is closed. Same-user/admin mutation is outside this boundary.
-    if let Err(error) = temporary.persist_noclobber(&output) {
-        discard_path(error.path)?;
-        return Err(if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-            Error::OutputExists
-        } else {
-            Error::Io(error.error)
-        });
-    }
+    persist_path(temporary, &output, retained_parent)?;
     Ok(PublishedPack {
         path: dunce::simplified(&output).to_owned(),
         directory_synced: false,

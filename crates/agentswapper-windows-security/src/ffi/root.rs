@@ -14,6 +14,12 @@ use windows_sys::Win32::Storage::FileSystem::{
 const MAX_COMPONENTS: usize = 128;
 const MAX_PATH_UNITS: usize = 32767;
 
+/// Validate one publication filename before a Win32 path-normalization call.
+/// Performs no filesystem access and accepts no directory/stream syntax.
+pub fn validate_publication_name(name: &OsStr) -> Result<()> {
+    wide_component(name).map(|_| ())
+}
+
 #[derive(Clone, Copy)]
 enum DirectoryPolicy {
     Private,
@@ -80,6 +86,7 @@ pub struct PublicationParent {
 
 /// One exclusively created, validated file paired with its actual path and
 /// borrowed parent custody. The caller owns publication or removal of the file.
+#[must_use = "publish or remove this newly created file while retaining its parent"]
 pub struct PublicationFile<'parent> {
     file: File,
     path: PathBuf,

@@ -761,8 +761,20 @@ root and core publication tests remain in the suite. The prior review's generic
 rights concern did not fail the native run; new fixtures use explicit file
 rights to remove that ambiguity. Both manifest dependencies and all-targets
 Windows type-checking were already present, and the callback requires no Send
-bound. A focused review of the corrective delta is pending. None of these
-results promotes overall Windows privacy or qualifies vendor-owned files.
+bound. A second focused Opus review found no new must-fix. Its remaining
+spelling feedback led to requiring an ordinary final filename before Windows
+normalization and refusing drive-relative forms. Both export entry points now
+use the boundary's pure component validator before normalization; filename
+failures use `handover_output_path`. The parent borrow is passed into the actual
+rename/removal helpers, and `PublicationFile` is marked must-use. These final
+changes passed all-targets Windows Clippy and await their native run.
+
+The review also noted the previously documented post-creation validation
+failure case: it can leave an empty file before the core has received a
+validated handle. That error is a boundary refusal, not the later temporary
+cleanup error; no handover bytes have been written. This remains an explicit
+limitation of the creation primitive. None of these results promotes overall
+Windows privacy or qualifies vendor-owned files.
 
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle
