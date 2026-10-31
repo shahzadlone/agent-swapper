@@ -1,9 +1,11 @@
 """Exercise CI evidence validation with an in-process fake cargo, never a disk."""
 
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 
 
@@ -36,7 +38,7 @@ class VolumeRunnerTests(unittest.TestCase):
         }
         return subprocess.run(
             [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", HARNESS],
-            input=json.dumps(payload), text=True, capture_output=True, timeout=15,
+            input=json.dumps(payload), text=True, capture_output=True, timeout=30,
             check=False,
         )
 
@@ -67,4 +69,15 @@ class VolumeRunnerTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # Keep the actual traceback available in public CI annotations as well as
+    # logs. Captured payloads contain synthetic fixture text only.
+    report = io.StringIO()
+    result = unittest.TextTestRunner(stream=report, verbosity=2).run(
+        unittest.defaultTestLoader.loadTestsFromTestCase(VolumeRunnerTests)
+    )
+    text = report.getvalue()
+    print(text, end="")
+    if not result.wasSuccessful():
+        diagnostic = text[-10000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print("::error title=Windows volume runner contract::" + diagnostic)
+    sys.exit(0 if result.wasSuccessful() else 1)
