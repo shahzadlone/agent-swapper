@@ -18,6 +18,10 @@ max-threads = 1
 max-threads = 1
 
 [[profile.default.overrides]]
+filter = 'test(=ffi::process_tests::alternate_parent_custody)'
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
 filter = 'test(/handover/)'
 test-group = "handover-crypto"
 slow-timeout = { period = "60s", terminate-after = 2 }

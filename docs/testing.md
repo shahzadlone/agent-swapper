@@ -83,6 +83,18 @@ now emitted to distinguish slow durable I/O from a stalled phase on a future
 failure. The 48 cases, assertions, serialization group and 180-second limit
 remain unchanged; no automatic retry masks the result.
 
+The Windows suite at `6ab644a` failed before the alternate-parent fixture in
+[run 41161640100](https://github.com/shahzadlone/agent-swapper/actions/runs/41161640100/job/124420264108);
+the failure reporter also exited unsuccessfully and exposed no test details.
+Source inspection found a stale Windows-only assertion for the earlier Job
+disclosure wording. It now checks both the revised Job-membership statement and
+the outside-work limitation. A local regression separately reproduced the
+reporter's inability to emit Unicode assertion trees under a legacy Windows
+code page. It now explicitly emits UTF-8 and reports malformed XML as a bounded
+annotation; tests cover encoding, workflow-command escaping and preservation of
+the replay-seed tail. These fixes require their own native run; the unavailable
+original diagnostics do not establish that these were its only failures.
+
 The separate journal crash matrix kills an owned subprocess at the event-log
 write, projection write, and immediately after commit for registration, rename,
 disable, removal, engine rebinding, native and external-session run intents,
