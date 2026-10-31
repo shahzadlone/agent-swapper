@@ -142,7 +142,14 @@ source-note ownership or hardlink restrictions; note inputs keep those checks.
 
 Outputs use a temporary file, fsync, and exclusive publication in the same
 directory. Existing files and symlinks are never overwritten. POSIX output mode
-is checked as private (0600); Windows ACL privacy is not verified. Cancellation
+is checked as private (0600). On Windows, exports now use a protected ACL
+supplied at file creation, with access for the current user, SYSTEM and
+Administrators. The existing destination folder and its ancestry stay retained
+through publication and temporary-file cleanup. Public read-only folder grants
+are accepted; grants allowing other users to mutate the destination folder are
+refused without changing its ACL. Fixed local NTFS and the current volume-root
+sharing restrictions apply. This new publication path is awaiting native
+qualification; overall Windows privacy remains unverified. Cancellation
 before publication removes the temporary file; after publication the committed
 artifact remains. Directory-sync
 status is reported separately after publication: lack of support does not

@@ -696,6 +696,31 @@ and does not establish production privacy. Its complete pipeline, including
 candidate builds, separate-runner rebuild comparisons and preview provenance,
 also passed. Later code changes need their own results.
 
+### Protected handover publication candidate
+
+Windows handover exports previously used a general-purpose temporary file whose
+ACL could inherit public reads from the selected destination. The candidate
+now supplies the exact protected file ACL before writing any bytes, checks the
+actual handle, and retains the complete parent chain through exclusive rename
+and cleanup. This applies to both ciphertext and explicit plaintext pickup.
+
+`PublicationParent` is a separate type from `PrivateRoot`. Its existing leaf
+may grant public reads or trusted owner rights, but must refuse every untrusted
+mutation grant, including AD4. The existing private-state leaf rules are not
+relaxed. No destination folders are created or repaired. Invalid single-file
+components and reparses remain refusals. The protected temporary file handle
+closes before rename or cleanup because it excludes deletion sharing; the
+parent guard and protected file ACL remain in force during that interval.
+
+New native fixtures call the real core publication APIs under owner-rights and
+public-read parents, inspect temporary and published descriptors, check
+cancellation cleanup and unchanged parent ACLs, and refuse broad/AD4 leaves.
+The separate-user fixture must reach a public control in each parent before
+private output reads, writes and deletes can count as denied. Existing core
+tests also require exclusive concurrent publication and cleanup on cancellation.
+Native results and the focused source review are pending; this does not promote
+the overall Windows privacy claim or qualify vendor-owned files.
+
 The implementation must establish an appropriate owner and restrictive DACL
 for the actual opened objects, distinguish null from empty DACLs, handle
 inheritance and unknown ACE forms conservatively, and refuse unsupported

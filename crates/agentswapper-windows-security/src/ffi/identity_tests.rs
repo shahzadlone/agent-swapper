@@ -22,6 +22,7 @@ use zeroize::Zeroizing;
 
 mod chain;
 mod drive_alias;
+mod publication;
 mod registry;
 mod remote_device;
 mod reparse;
@@ -222,6 +223,7 @@ fn separate_identity_cannot_access_private_objects() {
     remote_device::probe(&policy);
     let (chain, chain_custody) = chain::Fixture::prepare(&policy);
     let (registry, registry_custody) = registry::Fixture::prepare(&policy);
+    let (publication, publication_custody) = publication::Fixture::prepare(&policy);
     let (reparse, _reparse_custody) = reparse::Fixture::prepare(root.path(), &policy);
     let reparse_for_thread = reparse.clone();
     // Everyone can read/traverse this parent, but cannot delete children. A
@@ -337,6 +339,7 @@ fn separate_identity_cannot_access_private_objects() {
         let restore = RestoreIdentity(PhantomData);
         chain.probe_as_other_user();
         registry.probe_as_other_user();
+        publication.probe_as_other_user();
         let reparse_results = reparse_for_thread.probe_as_other_user();
         assert_eq!(
             std::fs::read(&control_for_thread).unwrap(),
@@ -430,6 +433,7 @@ fn separate_identity_cannot_access_private_objects() {
     let (private_directory_removed, reparse_results) = checked.unwrap();
     chain_custody.verify();
     registry_custody.verify();
+    publication_custody.verify();
     reparse.verify_and_remove_junction(&reparse_results);
     policy
         .validate_handle(&held_file, ObjectKind::File)

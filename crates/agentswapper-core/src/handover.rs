@@ -513,6 +513,13 @@ pub fn write_pickup(
     })
 }
 
+#[cfg(windows)]
+#[path = "handover/windows_publication.rs"]
+mod windows_publication;
+#[cfg(windows)]
+use windows_publication::publish_private_bytes;
+
+#[cfg(not(windows))]
 fn publish_private_bytes(
     path: &Path,
     bytes: &[u8],

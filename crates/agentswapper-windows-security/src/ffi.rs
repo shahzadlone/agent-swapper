@@ -751,6 +751,6 @@ impl SecurityPolicy {
 #[cfg(test)]
 mod identity_tests;
 mod root;
-pub use root::PrivateRoot;
+pub use root::{PrivateRoot, PublicationParent};
 #[cfg(test)]
 mod tests;
