@@ -130,7 +130,13 @@ def check(binary, fixture, case):
             code = w.DWORD()
             session.api.require(session.api.GetExitCodeProcess(session.process, c.byref(code)))
             result = json.loads((root / "console-result.json").read_bytes())
-            assert result["exitCode"] == expected, (case, result)
+            if result["exitCode"] != expected:
+                # Report a bounded fixture transcript without copying even the
+                # fictional password/context canaries into CI annotations.
+                observed = bytes(session.output)
+                for canary in [PASSWORD, QUEUED.encode(), b"fictional-wrong-secret-canary", b"fictional-context-canary"]:
+                    observed = observed.replace(canary, b"<fixture-canary>")
+                raise AssertionError(f"{case}: expected exit {expected}, observed {result}; output tail={observed[-2000:]!r}")
             assert result["inputBefore"] & 7 == 6, (case, result)
             assert result["inputBefore"] == result["inputAfter"], (case, result)
             assert result["outputBefore"] == result["outputAfter"], (case, result)
