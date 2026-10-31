@@ -546,15 +546,28 @@ its remaining pipeline jobs were still running when recorded. This factory is
 not evidence about volume-root reparse behavior and is not part of the product
 runtime.
 
-A second ignored fixture is under source review and is not yet enabled in CI.
+A second ignored fixture has completed a focused Opus source review and is
+enabled in a separate exact-test CI step; its first native result is pending.
 It exclusively creates a fresh image through that factory, initializes and
 formats that image using explicit Storage CIM objects, and refuses ambiguous
 image/disk/partition associations or system/boot/clustered/nonvirtual devices.
 The parent retains its native attachment handle while the fixed PowerShell
-child runs. Before any canary filesystem operation, native volume extents must
+child runs. The review caught PowerShell display-property ambiguity, unbounded
+child lifetime and a pathname-based canary write. The fixture now reads raw CIM
+properties, uses the already-qualified suspended-admission Windows Job backend,
+enforces a 90-second child deadline and observes local scope emptiness before
+continuing. A process-lifetime root Job covers supervisor death; OS storage
+services invoked by CIM are not owned by that Job. Input/output files are
+private, consumed output is bounded, and the canary is created exclusively
+relative to the retained root with its handle validated before writing. The
+canary is disposed of with the owned image, not unlinked after releasing its
+handle. Before any canary filesystem operation, native volume extents must
 identify exactly that physical disk, and the opened root must resolve to the
 returned volume GUID. No existing image/drive selector is exposed. This stage
-does not yet change a root ACL or attempt a reparse operation.
+does not change a root ACL or attempt a reparse operation. The separate root
+measurement remains disabled pending its own review. Formatting is gated by
+CIM association checks; the native extent/root checks happen afterward and gate
+filesystem use, not the earlier format operation.
 
 The implementation follows Microsoft
 [Initialize-Disk](https://learn.microsoft.com/en-us/powershell/module/storage/initialize-disk),

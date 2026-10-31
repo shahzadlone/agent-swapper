@@ -99,6 +99,15 @@ jobs:
           ASWP_CI_VOLUME_FIXTURE: '1'
         run: |
           cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::owned_empty_virtual_disk_attaches_and_cleans_up_without_formatting -- --ignored --exact --test-threads=1 --nocapture
+      - name: Windows owned filesystem identity
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && github.repository == 'shahzadlone/agent-swapper'
+        timeout-minutes: 3
+        env:
+          ASWP_CI_IDENTITY_FIXTURE: '1'
+          ASWP_CI_VOLUME_FIXTURE: '1'
+          ASWP_CI_FORMAT_OWNED_VOLUME: '1'
+        run: |
+          cargo +1.98.0 test --locked -p agentswapper-windows-security --lib ffi::identity_tests::volume::formatted::newly_owned_ntfs_volume_has_verified_identity_and_removal -- --ignored --exact --test-threads=1 --nocapture
       - name: Windows native console restoration
         if: runner.os == 'Windows'
         timeout-minutes: 3
