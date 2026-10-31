@@ -137,6 +137,24 @@ struct OwnedDisk {
 
 impl OwnedDisk {
     fn create(policy: &SecurityPolicy) -> io::Result<Self> {
+        Self::create_with_device_access(policy, None)
+    }
+
+    fn create_for_root_probe(policy: &SecurityPolicy, other: &Sid) -> io::Result<Self> {
+        require_volume_fixture()?;
+        if std::env::var("ASWP_CI_ROOT_MUTATION_FIXTURE")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            return Err(io::Error::other(
+                "owned-volume root mutation opt-in missing",
+            ));
+        }
+        Self::create_with_device_access(policy, Some(other))
+    }
+
+    fn create_with_device_access(policy: &SecurityPolicy, other: Option<&Sid>) -> io::Result<Self> {
         require_volume_fixture()?;
         let fixture = tempfile::Builder::new()
             .prefix("aswp-owned-vhd-")
@@ -202,13 +220,32 @@ impl OwnedDisk {
             Version: ATTACH_VIRTUAL_DISK_VERSION_1,
             ..Default::default()
         };
+        // The default attachment inherits the private image DACL. Only the
+        // root measurement admits its fresh fixture SID at the device layer,
+        // with the same read/traverse/AD4 mask used on its filesystem objects.
+        // This never grants access to another disk or broadens the image ACL.
+        let device_descriptor = other
+            .map(|sid| {
+                LocalDescriptor::from_sddl(&format!(
+                    "O:{}D:P(A;;FA;;;{})(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x001200ad;;;{})",
+                    policy.owner.sddl(),
+                    policy.owner.sddl(),
+                    sid.sddl()
+                ))
+            })
+            .transpose()
+            .map_err(io::Error::other)?;
         let _privilege = VolumePrivilege::enable()?;
         // SAFETY: only the just-created disk is attached. No drive letter or
         // permanent lifetime is requested; no existing volume is selected.
+        // The optional Windows-created device descriptor stays owned through
+        // this synchronous call; the native API copies its contents.
         let status = unsafe {
             AttachVirtualDisk(
                 owned.handle(),
-                null_mut(),
+                device_descriptor
+                    .as_ref()
+                    .map_or(null_mut(), |sd| sd.0.as_ptr()),
                 ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER,
                 0,
                 &attach,

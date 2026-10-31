@@ -585,7 +585,17 @@ account removal and disk cleanup precede result reporting.
 Each of the three CI steps now requires exactly one passing test and its expected
 result notices. The third requires an additional `ASWP_CI_ROOT_MUTATION_FIXTURE`
 opt-in, an isolated test process and its own timeout. Its first native result is
-pending. Either root success or a nonzero native refusal is recorded as an OS/tag
+pending. The first instrumented root run at `afb4f37`,
+[41152814793](https://github.com/shahzadlone/agent-swapper/actions/runs/41152814793),
+failed with access denied (5) on the standard user's initial readable-canary
+control, before any reparse measurement. The preceding uninstrumented root run
+also failed; neither is evidence of root reparse refusal. The suspected device
+boundary is being tested by giving only that fresh fixture SID the same
+read/traverse/AD4 mask in the attachment descriptor. The image file remains
+private. Device access to this newly created disk is a test capability, so the
+private-file read check measures the file DACL, not whole-volume privacy against
+raw-device access. The other two disk stages keep their original private device
+descriptor. Either root success or a nonzero native refusal is recorded as an OS/tag
 observation, never an automatic production-policy promotion.
 
 The review's suggestion to use `SetKernelObjectSecurity` was rejected:

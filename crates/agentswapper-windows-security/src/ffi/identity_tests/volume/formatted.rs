@@ -22,13 +22,14 @@ struct OwnedNtfsVolume {
     disk: OwnedDisk,
 }
 
-enum RootAccess {
+#[derive(Clone, Copy)]
+enum RootAccess<'a> {
     Inspect,
-    SetFixtureDacl,
+    SetFixtureDacl(&'a Sid),
 }
 
 impl OwnedNtfsVolume {
-    fn create(policy: &SecurityPolicy, access: RootAccess) -> io::Result<Self> {
+    fn create(policy: &SecurityPolicy, access: RootAccess<'_>) -> io::Result<Self> {
         require_volume_fixture()?;
         if std::env::var("ASWP_CI_FORMAT_OWNED_VOLUME").ok().as_deref() != Some("1") {
             return Err(io::Error::other("owned-volume format opt-in missing"));
@@ -36,7 +37,10 @@ impl OwnedNtfsVolume {
         // Exact ignored test only: this permanently places the fixture process
         // in a kill-on-close root Job before any formatter can be spawned.
         install_process_root()?;
-        let disk = OwnedDisk::create(policy)?;
+        let disk = match access {
+            RootAccess::Inspect => OwnedDisk::create(policy)?,
+            RootAccess::SetFixtureDacl(other) => OwnedDisk::create_for_root_probe(policy, other)?,
+        };
         let physical = disk.physical_path()?;
         let physical = physical
             .to_str()
@@ -151,7 +155,7 @@ impl OwnedNtfsVolume {
         }
         let extra = match access {
             RootAccess::Inspect => 0,
-            RootAccess::SetFixtureDacl => WRITE_DAC,
+            RootAccess::SetFixtureDacl(_) => WRITE_DAC,
         };
         let root = std::fs::OpenOptions::new()
             .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_TRAVERSE | extra)
