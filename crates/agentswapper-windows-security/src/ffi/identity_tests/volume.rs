@@ -100,6 +100,10 @@ impl VolumePrivilege {
 
 impl Drop for VolumePrivilege {
     fn drop(&mut self) {
+        // Already enabled on entry: no state changed and nothing to restore.
+        if self.previous.PrivilegeCount == 0 {
+            return;
+        }
         // SAFETY: restore only the prior state returned for our one requested
         // privilege. Token and initialized state stay owned through the call.
         let restored = unsafe {
@@ -162,7 +166,6 @@ impl OwnedDisk {
         let descriptor = policy
             .creation_descriptor(ObjectKind::File)
             .map_err(io::Error::other)?;
-        let _privilege = VolumePrivilege::enable()?;
         let mut handle = null_mut();
         // SAFETY: fresh private path, owned SDK structs and descriptor remain
         // live through synchronous exclusive creation. No parent/source disk,
@@ -197,6 +200,7 @@ impl OwnedDisk {
             Version: ATTACH_VIRTUAL_DISK_VERSION_1,
             ..Default::default()
         };
+        let _privilege = VolumePrivilege::enable()?;
         // SAFETY: only the just-created disk is attached. No drive letter or
         // permanent lifetime is requested; no existing volume is selected.
         let status = unsafe {
@@ -262,8 +266,23 @@ impl OwnedDisk {
     fn finish(mut self) -> io::Result<()> {
         self.detach()?;
         drop(self.disk.take());
-        std::fs::remove_file(&self.image)?;
-        assert!(!self.image.exists());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            match std::fs::remove_file(&self.image) {
+                Ok(()) => break,
+                Err(error)
+                    if error.raw_os_error() == Some(32) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        // Access denied / delete-pending is not evidence of removal.
+        assert_eq!(
+            std::fs::symlink_metadata(&self.image).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         drop(self.root.take());
         self.fixture.take().unwrap().close()
     }
@@ -281,6 +300,14 @@ impl Drop for OwnedDisk {
 #[ignore = "creates/attaches/removes only its own empty VHD; explicit disposable Windows CI only"]
 fn owned_empty_virtual_disk_attaches_and_cleans_up_without_formatting() {
     require_volume_fixture().unwrap();
+    // This test runs alone in its process. Nested enabling exercises the
+    // already-enabled case without changing other tests' process-wide token.
+    {
+        let _outer = VolumePrivilege::enable().unwrap();
+        let inner = VolumePrivilege::enable().unwrap();
+        assert_eq!(inner.previous.PrivilegeCount, 0);
+        drop(inner);
+    }
     let policy = SecurityPolicy::for_current_process().unwrap();
     let disk = OwnedDisk::create(&policy).unwrap();
     let first = disk.physical_path().unwrap();

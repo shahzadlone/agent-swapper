@@ -519,6 +519,31 @@ of service. Root reparse behavior remains unqualified; do not remove its write
 exclusion based on ordinary-directory tests. Any mutation probe requires a newly
 owned disposable volume, never an existing machine's volume root.
 
+A separate CI-only ownership fixture creates a new empty 64 MiB VHD beneath
+a fresh private temporary directory, attaches it without a drive letter or
+permanent lifetime, queries the device through its owned native handle, then
+detaches it and removes only its own image/directory. It never initializes or
+formats a disk, opens a physical device, or modifies a filesystem root. It accepts
+no existing image or disk selection. Native creation uses a protected DACL;
+the image pathname relies on that ACL and its validated parent chain, while
+attachment, identification and detachment use the returned handle.
+
+This ignored test requires both hosted-runner/identity opt-ins and a separate
+`ASWP_CI_VOLUME_FIXTURE=1` opt-in. The CI step runs exactly this one test with one
+thread and a two-minute timeout: enabling `SeManageVolumePrivilege` changes the
+process token, so parallel identity tests must not share that process. The
+privilege is restored after each attach/detach operation; a failed restoration
+aborts the test process. Closing the last non-permanent attachment handle is
+the fallback if explicit detach fails. Success requires explicit detach, handle
+close, image removal with a bounded sharing-violation retry, a NotFound metadata
+result, and temporary-directory removal.
+
+A focused Opus 5.5 xhigh review of this fixture found no FFI ownership defect or
+operation targeting an existing disk. Its required isolation and exact-removal
+checks are included, along with an already-enabled privilege control. The first
+native run is still pending; this factory is not evidence about volume-root
+reparse behavior and is not part of the product runtime.
+
 Other review questions were checked against source: inherited private roots are
 admitted; `reject_links` tolerates missing components; registry opens pass a bare
 filename to SQLite; workspace mapping normalization is unchanged; and native
