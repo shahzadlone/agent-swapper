@@ -427,14 +427,17 @@ The production core now contains a bounded managed-invocation parser in
 `supervision/linux_manager.rs`. It binds the exact service name, cgroup path,
 ordinary numeric user, main process and nonzero invocation ID, and rejects
 unknown or duplicate properties. The manager fixture sends each live snapshot
-through the compiled Rust probe as well as its fixture checks; that new hosted
-integration is pending. This is structural validation only: unauthenticated text
+through the compiled Rust probe as well as its fixture checks. The combined
+fixture passed in [CI run 41150225182](https://github.com/shahzadlone/agent-swapper/actions/runs/41150225182)
+at `9002a4f`, including graceful stop, forced stop and client loss. This is
+structural validation only: unauthenticated text
 can still be fabricated, so it issues no stop receipt and is not connected to
 normal launches or automatic switching.
 The core also validates subsequent active snapshots against the retained
 invocation ID, rejecting a recreated unit even if its other fields match.
-Local tests cover this replacement case; the hosted fixture now uses the bound
-Rust check after client loss, and that combined result is pending.
+Local tests cover this replacement case; the same successful hosted fixture uses
+the bound Rust check after client loss. No authenticated production manager or
+stop receipt is established by that result.
 
 Same-user cgroup migration is a release-blocking containment concern. This
 prototype requires the delegated parent `cgroup.procs` to be writable, and the
@@ -464,7 +467,11 @@ and agent behavior. The test does not yet qualify those effects, alternative
 escape paths, or this approach for production.
 A separate `ubuntu-22.04` hosted job now runs the same delegated probes to seek
 evidence on another image without changing the newer runner's security settings.
-It has not yet established namespace availability or a passing result.
+At `9002a4f`, that Ubuntu 22.04 job (kernel `6.8.0-1070-azure`, image
+`20261026.341.1`) entered the namespace and refused direct migration, with
+`nsdelegate` reported enabled. The ordinary Ubuntu job used kernel
+`7.0.0-1017-azure` and reported namespace setup unavailable. These are different
+observations, not interchangeable platform qualification.
 The delegated driver now also reports whether its cgroup2 mount advertises
 `nsdelegate`; missing or ambiguous mount information is reported as unknown.
 This metadata is context for the experiment, not proof of a boundary.
@@ -482,14 +489,19 @@ available. The shim now additionally marks nonstandard descriptors close-on-exec
 before target execution, failing if the operation cannot be completed. An
 actual-guardian fixture injects an inheritable parent cgroup control descriptor,
 checks that the guardian received it, and verifies it is absent after target
-exec; that fixture awaits hosted CI. These checks do not cover capabilities
+exec; that fixture passed in both delegated jobs of the same `9002a4f` run.
+These checks do not cover capabilities
 received later or access through another process. A namespace boundary cannot
 be qualified without accounting for those paths.
 A further namespace fixture now receives a parent control descriptor over a
 standard-input socket after target exec, from a cooperating same-user peer
 outside the namespace, and attempts migration through it. This distinguishes
-initial descriptor hygiene from capabilities received later. Its hosted result
-is pending; it does not require or use provider credentials.
+initial descriptor hygiene from capabilities received later. In the Ubuntu 22.04
+job at `9002a4f`, it successfully escaped and its writer survived retirement.
+This disproves the namespace prototype as a sufficient containment boundary
+even though direct migration was refused. The CI job passes because the
+experiment detects and reports the escape; green CI is not a containment
+promotion. It does not require or use provider credentials.
 The internal shim reports startup failures by exiting with status 125, which is
 also a possible exit status of an executed target. The guardian cannot
 distinguish those cases from the status alone, so it now treats either as an
@@ -497,7 +509,10 @@ error and leaves the run unresolved after cleanup. The fixture verifies stream
 refusal using a separate no-execution marker. This conservative handling also
 leaves a real target exit 125 unresolved; other statuses alone still do not prove
 exec succeeded. Distinct, crash-aware exec confirmation remains an integration
-gate, and the changed guardian behavior awaits its hosted delegated test.
+gate. The hosted delegated checks at `9002a4f` observed inherited-stream
+refusal, guardian startup failure, exit and channel loss while retaining
+unresolved journal intent. They do not supply crash-aware exec confirmation
+or a qualified automatic-transfer receipt.
 
 Integrate the combined terminal/cgroup fixture with the actual journal, after
 the remaining transport, signal and lifetime gates pass.
