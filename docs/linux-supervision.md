@@ -447,10 +447,15 @@ agree. At `181aab0`, the Ubuntu 22.04 and 24.04 jobs passed graceful stop,
 forced stop and client loss in
 [run 41164791650](https://github.com/shahzadlone/agent-swapper/actions/runs/41164791650).
 The native trials use the manager's invocation-specific object path rather
-than assuming it equals the reusable unit-name path. Subsequent metadata-overlay
-and socket-refusal controls need their own results. Its dependency graph remains
+than assuming it equals the reusable unit-name path. At `44e81c7`, the complete
+branch pipeline passed in
+[run 41165944209](https://github.com/shahzadlone/agent-swapper/actions/runs/41165944209),
+including metadata-overlay/socket refusals and a live unit-name-reuse trial on
+both Ubuntu versions. The paused observer retired only its original held scope
+while the replacement writer continued, and a fresh observer refused the stale
+invocation. Its dependency graph remains
 outside the production workspace; independent implementation review, broader
-replacement/transport failure controls and production integration remain open.
+transport failure controls and production integration remain open.
 No normal launch, journal recovery or automatic switching uses these observations.
 
 Same-user cgroup migration is a release-blocking containment concern. This

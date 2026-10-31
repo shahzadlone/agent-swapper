@@ -65,8 +65,11 @@ retires the original service and creates a new invocation under the same unit
 name before resuming observation. It requires retirement of only the original
 held scope, a continuing replacement worker, and a specific refusal when a new
 observer is given the old invocation ID with the replacement's current PID.
-Both services retain bounded manager lifetimes and explicit cleanup. Native
-results for this additional trial are pending.
+Both services retain bounded manager lifetimes and explicit cleanup. The
+explicit replacement outcome passed on both Ubuntu jobs at `44e81c7` in
+[run 41165944209](https://github.com/shahzadlone/agent-swapper/actions/runs/41165944209).
+Detailed per-snapshot metadata goes to ordinary logs so GitHub's per-step notice
+limit cannot hide the last trial's outcome.
 
 Binding has an eight-second asynchronous budget including connect,
 authentication and property queries, with two-second method timeouts. A plain
@@ -110,6 +113,13 @@ The procfs-overlay and replacement-socket controls passed on both images at
 Each reported its intended refusal with no observation emitted. The only
 service creation remains the existing explicitly gated hosted fixture. Never
 spoof its CI guards locally.
+
+The complete branch pipeline at `44e81c7` passed in
+[run 41165944209](https://github.com/shahzadlone/agent-swapper/actions/runs/41165944209):
+all three platform suites, both manager jobs, dependency policies, all three
+candidate archives and matching rebuilds. Preview attestation is intentionally
+skipped on branches. This qualifies the recorded experiments; it does not close
+the independent source-review or production integration gates.
 
 The refusal fixture is additionally opted in with `ASWP_MANAGER_REFUSALS=1`.
 Each case runs in its own private mount namespace on disposable hosted CI:
