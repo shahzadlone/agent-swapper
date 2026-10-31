@@ -119,10 +119,9 @@ def inspect_identity(unit, expected, uid, main_pid, expected_invocation=None):
             and kernel['populated'] is True and kernel['main_pidfd_live'] is True
             and kernel['migration_controls_refused'] is True,
             "Rust kernel corroboration disagrees with fixture scope")
-    # Only fixture metadata is reported. JSON escapes control characters before
-    # the workflow-command escape, keeping the annotation on a single line.
-    diagnostic = json.dumps(report, sort_keys=True).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-    print('::notice title=Linux manager transport::' + diagnostic, flush=True)
+    # Detailed fixture metadata stays in ordinary logs. GitHub limits notices
+    # per step; retain that budget for every trial's explicit outcome marker.
+    print('Linux manager transport: ' + json.dumps(report, sort_keys=True), flush=True)
     return invocation
 
 

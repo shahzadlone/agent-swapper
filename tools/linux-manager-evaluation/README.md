@@ -105,7 +105,9 @@ Kernel corroboration subsequently passed on both images at `9c56a93` in
 [run 41164302159](https://github.com/shahzadlone/agent-swapper/actions/runs/41164302159).
 Retained-handle retirement subsequently passed all three trials on both images
 at `181aab0` in [run 41164791650](https://github.com/shahzadlone/agent-swapper/actions/runs/41164791650).
-The subsequent procfs-overlay and replacement-socket controls require their own native results. The only
+The procfs-overlay and replacement-socket controls passed on both images at
+`0622b60` in [run 41165405843](https://github.com/shahzadlone/agent-swapper/actions/runs/41165405843).
+Each reported its intended refusal with no observation emitted. The only
 service creation remains the existing explicitly gated hosted fixture. Never
 spoof its CI guards locally.
 
