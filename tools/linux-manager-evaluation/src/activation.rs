@@ -53,6 +53,32 @@ fn valid_prefix(prefix: &str) -> bool {
             .all(|b| b.is_ascii_digit())
 }
 
+fn qualified_request(prefix: &str, values: &[Option<String>; 5]) -> bool {
+    valid_prefix(prefix)
+        && values[0].as_deref() == Some("true")
+        && values[1].as_deref() == Some("github-hosted")
+        && values[2].as_deref() == Some("1")
+        && values[3]
+            .as_ref()
+            .zip(values[4].as_ref())
+            .is_some_and(|(run, attempt)| prefix == format!("aswp-activation-{run}-{attempt}"))
+}
+
+pub(crate) fn gate(prefix: &str) -> io::Result<()> {
+    let values = [
+        "GITHUB_ACTIONS",
+        "RUNNER_ENVIRONMENT",
+        "ASWP_CI_SOCKET_ACTIVATION",
+        "GITHUB_RUN_ID",
+        "GITHUB_RUN_ATTEMPT",
+    ]
+    .map(|key| std::env::var(key).ok());
+    require(
+        qualified_request(prefix, &values),
+        "activation probe requires its opted-in disposable hosted CI fixture",
+    )
+}
+
 fn valid_instance(unit: &str, prefix: &str) -> bool {
     unit.len() <= 255
         && unit
@@ -207,6 +233,29 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_requires_opted_in_hosted_run_and_its_own_prefix() {
+        let values = ["true", "github-hosted", "1", "123", "1"].map(|value| Some(value.to_owned()));
+        assert!(qualified_request("aswp-activation-123-1", &values));
+        assert!(!qualified_request("aswp-activation-124-1", &values));
+        for index in 0..values.len() {
+            let mut missing = values.clone();
+            missing[index] = None;
+            assert!(!qualified_request("aswp-activation-123-1", &missing));
+        }
+        for (index, bad) in [
+            (0, "false"),
+            (1, "self-hosted"),
+            (2, "0"),
+            (3, "../123"),
+            (4, "1/2"),
+        ] {
+            let mut changed = values.clone();
+            changed[index] = Some(bad.into());
+            assert!(!qualified_request("aswp-activation-123-1", &changed));
+        }
+    }
 
     #[test]
     fn offer_claims_cannot_replace_the_kernel_sender_or_calling_connection() -> io::Result<()> {

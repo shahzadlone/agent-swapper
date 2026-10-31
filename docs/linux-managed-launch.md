@@ -147,8 +147,9 @@ causes a guardian protocol error: even though the writer stops and scope is
 removed, it must be refused as clean-disconnect evidence. The service/writer
 deadline is 60 seconds, guardian receive deadline 40 seconds, and the live
 pre-disconnect check must occur within 25 seconds. Cleanup waits up to five
-seconds for asynchronous scope removal. Native results for these review
-changes are pending.
+seconds for asynchronous scope removal. These review changes passed on both
+Ubuntu versions at `c8979bf` in
+[run 41169986563](https://github.com/shahzadlone/agent-swapper/actions/runs/41169986563).
 
 The Python fixture continues to trust the CI checkout and its local helper
 imports. Adding Python isolated mode while explicitly reintroducing that
@@ -158,8 +159,12 @@ reviewed, root-owned Rust guardian executable and validated installation.
 Separate controlled bus listeners now test an authentication handshake that
 never replies and one that disconnects. They run only inside opted-in hosted
 mount namespaces. The stalled listener must observe EOF after the observer's
-deadline; both cases require exit 125 and no observation. Native results are
-pending. These are availability/refusal checks, not simulated manager-owner
+deadline; both cases require exit 125 and no observation. Both passed on the
+same two native jobs at `c8979bf`. A failed earlier attempt at `33fefe0` exposed
+a fixture ordering error: its procfs overlay could hide namespace metadata
+before the probe child validated it. An explicit ready byte now proves the
+child checked its real namespace before the parent installs any overlay.
+These are availability/refusal checks, not simulated manager-owner
 replacement or successful manager authentication.
 
 Root-owned launch installation on a user's machine comes later, after the

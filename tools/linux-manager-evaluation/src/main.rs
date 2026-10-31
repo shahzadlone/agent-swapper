@@ -1,4 +1,4 @@
-//! Read-only transport qualification. No service creation or custody receipt.
+//! Manager observation and opted-in fixture activation. No custody receipts.
 #![forbid(unsafe_code)]
 
 mod activation;
@@ -586,6 +586,7 @@ fn run() -> io::Result<Report> {
             args.len() == 2,
             "activation probe requires one fixture prefix",
         )?;
+        activation::gate(&args[1])?;
         let paths = prerequisites()?;
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
