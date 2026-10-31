@@ -60,6 +60,14 @@ current `retirement` facts. This remains a local measurement, excluding work
 delegated outside the service, root actions and hostile collaborators outside
 the unit. It issues no production custody receipt.
 
+The hosted name-reuse trial pauses the owned observer after its bound record,
+retires the original service and creates a new invocation under the same unit
+name before resuming observation. It requires retirement of only the original
+held scope, a continuing replacement worker, and a specific refusal when a new
+observer is given the old invocation ID with the replacement's current PID.
+Both services retain bounded manager lifetimes and explicit cleanup. Native
+results for this additional trial are pending.
+
 Binding has an eight-second asynchronous budget including connect,
 authentication and property queries, with two-second method timeouts. A plain
 snapshot has a ten-second total budget including close; watch adds a bounded

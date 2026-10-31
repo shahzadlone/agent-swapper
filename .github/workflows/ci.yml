@@ -242,6 +242,7 @@ jobs:
           cargo +1.98.0 build --locked -p agentswapper-core --example linux_manager_identity_probe
       - name: Qualify read-only manager transport
         run: |
+          python3 -m unittest discover -s tools -p 'test_linux_manag*.py' -v
           python3 tools/platform_evidence.py
           cargo +1.98.0 fmt --manifest-path tools/linux-manager-evaluation/Cargo.toml --check
           cargo +1.98.0 clippy --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --all-targets -- -D warnings
@@ -257,7 +258,6 @@ jobs:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe
           ASWP_MANAGED_OBSERVER: ${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation
         run: |
-          python3 -m unittest discover -s tools -p 'test_linux_manag*.py' -v
           python3 tools/check_linux_managed_scope.py
 
   linux-namespace-evidence:

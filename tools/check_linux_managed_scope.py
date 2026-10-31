@@ -321,6 +321,77 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             raise observer_cleanup
 
 
+def replacement_trial(base, run_id, attempt):
+    """A paused observer must retire its original invocation after name reuse."""
+    unit = f'aswp-managed-{run_id}-{attempt}-replacement'
+    expected = '/system.slice/' + unit + '.service'
+    scope = Path('/sys/fs/cgroup' + expected)
+    require(not scope.exists(), 'replacement scope already exists')
+    first, second = base / 'original', base / 'replacement'
+    first.mkdir(mode=0o700)
+    second.mkdir(mode=0o700)
+    clients = []
+    observer = None
+    binary = os.environ['ASWP_MANAGED_OBSERVER']
+    with tempfile.TemporaryFile() as log:
+        def start(directory):
+            child = subprocess.Popen(['sudo', '-n'] + manager_command(
+                directory, unit, expected, os.getuid(), os.getgid(), False),
+                stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True)
+            clients.append(child)
+            wait_for(lambda: (directory / 'service-ready').exists() or child.poll() is not None)
+            require((directory / 'service-ready').exists(), 'replacement service failed before readiness')
+            text = (directory / 'service-main-pid').read_text()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}', text), 'invalid replacement main process')
+            pid = int(text)
+            return child, pid, inspect_identity(unit, expected, os.getuid(), pid)
+        try:
+            old_client, old_pid, old_invocation = start(first)
+            old_scope = scope.stat()
+            observer = Observer(binary, unit, os.getuid(), old_pid, old_invocation)
+            bound = observer.receive(10)
+            check_bound(bound, unit, os.getuid(), old_pid, old_invocation, old_scope.st_dev, old_scope.st_ino)
+            observer.process.send_signal(signal.SIGSTOP)
+            wait_for(lambda: re.search(r'^State:\s+T', Path(f'/proc/{observer.process.pid}/status').read_text(), re.M),
+                     seconds=2)
+            (first / 'allow-main-exit').write_text('exit')
+            require(old_client.wait(timeout=10) == 0, 'original replacement client failed')
+            wait_for(lambda: not scope.exists(), seconds=5)
+            new_client, new_pid, new_invocation = start(second)
+            new_scope = scope.stat()
+            require(new_invocation != old_invocation
+                    and (new_scope.st_dev, new_scope.st_ino) != (old_scope.st_dev, old_scope.st_ino),
+                    'replacement did not create a distinct invocation and kernel scope')
+            before = (second / 'worker-heartbeat').read_text()
+            observer.process.send_signal(signal.SIGCONT)
+            retired = observer.receive(12)
+            check_retired(retired, bound)
+            observer.finish()
+            # A new observer cannot bind the replacement using the old ID,
+            # even when its unit name, user and new main PID otherwise match.
+            stale = subprocess.run([binary, unit + '.service', str(os.getuid()), str(new_pid), old_invocation],
+                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=12, check=False)
+            require(stale.returncode == 125 and not stale.stdout and b'invocation changed' in stale.stderr,
+                    'replacement accepted the stale invocation or failed at another check')
+            wait_for(lambda: (second / 'worker-heartbeat').read_text() != before)
+            require(new_client.poll() is None and scope.exists(), 'replacement stopped during original retirement')
+            (second / 'allow-main-exit').write_text('exit')
+            require(new_client.wait(timeout=10) == 0, 'replacement cleanup client failed')
+            wait_for(lambda: not scope.exists(), seconds=5)
+            print('::notice title=Linux manager replacement::paused observer retired only its original held scope after unit-name reuse; replacement writer continued; stale invocation refused; both owned services cleaned up', flush=True)
+        finally:
+            try:
+                if observer is not None:
+                    observer.close()
+            finally:
+                if clients and scope.exists():
+                    subprocess.run(['sudo', '-n', 'systemctl', 'stop', unit + '.service'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+                for client in clients:
+                    if client.poll() is None:
+                        client.wait(timeout=15)
+
+
 def main():
     if sys.platform == 'linux' and len(sys.argv) == 4 and sys.argv[1] == 'client-helper':
         client_helper(Path(sys.argv[2]), sys.argv[3])
@@ -346,6 +417,7 @@ def main():
         for forced in (False, True):
             trial(Path(temporary), forced, run_id, attempt)
         trial(Path(temporary), False, run_id, attempt, client_loss=True)
+        replacement_trial(Path(temporary), run_id, attempt)
 
 
 if __name__ == '__main__':
