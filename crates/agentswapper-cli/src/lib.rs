@@ -772,7 +772,7 @@ fn launch_profile(
                     .map_or_else(|| "none".to_owned(), |id| id.to_string())
             )
         } else if launch.experimental_containment.is_some() {
-            "\nEngine: native\nRemaining local Job descendants will be terminated when the initial CLI exits. External work is unverified; ambiguous failures keep the run unresolved.".to_owned()
+            "\nEngine: native\nProcesses remaining in this run's Windows Job will be terminated when the initial CLI exits. Work outside that Job is unverified; ambiguous failures keep the run unresolved.".to_owned()
         } else {
             "\nEngine: native".to_owned()
         };
@@ -855,7 +855,7 @@ fn launch_profile(
     if launch.experimental_containment.is_some() {
         writeln!(
             io::stderr(),
-            "Remaining local Job descendants will be terminated when the initial CLI exits. External work is unverified; ambiguous failures keep the run unresolved."
+            "Processes remaining in this run's Windows Job will be terminated when the initial CLI exits. Work outside that Job is unverified; ambiguous failures keep the run unresolved."
         )?;
     }
     if engine == ExecutionEngine::Gents {
@@ -906,7 +906,7 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
             "external runtime unknown; work may continue independently of this client"
         }
         ProcessCustody::LocalScopeEmpty => {
-            "owned local Job observed empty; external work unverified"
+            "owned local Job observed empty; work outside that Job unverified"
         }
         ProcessCustody::ExitedUncontained => "child exited; descendants unverified",
         ProcessCustody::NeverStarted => "native process did not start",
