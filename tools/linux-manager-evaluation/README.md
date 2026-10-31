@@ -38,17 +38,32 @@ root-owned, and opening each for writing must fail with access denied. The
 process's four user IDs and exact cgroup membership must agree, its pidfd must
 remain live, and the held scope must report `populated 1`. The manager's
 invocation is rechecked after kernel corroboration. The hosted fixture compares
-the reported device/inode with its own scope observation. These checks do not
-establish continuous custody or retirement; no numeric PID is signalled.
+the reported device/inode with its own scope observation. No numeric PID is
+signalled, and a live snapshot alone does not establish continuous custody.
 
-The asynchronous API budget is eight seconds including connect, authentication, queries and
-explicit close, with two-second method timeouts. The four-message queue and
+`--watch UNIT USER PID INVOCATION` retains those handles and the same bus
+connection. It emits a `bound` record, then a `retired` record only after the
+original directory loses its kernel `cgroup.events` entry, the held pidfd
+reports exit, and the same authenticated manager reports that invocation
+absent or inactive/failed. Name reuse never substitutes a new directory or
+invocation. A manager error counts as absence only for the exact invocation
+lookup and expected sender. An object collected during property reads needs
+a fresh authenticated absence; other errors fail without a retired result.
+The retired record carries the initial `unit` snapshot unchanged and separate
+current `retirement` facts. This remains a local measurement, excluding work
+delegated outside the service, root actions and hostile collaborators outside
+the unit. It issues no production custody receipt.
+
+Binding has an eight-second asynchronous budget including connect,
+authentication and property queries, with two-second method timeouts. A plain
+snapshot has a ten-second total budget including close; watch adds a bounded
+twenty-second retirement phase within a thirty-second total budget. The four-message queue and
 8 KiB **post-receive** reply check are not a custom wire-allocation cap: zbus
 retains its own larger message limit. No signal subscriptions, proxy caches,
 service activation calls, interactive authorization or mutating calls are used.
 The system bus and root are trusted; this is not isolation from a compromised
 bus/kernel or administrative changes. The result does not establish the
-production namespace, kernel retirement, journal, launch or terminal contract.
+production namespace, journal, launch or terminal contract.
 The async timer cannot preempt synchronous kernel/filesystem operations; the
 hosted harness separately bounds and terminates its owned probe process.
 
@@ -72,7 +87,9 @@ both images in [run 41164083613](https://github.com/shahzadlone/agent-swapper/ac
 Both listeners reported UID 0/PID 1, and the manager credentials identified
 UID 0/PID 1 without `ProcessFD`. Ubuntu 22.04 returned ENODATA (61) for the
 optional invocation xattr; Ubuntu 24.04 returned the matching 32-byte hex ID.
-The subsequent kernel corroboration requires its own native results. The only
+Kernel corroboration subsequently passed on both images at `9c56a93` in
+[run 41164302159](https://github.com/shahzadlone/agent-swapper/actions/runs/41164302159).
+The subsequent retained-handle retirement observer requires its own native results. The only
 service creation remains the existing explicitly gated hosted fixture. Never
 spoof its CI guards locally.
 
@@ -87,8 +104,8 @@ assumption, so its recommendation was not adopted unchanged.
 
 Opus 5.5 xhigh reviewed the next-stage architecture and recommended this
 measurement before selecting a production peer policy. Later checkpoints need
-typed bindings, kernel corroboration using retained descriptors, retirement
-observations, refusal fixtures and independent source review. The design review
+production API separation, broader live refusal/replacement fixtures and
+independent source review. The design review
 does not qualify this implementation. No production backend is enabled.
 The requested follow-up implementation review could not run because Claude
 reported its subscription session limit. It remains outstanding; the failed

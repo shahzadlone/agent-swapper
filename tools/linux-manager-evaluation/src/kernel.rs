@@ -155,6 +155,13 @@ impl Process {
     }
 
     fn live(&self) -> io::Result<()> {
+        require(
+            !self.exited()?,
+            "bound main process exited during observation",
+        )
+    }
+
+    fn exited(&self) -> io::Result<bool> {
         let mut watched = [PollFd::new(&self.pidfd, PollFlags::IN)];
         let count = poll(
             &mut watched,
@@ -163,10 +170,19 @@ impl Process {
                 tv_nsec: 0,
             }),
         )?;
+        let events = watched[0].revents();
         require(
-            count == 0 && watched[0].revents().is_empty(),
-            "bound main process exited during observation",
-        )
+            !events.intersects(PollFlags::ERR | PollFlags::NVAL),
+            "pidfd polling failed",
+        )?;
+        if count == 0 && events.is_empty() {
+            return Ok(false);
+        }
+        require(
+            count == 1 && events.intersects(PollFlags::IN | PollFlags::HUP),
+            "unexpected pidfd event",
+        )?;
+        Ok(true)
     }
 }
 
@@ -184,6 +200,14 @@ pub(crate) struct Binding {
     main: Process,
     device: u64,
     inode: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Retirement {
+    device: u64,
+    inode: u64,
+    original_directory_removed: bool,
+    main_pidfd_exited: bool,
 }
 
 impl Binding {
@@ -234,6 +258,28 @@ impl Binding {
 
     pub(crate) fn directory(&self) -> &OwnedFd {
         &self.scope
+    }
+
+    pub(crate) fn retirement(&self) -> io::Result<Option<Retirement>> {
+        match read_at(&self.scope, "cgroup.events", 4096) {
+            Ok(bytes) => {
+                populated(&bytes)?;
+                Ok(None)
+            }
+            Err(error) if error.raw_os_error() == Some(rustix::io::Errno::NOENT.raw_os_error()) => {
+                require(
+                    self.main.exited()?,
+                    "original scope removed while bound main process remains live",
+                )?;
+                Ok(Some(Retirement {
+                    device: self.device,
+                    inode: self.inode,
+                    original_directory_removed: true,
+                    main_pidfd_exited: true,
+                }))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 

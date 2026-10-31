@@ -2,11 +2,12 @@
 #![forbid(unsafe_code)]
 
 mod kernel;
+mod watch;
 
 use serde::Serialize;
 use std::{
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Write},
     num::NonZeroUsize,
     os::{
         fd::AsRawFd,
@@ -298,7 +299,7 @@ async fn snapshot(
     connection: &Connection,
     owner: &str,
     expected: &Expected,
-) -> io::Result<UnitFact> {
+) -> io::Result<(UnitFact, kernel::Binding)> {
     let name_path = manager_call(connection, owner, "GetUnit", &(&expected.unit,)).await?;
     require(
         name_path.as_str() == unit_path(&expected.unit),
@@ -394,7 +395,7 @@ async fn snapshot(
         corroborated == first,
         "invocation changed during kernel observation",
     )?;
-    Ok(UnitFact {
+    let fact = UnitFact {
         unit: id,
         invocation,
         user: expected.user,
@@ -404,11 +405,13 @@ async fn snapshot(
         kill_mode,
         invocation_xattr,
         kernel: kernel.observe()?,
-    })
+    };
+    Ok((fact, kernel))
 }
 
 #[derive(Serialize)]
 struct Report {
+    phase: &'static str,
     scope: &'static str,
     paths: Vec<PathFact>,
     peer_uid: u32,
@@ -418,9 +421,18 @@ struct Report {
     process_fd: bool,
     dbus_override_ignored: bool,
     unit: Option<UnitFact>,
+    retirement: Option<kernel::Retirement>,
 }
 
-async fn inspect(paths: Vec<PathFact>, expected: Option<Expected>) -> io::Result<Report> {
+async fn admit(
+    paths: Vec<PathFact>,
+    expected: Option<Expected>,
+) -> io::Result<(
+    Connection,
+    zbus::names::OwnedUniqueName,
+    Report,
+    Option<kernel::Binding>,
+)> {
     let before = fs::symlink_metadata(SOCKET)?;
     let stream = tokio::net::UnixStream::connect(SOCKET).await?.into_std()?;
     let peer = rustix::net::sockopt::socket_peercred(&stream)?;
@@ -465,15 +477,19 @@ async fn inspect(paths: Vec<PathFact>, expected: Option<Expected>) -> io::Result
                 "manager process descriptor does not identify local PID 1",
             )?;
         }
-        let unit = match expected {
-            Some(e) => Some(snapshot(&connection, owner_before.as_str(), &e).await?),
-            None => None,
+        let (unit, kernel) = match expected {
+            Some(e) => {
+                let (fact, binding) = snapshot(&connection, owner_before.as_str(), &e).await?;
+                (Some(fact), Some(binding))
+            }
+            None => (None, None),
         };
         require(
             owner(&connection).await? == owner_before,
             "manager bus owner changed",
         )?;
-        Ok(Report {
+        let report = Report {
+            phase: "snapshot",
             scope: "read-only transport measurement; no custody receipt",
             paths,
             peer_uid: peer.uid.as_raw(),
@@ -483,7 +499,54 @@ async fn inspect(paths: Vec<PathFact>, expected: Option<Expected>) -> io::Result
             process_fd: credentials.process_fd().is_some(),
             dbus_override_ignored: std::env::var_os("DBUS_SYSTEM_BUS_ADDRESS").is_some(),
             unit,
-        })
+            retirement: None,
+        };
+        Ok((owner_before, report, kernel))
+    }
+    .await;
+    match result {
+        Ok((owner, report, kernel)) => Ok((connection, owner, report, kernel)),
+        Err(error) => {
+            connection.close().await.map_err(io::Error::other)?;
+            Err(error)
+        }
+    }
+}
+
+fn write_report(report: &Report) -> io::Result<()> {
+    let text = serde_json::to_string(report).map_err(io::Error::other)?;
+    let mut output = io::stdout().lock();
+    writeln!(output, "{text}")?;
+    output.flush()
+}
+
+async fn inspect(
+    paths: Vec<PathFact>,
+    expected: Option<Expected>,
+    watch: bool,
+) -> io::Result<Report> {
+    let (connection, owner, mut report, kernel) =
+        tokio::time::timeout(Duration::from_secs(8), admit(paths, expected))
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "manager binding deadline exceeded")
+            })??;
+    let result = async {
+        if watch {
+            let unit = report
+                .unit
+                .as_ref()
+                .ok_or_else(|| io::Error::other("watch requires a unit"))?;
+            let binding = kernel
+                .as_ref()
+                .ok_or_else(|| io::Error::other("watch requires a kernel binding"))?;
+            report.phase = "bound";
+            write_report(&report)?;
+            report.retirement =
+                Some(watch::retire(&connection, owner.as_str(), unit, binding).await?);
+            report.phase = "retired";
+        }
+        Ok(report)
     }
     .await;
     connection.close().await.map_err(io::Error::other)?;
@@ -491,37 +554,40 @@ async fn inspect(paths: Vec<PathFact>, expected: Option<Expected>) -> io::Result
 }
 
 fn run() -> io::Result<Report> {
-    let expected = Expected::parse(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+    let watch = args.first().is_some_and(|arg| arg == "--watch");
+    if watch {
+        args.remove(0);
+    }
+    let expected = Expected::parse(&args)?;
+    require(
+        !watch || expected.as_ref().is_some_and(|e| e.invocation.is_some()),
+        "watch requires UNIT USER PID INVOCATION",
+    )?;
     let paths = prerequisites()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(8), inspect(paths, expected))
-            .await
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "manager observation deadline exceeded",
-                )
-            })?
+        tokio::time::timeout(
+            Duration::from_secs(if watch { 30 } else { 10 }),
+            inspect(paths, expected, watch),
+        )
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "manager observation deadline exceeded",
+            )
+        })?
     })
 }
 
 fn main() {
-    match run() {
-        Ok(report) => match serde_json::to_string(&report) {
-            Ok(text) => println!("{text}"),
-            Err(_) => {
-                eprintln!("cannot encode manager observation");
-                std::process::exit(125);
-            }
-        },
-        Err(error) => {
-            let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
-            eprintln!("manager observation unavailable or refused: {diagnostic}");
-            std::process::exit(125);
-        }
+    if let Err(error) = run().and_then(|report| write_report(&report)) {
+        let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
+        eprintln!("manager observation unavailable or refused: {diagnostic}");
+        std::process::exit(125);
     }
 }
 

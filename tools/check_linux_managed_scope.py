@@ -11,6 +11,8 @@ import sys
 import tempfile
 import time
 
+from linux_manager_observer import Observer, check_bound, check_retired
+
 
 def require(condition, message):
     if not condition:
@@ -99,7 +101,7 @@ def inspect_identity(unit, expected, uid, main_pid, expected_invocation=None):
         arguments.append(expected_invocation)
     observed = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, encoding='utf-8', errors='replace',
-                              check=False, timeout=10)
+                              check=False, timeout=12)
     require(observed.returncode == 0,
             "Rust manager transport observation failed: " + observed.stderr[-2000:])
     require(len(observed.stdout) <= 8192, "manager observation exceeds bounds")
@@ -223,6 +225,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                                stderr=subprocess.DEVNULL, close_fds=True)
     manager = None
     scope_descriptor = None
+    observer = None
     try:
         wait_for(lambda: (directory / 'outside-heartbeat').exists())
         with (directory / 'manager.log').open('wb') as log:
@@ -249,6 +252,9 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             opened, named = os.fstat(scope_descriptor), scope.stat()
             require((opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
                     and opened.st_uid == 0, "opened scope identity does not match")
+            observer = Observer(os.environ['ASWP_MANAGED_OBSERVER'], unit, os.getuid(), main_pid, invocation)
+            bound = observer.receive(10)
+            check_bound(bound, unit, os.getuid(), main_pid, invocation, opened.st_dev, opened.st_ino)
             before = (directory / 'outside-heartbeat').read_text()
             if client_loss:
                 (directory / 'kill-client').write_text('kill')
@@ -277,14 +283,24 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             else:
                 os.close(events)
                 raise RuntimeError("original managed scope retirement was not observed")
+            retired = observer.receive(12)
+            check_retired(retired, bound)
+            observer.finish()
             heartbeat = (directory / 'worker-heartbeat').read_text()
             time.sleep(0.15)
             require((directory / 'worker-heartbeat').read_text() == heartbeat,
                     "detached worker survived manager cleanup")
             wait_for(lambda: (directory / 'outside-heartbeat').read_text() != before)
             require(outside.poll() is None, "outside writer was terminated")
+            print(f'::notice title=Linux Rust retirement {label}::authenticated original invocation retired; held cgroup directory removed; bound pidfd exited; Python kernel observations agree; no production custody receipt', flush=True)
             print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; systemd-run exit {result}', flush=True)
     finally:
+        observer_cleanup = None
+        if observer is not None:
+            try:
+                observer.close()
+            except Exception as error:
+                observer_cleanup = error
         if scope_descriptor is not None:
             os.close(scope_descriptor)
         (directory / 'outside-stop').write_text('stop')
@@ -301,6 +317,8 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                            timeout=15, check=False)
         if manager is not None and manager.poll() is None:
             manager.wait(timeout=15)
+        if observer_cleanup is not None:
+            raise observer_cleanup
 
 
 def main():

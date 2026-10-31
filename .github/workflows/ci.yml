@@ -246,7 +246,7 @@ jobs:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe
           ASWP_MANAGED_OBSERVER: ${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation
         run: |
-          python3 -m unittest discover -s tools -p test_linux_managed_scope.py -v
+          python3 -m unittest discover -s tools -p 'test_linux_manag*.py' -v
           python3 tools/check_linux_managed_scope.py
 
   linux-namespace-evidence:
