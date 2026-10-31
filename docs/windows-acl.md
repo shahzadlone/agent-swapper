@@ -540,9 +540,28 @@ result, and temporary-directory removal.
 
 A focused Opus 5.5 xhigh review of this fixture found no FFI ownership defect or
 operation targeting an existing disk. Its required isolation and exact-removal
-checks are included, along with an already-enabled privilege control. The first
-native run is still pending; this factory is not evidence about volume-root
-reparse behavior and is not part of the product runtime.
+checks are included, along with an already-enabled privilege control. The empty-disk native step passed at `6c80e11` in
+[CI run 41150053873](https://github.com/shahzadlone/agent-swapper/actions/runs/41150053873);
+its remaining pipeline jobs were still running when recorded. This factory is
+not evidence about volume-root reparse behavior and is not part of the product
+runtime.
+
+A second ignored fixture is under source review and is not yet enabled in CI.
+It exclusively creates a fresh image through that factory, initializes and
+formats that image using explicit Storage CIM objects, and refuses ambiguous
+image/disk/partition associations or system/boot/clustered/nonvirtual devices.
+The parent retains its native attachment handle while the fixed PowerShell
+child runs. Before any canary filesystem operation, native volume extents must
+identify exactly that physical disk, and the opened root must resolve to the
+returned volume GUID. No existing image/drive selector is exposed. This stage
+does not yet change a root ACL or attempt a reparse operation.
+
+The implementation follows Microsoft
+[Initialize-Disk](https://learn.microsoft.com/en-us/powershell/module/storage/initialize-disk),
+[New-Partition](https://learn.microsoft.com/en-us/powershell/module/storage/new-partition),
+[Format-Volume](https://learn.microsoft.com/en-us/powershell/module/storage/format-volume)
+and [native volume extent](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_volume_disk_extents)
+interfaces. These documented operations do not replace measured native results.
 
 Other review questions were checked against source: inherited private roots are
 admitted; `reject_links` tolerates missing components; registry opens pass a bare

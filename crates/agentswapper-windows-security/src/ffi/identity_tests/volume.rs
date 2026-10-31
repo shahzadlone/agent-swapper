@@ -23,6 +23,8 @@ use windows_sys::Win32::{
 
 const DISK_BYTES: u64 = 64 * 1024 * 1024;
 
+mod formatted;
+
 fn require_volume_fixture() -> io::Result<()> {
     require_hosted_fixture()?;
     if std::env::var("ASWP_CI_VOLUME_FIXTURE").ok().as_deref() != Some("1") {

@@ -116,6 +116,7 @@ dependencies = [
  "getrandom 0.4.3",
  "proptest",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "windows-sys",
