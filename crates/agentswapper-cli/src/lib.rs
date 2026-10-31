@@ -145,7 +145,7 @@ struct LaunchArgs {
     /// Opt in to an attached gents chat client. External work may outlive it.
     #[arg(long, conflicts_with = "experimental_native")]
     experimental_gents: bool,
-    /// Windows native only: own a Job; kill remaining local descendants on CLI exit.
+    /// Windows native only: own a Job; kill its remaining members on CLI exit.
     #[arg(long, value_parser = parse_containment, conflicts_with = "experimental_gents")]
     experimental_containment: Option<Containment>,
     /// Require this engine to match the registered profile.

@@ -24,6 +24,8 @@ jobs:
         run: cargo +1.98.0 fmt --all --check
       - name: Record platform evidence
         run: python tools/platform_evidence.py
+      - name: Verify test failure diagnostics
+        run: python -X utf8 -m unittest discover -s tools -p test_report_test_failures.py -v
       - name: Clippy
         run: cargo +1.98.0 clippy --locked --workspace --all-targets -- -D warnings
       - name: Windows per-run supervision probe
