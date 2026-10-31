@@ -81,7 +81,7 @@ KillMode=control-group
 SendSIGKILL=yes
 TimeoutStartSec=10s
 TimeoutStopSec=2s
-RuntimeMaxSec=30s
+RuntimeMaxSec=60s
 NoNewPrivileges=yes
 UMask=0077
 '''
@@ -150,8 +150,10 @@ def admin(verb, directory, uid, gid):
         require(re.fullmatch(re.escape(prefix) + r'@[A-Za-z0-9_.:\\-]+\.service', name),
                 'unexpected activation service name')
         systemctl('stop', name)
-    require(not any(p.name.startswith(prefix + '@') for p in Path('/sys/fs/cgroup/system.slice').iterdir()),
-            'activation scope still exists after cleanup')
+    # Stop completion can precede final cgroup-directory teardown. Enumerate
+    # names afresh; missing parents or other errors still refuse cleanup.
+    wait_for(lambda: not any(p.name.startswith(prefix + '@')
+                            for p in Path('/sys/fs/cgroup/system.slice').iterdir()), seconds=5)
     for name, contents in files.items():
         path = parent / name
         if os.path.lexists(path):
@@ -202,8 +204,9 @@ def service(directory, uid, unit):
                          close_fds=True, start_new_session=True)
         wait_for(lambda: (run / 'heartbeat').exists(), seconds=5)
         connection.sendall(json.dumps(report).encode() + b'\n')
-        connection.settimeout(20)
+        connection.settimeout(40)
         require(connection.recv(1) == b'', 'unexpected fixture activation command')
+        (run / 'guardian-clean-eof').write_text(invocation)
     # Exiting the main service process lets KillMode=control-group retire its
     # detached writer. The client never sends a numeric process kill request.
 
@@ -211,7 +214,7 @@ def service(directory, uid, unit):
 def writer(directory):
     private_directory(directory)
     require(os.geteuid() != 0 and os.getsid(0) == os.getpid(), 'fixture writer is not an ordinary detached process')
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 60
     counter = 0
     while time.monotonic() < deadline:
         temporary = directory / 'heartbeat.tmp'
@@ -290,13 +293,18 @@ def retired(directory, report, descriptor):
     time.sleep(0.15)
     require(heartbeat.read_text() == before, 'activation worker survived original scope removal')
     require(not (heartbeat.parent / 'voluntary-exit').exists(), 'writer reached its own deadline before retirement')
+    eof_marker = heartbeat.parent / 'guardian-clean-eof'
+    require(eof_marker.is_file() and eof_marker.read_text() == report['invocation'],
+            'guardian did not record clean client EOF before original scope retirement')
 
 
 def live_before_disconnect(directory, report):
     heartbeat = directory / report['invocation'] / 'heartbeat'
     before = heartbeat.read_text()
     wait_for(lambda: heartbeat.read_text() != before, seconds=2)
-    require(0 <= time.monotonic() - report['started'] < 20,
+    # Both processes use Linux CLOCK_MONOTONIC in the same time namespace;
+    # these fixture units do not create a private time namespace.
+    require(0 <= time.monotonic() - report['started'] < 25,
             'disconnect is too close to the fixture runtime deadline')
     require('populated 1' in Path('/sys/fs/cgroup' + report['group'], 'cgroup.events').read_text().splitlines(),
             'activation scope was not populated before disconnect')
@@ -350,6 +358,22 @@ def suite():
                                 label + ' was not refused at its framing check')
                         require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
                     print('::notice title=Linux fixed-user activation::' + label + ' refused before worker creation', flush=True)
+            faulty, faulty_report, faulty_fd = activate(prefix, directory)
+            connections.append(faulty)
+            descriptors.append(faulty_fd)
+            live_before_disconnect(directory, faulty_report)
+            faulty.sendall(b'X')
+            require(b'unexpected fixture activation command' in faulty.recv(4096),
+                    'guardian error control did not reach the intended protocol refusal')
+            faulty.close()
+            try:
+                retired(directory, faulty_report, faulty_fd)
+            except RuntimeError as error:
+                require(str(error) == 'guardian did not record clean client EOF before original scope retirement',
+                        'guardian error control failed at a different observation')
+            else:
+                raise RuntimeError('guardian error was accepted as clean client EOF')
+            print('::notice title=Linux activation EOF control::guardian error stopped its worker and removed scope but was refused as clean EOF evidence', flush=True)
             first, first_report, first_fd = activate(prefix, directory)
             connections.append(first)
             descriptors.append(first_fd)
@@ -369,7 +393,7 @@ def suite():
             live_before_disconnect(directory, second_report)
             second.close()
             retired(directory, second_report, second_fd)
-            print('::notice title=Linux fixed-user activation::two ordinary connections received distinct root-managed scopes; both refused migration writes; each disconnect was followed by stopped detached writer and original scope removal; sibling continued; no production launch qualification', flush=True)
+            print('::notice title=Linux fixed-user activation::two ordinary connections received distinct root-managed scopes; both refused migration writes; each guardian recorded clean client EOF before stopped detached writer and original scope removal; sibling continued; no production launch qualification', flush=True)
         finally:
             for connection in connections:
                 connection.close()

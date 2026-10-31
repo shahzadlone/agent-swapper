@@ -64,7 +64,7 @@ class ActivationTests(unittest.TestCase):
         self.assertTrue(commands[0].startswith('ExecStart=/usr/bin/python3 '))
         self.assertIn('Delegate=no', lines)
         self.assertIn('KillMode=control-group', lines)
-        self.assertIn('RuntimeMaxSec=30s', lines)
+        self.assertIn('RuntimeMaxSec=60s', lines)
         self.assertNotIn('PAMName=', service)
         self.assertNotIn('EnvironmentFile=', service)
         self.assertIn('SocketMode=0600', files['aswp-activation-123-1.socket'])
