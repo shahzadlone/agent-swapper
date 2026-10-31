@@ -25,6 +25,7 @@ mod drive_alias;
 mod registry;
 mod remote_device;
 mod reparse;
+mod volume;
 
 fn require_hosted_fixture() -> io::Result<()> {
     for (key, expected) in [
