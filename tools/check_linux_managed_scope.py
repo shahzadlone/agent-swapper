@@ -111,6 +111,12 @@ def inspect_identity(unit, expected, uid, main_pid, expected_invocation=None):
             and fact['user'] == uid and fact['pid'] == main_pid and fact['control_group'] == expected
             and fact['delegate'] is False and fact['kill_mode'] == 'control-group',
             "direct manager observation disagrees with differential snapshot")
+    kernel = fact['kernel']
+    named = os.stat('/sys/fs/cgroup' + expected, follow_symlinks=False)
+    require(kernel['device'] == named.st_dev and kernel['inode'] == named.st_ino
+            and kernel['populated'] is True and kernel['main_pidfd_live'] is True
+            and kernel['migration_controls_refused'] is True,
+            "Rust kernel corroboration disagrees with fixture scope")
     # Only fixture metadata is reported. JSON escapes control characters before
     # the workflow-command escape, keeping the annotation on a single line.
     diagnostic = json.dumps(report, sort_keys=True).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')

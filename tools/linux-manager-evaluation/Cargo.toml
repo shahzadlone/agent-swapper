@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 zbus = { version = "=6.2.0", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt", "time", "net"] }
-rustix = { version = "=1.1.6", features = ["net", "process", "fs"] }
+rustix = { version = "=1.1.6", features = ["net", "process", "fs", "event"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

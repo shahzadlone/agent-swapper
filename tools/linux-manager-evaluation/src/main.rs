@@ -1,6 +1,8 @@
 //! Read-only transport qualification. No service creation or custody receipt.
 #![forbid(unsafe_code)]
 
+mod kernel;
+
 use serde::Serialize;
 use std::{
     fs::{self, File},
@@ -259,6 +261,7 @@ struct UnitFact {
     delegate: bool,
     kill_mode: String,
     invocation_xattr: XattrFact,
+    kernel: kernel::Fact,
 }
 
 #[derive(Serialize)]
@@ -269,26 +272,13 @@ struct XattrFact {
     errno: Option<i32>,
 }
 
-fn invocation_xattr(group: &str, raw: &[u8], encoded: &str) -> io::Result<XattrFact> {
-    let dir = rustix::fs::open(
-        format!("/sys/fs/cgroup{group}"),
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::DIRECTORY
-            | rustix::fs::OFlags::CLOEXEC
-            | rustix::fs::OFlags::NOFOLLOW,
-        rustix::fs::Mode::empty(),
-    )?;
-    let stat = rustix::fs::fstat(&dir)?;
-    require(
-        stat.st_uid == 0 && stat.st_mode & 0o022 == 0,
-        "fixture cgroup is not manager-owned",
-    )?;
-    require(
-        rustix::fs::fstatfs(&dir)?.f_type == 0x6367_7270,
-        "fixture directory is not cgroup v2",
-    )?;
+fn invocation_xattr(
+    dir: &std::os::fd::OwnedFd,
+    raw: &[u8],
+    encoded: &str,
+) -> io::Result<XattrFact> {
     let mut bytes = [0; 256];
-    match rustix::fs::fgetxattr(&dir, "user.invocation_id", &mut bytes[..]) {
+    match rustix::fs::fgetxattr(dir, "user.invocation_id", &mut bytes[..]) {
         Ok(size) => Ok(XattrFact {
             size: Some(size),
             matches_raw: &bytes[..size] == raw,
@@ -394,7 +384,16 @@ async fn snapshot(
             && kill_mode == "control-group",
         "unit snapshot disagrees with expected fixture",
     )?;
-    let invocation_xattr = invocation_xattr(&group, &first, &invocation)?;
+    let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
+    let invocation_xattr = invocation_xattr(kernel.directory(), &first, &invocation)?;
+    let corroborated = Vec::<u8>::try_from(
+        property(connection, owner, &path, UNIT_INTERFACE, "InvocationID").await?,
+    )
+    .map_err(io::Error::other)?;
+    require(
+        corroborated == first,
+        "invocation changed during kernel observation",
+    )?;
     Ok(UnitFact {
         unit: id,
         invocation,
@@ -404,6 +403,7 @@ async fn snapshot(
         delegate,
         kill_mode,
         invocation_xattr,
+        kernel: kernel.observe()?,
     })
 }
 

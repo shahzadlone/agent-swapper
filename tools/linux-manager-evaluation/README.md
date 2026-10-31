@@ -31,7 +31,17 @@ active transient `aswp-managed-*.service` with the expected user/PID/cgroup,
 is not relied on as a custody proof. Unknown properties, wrong field types,
 changed identities and denied reads fail qualification.
 
-The API budget is eight seconds including connect, authentication, queries and
+Live-unit observations also retain a cgroup directory and a main-process pidfd
+until the snapshot is complete. A descriptor-relative walk refuses mutable or
+linked cgroup ancestry. The root, slice and unit migration controls must be
+root-owned, and opening each for writing must fail with access denied. The
+process's four user IDs and exact cgroup membership must agree, its pidfd must
+remain live, and the held scope must report `populated 1`. The manager's
+invocation is rechecked after kernel corroboration. The hosted fixture compares
+the reported device/inode with its own scope observation. These checks do not
+establish continuous custody or retirement; no numeric PID is signalled.
+
+The asynchronous API budget is eight seconds including connect, authentication, queries and
 explicit close, with two-second method timeouts. The four-message queue and
 8 KiB **post-receive** reply check are not a custom wire-allocation cap: zbus
 retains its own larger message limit. No signal subscriptions, proxy caches,
@@ -39,6 +49,8 @@ service activation calls, interactive authorization or mutating calls are used.
 The system bus and root are trusted; this is not isolation from a compromised
 bus/kernel or administrative changes. The result does not establish the
 production namespace, kernel retirement, journal, launch or terminal contract.
+The async timer cannot preempt synchronous kernel/filesystem operations; the
+hosted harness separately bounds and terminates its owned probe process.
 
 Dependencies are pinned in the isolated lockfile: zbus 6.2.0 with only its Tokio
 transport, Tokio 1.54.1 and rustix 1.1.6. Their graph passes the repository's
@@ -55,8 +67,14 @@ python3 tools/linux-manager-evaluation/check_transport.py tools/linux-manager-ev
 The local WSL2 check reports no system manager and refuses observation. CI on
 disposable Ubuntu 22.04 and 24.04 must pass `--require-manager`, then compare
 the live unit snapshots during graceful stop, forced stop and client loss.
-Those native results are pending. The only service creation remains the
-existing explicitly gated hosted fixture. Never spoof its CI guards locally.
+The corrected identity-only observer at `6ab1fb6` passed all three trials on
+both images in [run 41164083613](https://github.com/shahzadlone/agent-swapper/actions/runs/41164083613).
+Both listeners reported UID 0/PID 1, and the manager credentials identified
+UID 0/PID 1 without `ProcessFD`. Ubuntu 22.04 returned ENODATA (61) for the
+optional invocation xattr; Ubuntu 24.04 returned the matching 32-byte hex ID.
+The subsequent kernel corroboration requires its own native results. The only
+service creation remains the existing explicitly gated hosted fixture. Never
+spoof its CI guards locally.
 
 The first Ubuntu 22.04 run at `94b52d9` authenticated the root socket listener
 and root/PID-1 manager, with no `ProcessFD` credential. Its live-unit check

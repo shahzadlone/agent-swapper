@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -19,9 +20,13 @@ class ManagedScopeTests(unittest.TestCase):
         good = {'peer_uid': 0, 'manager_uid': 0, 'manager_pid': 1,
                 'unit': {'unit': unit + '.service', 'invocation': invocation,
                          'user': 1000, 'pid': 42, 'control_group': scope,
-                         'delegate': False, 'kill_mode': 'control-group'}}
+                         'delegate': False, 'kill_mode': 'control-group',
+                         'kernel': {'device': 11, 'inode': 22, 'populated': True,
+                                    'main_pidfd_live': True, 'migration_controls_refused': True}}}
         for change in (None, {'invocation': 'b' * 32}, {'pid': 43}, {'delegate': True},
-                       {'kill_mode': 'process'}):
+                       {'kill_mode': 'process'},
+                       {'kernel': {**good['unit']['kernel'], 'inode': 23}},
+                       {'kernel': {**good['unit']['kernel'], 'main_pidfd_live': False}}):
             report = {**good, 'unit': {**good['unit'], **(change or {})}}
             replies = [subprocess.CompletedProcess([], 0, stdout=properties),
                        subprocess.CompletedProcess([], 0),
@@ -30,6 +35,7 @@ class ManagedScopeTests(unittest.TestCase):
                  patch.dict(probe.os.environ, {'ASWP_MANAGED_VALIDATOR': '/fixture/validator',
                                               'ASWP_MANAGED_OBSERVER': '/fixture/observer'}, clear=True), \
                  patch.object(probe.subprocess, 'run', side_effect=replies) as run, \
+                 patch.object(probe.os, 'stat', return_value=SimpleNamespace(st_dev=11, st_ino=22)), \
                  patch('builtins.print'):
                 if change is None:
                     self.assertEqual(probe.inspect_identity(unit, scope, 1000, 42, invocation), invocation)
