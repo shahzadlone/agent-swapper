@@ -1,6 +1,9 @@
 """Guard checks for the disposable system-manager qualification fixture."""
 from pathlib import Path
+import json
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +11,40 @@ import check_linux_managed_scope as probe
 
 
 class ManagedScopeTests(unittest.TestCase):
+    def test_direct_transport_must_agree_with_the_differential_snapshot(self):
+        unit = 'aswp-managed-12-1-graceful'
+        scope = '/system.slice/' + unit + '.service'
+        invocation = 'a' * 32
+        properties = (f'Id={unit}.service\nControlGroup={scope}\nMainPID=42\n'
+                      f'InvocationID={invocation}\nTransient=yes\nUser=1000\nActiveState=active\n')
+        good = {'peer_uid': 0, 'manager_uid': 0, 'manager_pid': 1,
+                'unit': {'unit': unit + '.service', 'invocation': invocation,
+                         'user': 1000, 'pid': 42, 'control_group': scope,
+                         'delegate': False, 'kill_mode': 'control-group',
+                         'kernel': {'device': 11, 'inode': 22, 'populated': True,
+                                    'main_pidfd_live': True, 'migration_controls_refused': True}}}
+        for change in (None, {'invocation': 'b' * 32}, {'pid': 43}, {'delegate': True},
+                       {'kill_mode': 'process'},
+                       {'kernel': {**good['unit']['kernel'], 'inode': 23}},
+                       {'kernel': {**good['unit']['kernel'], 'main_pidfd_live': False}}):
+            report = {**good, 'unit': {**good['unit'], **(change or {})}}
+            replies = [subprocess.CompletedProcess([], 0, stdout=properties),
+                       subprocess.CompletedProcess([], 0),
+                       subprocess.CompletedProcess([], 0, stdout=json.dumps(report), stderr='')]
+            with self.subTest(change=change), \
+                 patch.dict(probe.os.environ, {'ASWP_MANAGED_VALIDATOR': '/fixture/validator',
+                                              'ASWP_MANAGED_OBSERVER': '/fixture/observer'}, clear=True), \
+                 patch.object(probe.subprocess, 'run', side_effect=replies) as run, \
+                 patch.object(probe.os, 'stat', return_value=SimpleNamespace(st_dev=11, st_ino=22)), \
+                 patch('builtins.print'):
+                if change is None:
+                    self.assertEqual(probe.inspect_identity(unit, scope, 1000, 42, invocation), invocation)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        probe.inspect_identity(unit, scope, 1000, 42, invocation)
+                self.assertEqual(run.call_args_list[-1].args[0],
+                                 ['/fixture/observer', unit + '.service', '1000', '42', invocation])
+
     def test_client_injector_rejects_unprivileged_or_invalid_invocation(self):
         for user, expected in [(1000, '/system.slice/aswp-managed-12-1-client-loss.service'),
                                (0, '/system.slice/unrelated.service')]:

@@ -11,6 +11,13 @@ Linux, macOS and Windows tests, dependency policy, all three candidate builds,
 three matching rebuilds and preview provenance verification. This closes that
 integration checkpoint. Later changes still require their own completed run.
 
+The Windows alternate-parent custody correction at `6a4c3be` subsequently
+passed the full `main` pipeline in
+[run 41163820846](https://github.com/shahzadlone/agent-swapper/actions/runs/41163820846),
+including all platform tests, three candidate archives, three matching rebuilds
+and preview provenance verification. The CLI and engine documentation scope
+the result to processes remaining in the owned Job; external work is unverified.
+
 | Release gate | Current boundary |
 | --- | --- |
 | Implemented preview, packaging and provenance | Qualified at the revision above; archives remain unsigned by the operating system |

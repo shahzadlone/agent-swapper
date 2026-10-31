@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify a nondelegated systemd scope on a disposable hosted Linux runner."""
 import os
+import json
 from pathlib import Path
 import re
 import signal
@@ -9,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from linux_manager_observer import Observer, check_bound, check_retired
 
 
 def require(condition, message):
@@ -91,6 +94,34 @@ def inspect_identity(unit, expected, uid, main_pid, expected_invocation=None):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              check=False, timeout=5)
     require(checked.returncode == 0, "Rust core refused manager identity")
+    observer = os.environ.get('ASWP_MANAGED_OBSERVER')
+    require(observer is not None, "Rust manager transport observer is not configured")
+    arguments = [observer, unit + '.service', str(uid), str(main_pid)]
+    if expected_invocation is not None:
+        arguments.append(expected_invocation)
+    observed = subprocess.run(arguments, stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              check=False, timeout=12)
+    require(observed.returncode == 0,
+            "Rust manager transport observation failed: " + observed.stderr[-2000:])
+    require(len(observed.stdout) <= 8192, "manager observation exceeds bounds")
+    report = json.loads(observed.stdout)
+    require(report['manager_uid'] == 0 and report['manager_pid'] == 1 and report['peer_uid'] == 0,
+            "manager transport identity disagrees")
+    fact = report['unit']
+    require(fact['unit'] == unit + '.service' and fact['invocation'] == invocation
+            and fact['user'] == uid and fact['pid'] == main_pid and fact['control_group'] == expected
+            and fact['delegate'] is False and fact['kill_mode'] == 'control-group',
+            "direct manager observation disagrees with differential snapshot")
+    kernel = fact['kernel']
+    named = os.stat('/sys/fs/cgroup' + expected, follow_symlinks=False)
+    require(kernel['device'] == named.st_dev and kernel['inode'] == named.st_ino
+            and kernel['populated'] is True and kernel['main_pidfd_live'] is True
+            and kernel['migration_controls_refused'] is True,
+            "Rust kernel corroboration disagrees with fixture scope")
+    # Detailed fixture metadata stays in ordinary logs. GitHub limits notices
+    # per step; retain that budget for every trial's explicit outcome marker.
+    print('Linux manager transport: ' + json.dumps(report, sort_keys=True), flush=True)
     return invocation
 
 
@@ -193,6 +224,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                                stderr=subprocess.DEVNULL, close_fds=True)
     manager = None
     scope_descriptor = None
+    observer = None
     try:
         wait_for(lambda: (directory / 'outside-heartbeat').exists())
         with (directory / 'manager.log').open('wb') as log:
@@ -219,6 +251,9 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             opened, named = os.fstat(scope_descriptor), scope.stat()
             require((opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
                     and opened.st_uid == 0, "opened scope identity does not match")
+            observer = Observer(os.environ['ASWP_MANAGED_OBSERVER'], unit, os.getuid(), main_pid, invocation)
+            bound = observer.receive(10)
+            check_bound(bound, unit, os.getuid(), main_pid, invocation, opened.st_dev, opened.st_ino)
             before = (directory / 'outside-heartbeat').read_text()
             if client_loss:
                 (directory / 'kill-client').write_text('kill')
@@ -247,14 +282,24 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             else:
                 os.close(events)
                 raise RuntimeError("original managed scope retirement was not observed")
+            retired = observer.receive(12)
+            check_retired(retired, bound)
+            observer.finish()
             heartbeat = (directory / 'worker-heartbeat').read_text()
             time.sleep(0.15)
             require((directory / 'worker-heartbeat').read_text() == heartbeat,
                     "detached worker survived manager cleanup")
             wait_for(lambda: (directory / 'outside-heartbeat').read_text() != before)
             require(outside.poll() is None, "outside writer was terminated")
+            print(f'::notice title=Linux Rust retirement {label}::authenticated original invocation retired; held cgroup directory removed; bound pidfd exited; Python kernel observations agree; no production custody receipt', flush=True)
             print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; systemd-run exit {result}', flush=True)
     finally:
+        observer_cleanup = None
+        if observer is not None:
+            try:
+                observer.close()
+            except Exception as error:
+                observer_cleanup = error
         if scope_descriptor is not None:
             os.close(scope_descriptor)
         (directory / 'outside-stop').write_text('stop')
@@ -271,6 +316,79 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                            timeout=15, check=False)
         if manager is not None and manager.poll() is None:
             manager.wait(timeout=15)
+        if observer_cleanup is not None:
+            raise observer_cleanup
+
+
+def replacement_trial(base, run_id, attempt):
+    """A paused observer must retire its original invocation after name reuse."""
+    unit = f'aswp-managed-{run_id}-{attempt}-replacement'
+    expected = '/system.slice/' + unit + '.service'
+    scope = Path('/sys/fs/cgroup' + expected)
+    require(not scope.exists(), 'replacement scope already exists')
+    first, second = base / 'original', base / 'replacement'
+    first.mkdir(mode=0o700)
+    second.mkdir(mode=0o700)
+    clients = []
+    observer = None
+    binary = os.environ['ASWP_MANAGED_OBSERVER']
+    with tempfile.TemporaryFile() as log:
+        def start(directory):
+            child = subprocess.Popen(['sudo', '-n'] + manager_command(
+                directory, unit, expected, os.getuid(), os.getgid(), False),
+                stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True)
+            clients.append(child)
+            wait_for(lambda: (directory / 'service-ready').exists() or child.poll() is not None)
+            require((directory / 'service-ready').exists(), 'replacement service failed before readiness')
+            text = (directory / 'service-main-pid').read_text()
+            require(re.fullmatch(r'[1-9][0-9]{0,9}', text), 'invalid replacement main process')
+            pid = int(text)
+            return child, pid, inspect_identity(unit, expected, os.getuid(), pid)
+        try:
+            old_client, old_pid, old_invocation = start(first)
+            old_scope = scope.stat()
+            observer = Observer(binary, unit, os.getuid(), old_pid, old_invocation)
+            bound = observer.receive(10)
+            check_bound(bound, unit, os.getuid(), old_pid, old_invocation, old_scope.st_dev, old_scope.st_ino)
+            observer.process.send_signal(signal.SIGSTOP)
+            wait_for(lambda: re.search(r'^State:\s+T', Path(f'/proc/{observer.process.pid}/status').read_text(), re.M),
+                     seconds=2)
+            (first / 'allow-main-exit').write_text('exit')
+            require(old_client.wait(timeout=10) == 0, 'original replacement client failed')
+            wait_for(lambda: not scope.exists(), seconds=5)
+            new_client, new_pid, new_invocation = start(second)
+            new_scope = scope.stat()
+            require(new_invocation != old_invocation
+                    and (new_scope.st_dev, new_scope.st_ino) != (old_scope.st_dev, old_scope.st_ino),
+                    'replacement did not create a distinct invocation and kernel scope')
+            before = (second / 'worker-heartbeat').read_text()
+            observer.process.send_signal(signal.SIGCONT)
+            retired = observer.receive(12)
+            check_retired(retired, bound)
+            observer.finish()
+            # A new observer cannot bind the replacement using the old ID,
+            # even when its unit name, user and new main PID otherwise match.
+            stale = subprocess.run([binary, unit + '.service', str(os.getuid()), str(new_pid), old_invocation],
+                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=12, check=False)
+            require(stale.returncode == 125 and not stale.stdout and b'invocation changed' in stale.stderr,
+                    'replacement accepted the stale invocation or failed at another check')
+            wait_for(lambda: (second / 'worker-heartbeat').read_text() != before)
+            require(new_client.poll() is None and scope.exists(), 'replacement stopped during original retirement')
+            (second / 'allow-main-exit').write_text('exit')
+            require(new_client.wait(timeout=10) == 0, 'replacement cleanup client failed')
+            wait_for(lambda: not scope.exists(), seconds=5)
+            print('::notice title=Linux manager replacement::paused observer retired only its original held scope after unit-name reuse; replacement writer continued; stale invocation refused; both owned services cleaned up', flush=True)
+        finally:
+            try:
+                if observer is not None:
+                    observer.close()
+            finally:
+                if clients and scope.exists():
+                    subprocess.run(['sudo', '-n', 'systemctl', 'stop', unit + '.service'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
+                for client in clients:
+                    if client.poll() is None:
+                        client.wait(timeout=15)
 
 
 def main():
@@ -291,11 +409,20 @@ def main():
     validator = Path(os.environ.get('ASWP_MANAGED_VALIDATOR', ''))
     require(validator.is_absolute() and validator.is_file() and not validator.is_symlink(),
             "Rust manager validator is missing or invalid")
+    observer = Path(os.environ.get('ASWP_MANAGED_OBSERVER', ''))
+    require(observer.is_absolute() and observer.is_file() and not observer.is_symlink(),
+            "Rust manager observer is missing or invalid")
     with tempfile.TemporaryDirectory(prefix='aswp-managed-') as temporary:
         for forced in (False, True):
             trial(Path(temporary), forced, run_id, attempt)
         trial(Path(temporary), False, run_id, attempt, client_loss=True)
+        replacement_trial(Path(temporary), run_id, attempt)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as error:
+        message = json.dumps(str(error)[-2000:], ensure_ascii=True)[1:-1].replace('%', '%25')
+        print('::error title=Linux managed scope::' + message, flush=True)
+        sys.exit(1)
