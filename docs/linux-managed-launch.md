@@ -76,7 +76,7 @@ real account or local service is needed for that experiment.
 
 That provider-free prototype is now implemented in
 [`check_linux_socket_activation.py`](../tools/check_linux_socket_activation.py),
-with native results pending. It creates exclusive runtime unit files and a
+as a qualification-only program. It creates exclusive runtime unit files and a
 protected root ownership marker on opted-in hosted runners. Cleanup requires
 the matching marker and original unit contents before controlling any service.
 Targets run as the fixed ordinary UID; two connections must receive different
@@ -90,11 +90,14 @@ instances, or qualify a terminal relay.
 The initial stream-socket prototype at `eec7afc` passed these checks on both
 Ubuntu 22.04 and 24.04 in
 [run 41166901044](https://github.com/shahzadlone/agent-swapper/actions/runs/41166901044).
-The next revision uses `ListenSequentialPacket=` so the existing Rust
+The subsequent revision uses `ListenSequentialPacket=` so the existing Rust
 sequenced-packet/descriptor transport can be reused rather than inventing
-stream framing. Both socket types are documented by systemd, but native
-activation and malformed-packet refusal require their own results. This
-experiment does not yet use the Rust guardian or carry real launch data.
+stream framing. At `574eaba`, the sequenced-packet activation, oversized-packet
+refusal, separate-user refusal, independent scopes and cleanup passed on both
+images in [run 41167663744](https://github.com/shahzadlone/agent-swapper/actions/runs/41167663744).
+An added control sends an otherwise valid packet with an unexpected harmless
+descriptor; its native result is pending. This experiment does not yet use the
+Rust guardian or carry real launch data.
 
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready

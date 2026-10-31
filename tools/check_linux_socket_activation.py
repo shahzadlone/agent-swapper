@@ -310,15 +310,20 @@ def suite():
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')
-            with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as malformed:
-                malformed.settimeout(8)
-                malformed.connect(str(endpoint(prefix)))
-                malformed.sendall(b'GO\nextra')
-                diagnostic = malformed.recv(4096)
-                require(b'invalid fixture activation request' in diagnostic,
-                        'oversized activation packet was not refused at its framing check')
-                require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
-            print('::notice title=Linux fixed-user activation::oversized control packet refused before worker creation', flush=True)
+            with open('/dev/null', 'rb') as harmless:
+                faults = [('oversized control packet', b'GO\nextra', []),
+                          ('unexpected descriptor', b'GO\n',
+                           [(socket.SOL_SOCKET, socket.SCM_RIGHTS, struct.pack('i', harmless.fileno()))])]
+                for label, packet, rights in faults:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as malformed:
+                        malformed.settimeout(8)
+                        malformed.connect(str(endpoint(prefix)))
+                        require(malformed.sendmsg([packet], rights) == len(packet), 'incomplete negative-control packet')
+                        diagnostic = malformed.recv(4096)
+                        require(b'invalid fixture activation request' in diagnostic,
+                                label + ' was not refused at its framing check')
+                        require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
+                    print('::notice title=Linux fixed-user activation::' + label + ' refused before worker creation', flush=True)
             first, first_report, first_fd = activate(prefix, directory)
             connections.append(first)
             descriptors.append(first_fd)
