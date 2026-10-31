@@ -711,6 +711,21 @@ relaxed. No destination folders are created or repaired. Invalid single-file
 components and reparses remain refusals. The protected temporary file handle
 closes before rename or cleanup because it excludes deletion sharing; the
 parent guard and protected file ACL remain in force during that interval.
+The locked `tempfile 3.27.0` Windows implementation uses `SetFileAttributesW`
+and `MoveFileExW` without replacement or cross-volume copy flags for
+`TempPath::persist_noclobber`. The temporary and destination names share the same
+retained parent. Microsoft's [file security documentation](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
+distinguishes creation-time inherited descriptors from rename/move behavior;
+native tests must still check the resulting descriptor.
+
+Ordinary write, sync, cancellation and failed-publication paths explicitly
+close the file and check temporary-file removal. If removal fails, the caller
+receives `handover_cleanup_failed` rather than a successful cancellation or an
+unqualified publication error. Unwinding still uses best-effort RAII cleanup.
+A native core test deliberately retains a peer handle that denies deletion,
+requires cleanup-failure reporting, verifies that the remaining temporary file
+is protected and the destination absent, then releases the peer and removes
+the fixture. No file contents or secret paths are included in that error.
 
 New native fixtures call the real core publication APIs under owner-rights and
 public-read parents, inspect temporary and published descriptors, check

@@ -151,7 +151,11 @@ refused without changing its ACL. Fixed local NTFS and the current volume-root
 sharing restrictions apply. This new publication path is awaiting native
 qualification; overall Windows privacy remains unverified. Cancellation
 before publication removes the temporary file; after publication the committed
-artifact remains. Directory-sync
+artifact remains. On Windows, a failed temporary-file removal reports
+`handover_cleanup_failed` instead of successful cancellation; a protected
+`.aswp-` file may remain in the selected folder. A refused Windows destination
+policy reports `unprotected_handover_output`, separately from pickup filename
+validation. Directory-sync
 status is reported separately after publication: lack of support does not
 misreport an already-written file as a failed export. Explicit ciphertext
 exports are not a replacement for the future encrypted account-backup feature.

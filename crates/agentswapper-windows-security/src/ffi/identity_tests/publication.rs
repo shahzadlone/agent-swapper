@@ -150,7 +150,7 @@ impl Fixture {
                 .to_vec();
             assert!(matches!(
                 write_ciphertext(&path.join("refused.age"), b"must not be written"),
-                Err(agentswapper_core::Error::UnsafeHandoverOutput)
+                Err(agentswapper_core::Error::UnprotectedHandoverOutput)
             ));
             assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
             assert_eq!(

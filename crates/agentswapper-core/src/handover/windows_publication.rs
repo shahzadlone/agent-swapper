@@ -7,7 +7,7 @@ use std::{ffi::OsStr, fs::File, io::Write, path::Path};
 fn map_security(error: SecurityError) -> Error {
     match error {
         SecurityError::Io(error) => Error::Io(error),
-        _ => Error::UnsafeHandoverOutput,
+        _ => Error::UnprotectedHandoverOutput,
     }
 }
 
@@ -16,6 +16,18 @@ fn map_security(error: SecurityError) -> Error {
 struct PendingFile {
     file: File,
     path: tempfile::TempPath,
+}
+
+impl PendingFile {
+    fn discard(self) -> Result<()> {
+        let Self { file, path } = self;
+        drop(file);
+        discard_path(path)
+    }
+}
+
+fn discard_path(path: tempfile::TempPath) -> Result<()> {
+    path.close().map_err(|_| Error::HandoverCleanupFailed)
 }
 
 pub(super) fn publish_private_bytes(
@@ -50,22 +62,30 @@ pub(super) fn publish_private_bytes(
         file,
         path: tempfile::TempPath::try_from_path(temporary)?,
     };
-    pending.file.write_all(bytes)?;
-    pending.file.sync_all()?;
+    if let Err(error) = pending
+        .file
+        .write_all(bytes)
+        .and_then(|()| pending.file.sync_all())
+    {
+        pending.discard()?;
+        return Err(Error::Io(error));
+    }
     if interrupted() {
+        pending.discard()?;
         return Err(Error::Cancelled);
     }
     let PendingFile { file, path } = pending;
     drop(file);
     // Parent custody and the file's protected DACL remain in force while the
     // handle is closed. Same-user/admin mutation is outside this boundary.
-    path.persist_noclobber(&output).map_err(|error| {
-        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+    if let Err(error) = path.persist_noclobber(&output) {
+        discard_path(error.path)?;
+        return Err(if error.error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::OutputExists
         } else {
             Error::Io(error.error)
-        }
-    })?;
+        });
+    }
     Ok(PublishedPack {
         path: output,
         directory_synced: false,

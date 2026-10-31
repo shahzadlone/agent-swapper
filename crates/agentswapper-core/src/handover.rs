@@ -956,6 +956,49 @@ mod tests {
         }));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn cancellation_reports_cleanup_failure_when_a_peer_retains_the_temporary_file() {
+        use std::{cell::RefCell, os::windows::fs::OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        let temp = tempfile::tempdir().unwrap();
+        let destination = temp.path().join("cancelled.age");
+        let held = RefCell::new(None);
+        let result = write_ciphertext_cancellable(&destination, b"private cleanup canary", || {
+            let entry = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .find(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".aswp-handover-")
+                });
+            if let Some(entry) = entry {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                    .open(entry.path())
+                    .unwrap();
+                *held.borrow_mut() = Some((file, entry.path()));
+                true
+            } else {
+                false
+            }
+        });
+        assert!(matches!(result, Err(Error::HandoverCleanupFailed)));
+        assert!(!destination.exists());
+        let (file, path) = held.into_inner().unwrap();
+        agentswapper_windows_security::SecurityPolicy::for_current_process()
+            .unwrap()
+            .validate_handle(&file, agentswapper_windows_security::ObjectKind::File)
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"private cleanup canary");
+        drop(file);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
     proptest! {
         #[test]
         fn terminal_safe_text_never_contains_escapes_or_bidi(text in ".{0,500}") {
