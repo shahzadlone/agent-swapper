@@ -296,6 +296,54 @@ mod tests {
     }
 
     #[test]
+    fn truncated_admission_closes_every_transferred_lock_before_returning() -> io::Result<()> {
+        // Sixteen descriptors exceed even the ABI padding in the one-FD
+        // receive buffer. The second case instead truncates the payload.
+        for (packet, count) in [(GO, 16), (b"ASWP-GO-1-extra".as_slice(), 1)] {
+            let mut sources = Vec::new();
+            let mut observers = Vec::new();
+            for _ in 0..count {
+                let source = tempfile::NamedTempFile::new()?;
+                observers.push(
+                    std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(source.path())?,
+                );
+                source.as_file().try_lock().map_err(io::Error::other)?;
+                sources.push(source);
+            }
+            let (sender, receiver) = pair()?;
+            send(
+                &sender,
+                packet,
+                &sources
+                    .iter()
+                    .map(|source| source.as_file().as_fd())
+                    .collect::<Vec<_>>(),
+            )?;
+            drop(sources);
+            for observer in &observers {
+                assert!(matches!(
+                    observer.try_lock(),
+                    Err(std::fs::TryLockError::WouldBlock)
+                ));
+            }
+            let error = receive(&receiver)
+                .err()
+                .ok_or_else(|| io::Error::other("truncated admission was accepted"))?;
+            assert_eq!(error.to_string(), "truncated admission packet or rights");
+            // This exercises the early return before ancillary.drain(). The
+            // pinned rustix RecvAncillaryBuffer Drop must release every lock
+            // that fit; the kernel closes the control data that did not fit.
+            for observer in observers {
+                observer.try_lock().map_err(io::Error::other)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn failed_or_expired_receives_restore_original_timeout() -> io::Result<()> {
         let (sender, receiver) = pair()?;
         let original = sockopt::socket_timeout(&receiver, Timeout::Recv)?;
