@@ -68,6 +68,7 @@ class ActivationTests(unittest.TestCase):
         self.assertNotIn('PAMName=', service)
         self.assertNotIn('EnvironmentFile=', service)
         self.assertIn('SocketMode=0600', files['aswp-activation-123-1.socket'])
+        self.assertIn('ListenSequentialPacket=/run/aswp-activation-123-1.sock', files['aswp-activation-123-1.socket'])
 
 
 if __name__ == '__main__':

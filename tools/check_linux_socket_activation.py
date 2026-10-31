@@ -54,7 +54,7 @@ def unit_files(prefix, directory, uid, gid):
     socket_unit = f'''[Unit]
 Description=AgentSwapper disposable activation fixture
 [Socket]
-ListenStream={endpoint(prefix)}
+ListenSequentialPacket={endpoint(prefix)}
 SocketUser={uid}
 SocketGroup={gid}
 SocketMode=0600
@@ -178,14 +178,13 @@ def service(directory, uid, unit):
     check_controls(Path('/sys/fs/cgroup' + group))
     with socket.socket(fileno=os.dup(sys.stdin.fileno())) as connection:
         connection.settimeout(8)
+        require(connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_SEQPACKET,
+                'activation control socket is not sequenced-packet')
         peer_pid, peer_uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         require(peer_uid == uid and peer_pid > 0, 'activation client identity differs')
-        request = bytearray()
-        while len(request) < 3:
-            data = connection.recv(3 - len(request))
-            require(data, 'activation client closed before release')
-            request.extend(data)
-        require(request == b'GO\n', 'invalid fixture activation request')
+        request, ancillary, flags, _ = connection.recvmsg(4, 0)
+        require(request == b'GO\n' and not ancillary
+                and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC), 'invalid fixture activation request')
         run = directory / invocation
         run.mkdir(mode=0o700)
         subprocess.Popen(['/usr/bin/python3', str(Path(__file__).resolve()), '--writer', str(run)],
@@ -223,7 +222,7 @@ def deny_other_user():
     os.setgroups([])
     os.setgid(65534)
     os.setuid(65534)
-    with socket.socket(socket.AF_UNIX) as connection:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
         connection.settimeout(3)
         try:
             connection.connect(str(target))
@@ -235,19 +234,16 @@ def deny_other_user():
 
 
 def activate(prefix, directory):
-    connection = socket.socket(socket.AF_UNIX)
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     try:
         connection.settimeout(8)
         connection.connect(str(endpoint(prefix)))
         peer_pid, peer_uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         require(peer_uid == 0 and peer_pid == 1, 'activation listener is not the system manager')
         connection.sendall(b'GO\n')
-        data = bytearray()
-        while not data.endswith(b'\n'):
-            part = connection.recv(1024)
-            require(part, 'activation guardian closed before its report')
-            data.extend(part)
-            require(len(data) <= 4096, 'activation report exceeds bounds')
+        data, ancillary, flags, _ = connection.recvmsg(4096, 0)
+        require(data.endswith(b'\n') and not ancillary
+                and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC), 'invalid activation report packet')
         report = json.loads(data)
         require(re.fullmatch(re.escape(prefix) + r'@[A-Za-z0-9_.:\\-]+\.service', report['unit'])
                 and re.fullmatch(r'[0-9a-f]{32}', report['invocation'])
@@ -314,6 +310,15 @@ def suite():
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')
+            with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as malformed:
+                malformed.settimeout(8)
+                malformed.connect(str(endpoint(prefix)))
+                malformed.sendall(b'GO\nextra')
+                diagnostic = malformed.recv(4096)
+                require(b'invalid fixture activation request' in diagnostic,
+                        'oversized activation packet was not refused at its framing check')
+                require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
+            print('::notice title=Linux fixed-user activation::oversized control packet refused before worker creation', flush=True)
             first, first_report, first_fd = activate(prefix, directory)
             connections.append(first)
             descriptors.append(first_fd)

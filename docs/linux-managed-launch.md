@@ -87,6 +87,15 @@ are bounded. These cooperative fixture observations do not yet authenticate
 a production launch request, integrate the Rust observer with template
 instances, or qualify a terminal relay.
 
+The initial stream-socket prototype at `eec7afc` passed these checks on both
+Ubuntu 22.04 and 24.04 in
+[run 41166901044](https://github.com/shahzadlone/agent-swapper/actions/runs/41166901044).
+The next revision uses `ListenSequentialPacket=` so the existing Rust
+sequenced-packet/descriptor transport can be reused rather than inventing
+stream framing. Both socket types are documented by systemd, but native
+activation and malformed-packet refusal require their own results. This
+experiment does not yet use the Rust guardian or carry real launch data.
+
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready
 for review. Opus implementation review is also outstanding while the current
