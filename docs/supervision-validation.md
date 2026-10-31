@@ -147,8 +147,17 @@ after the inner empty receipt while the ordinary writer stopped and the peer
 continued. All fixture writers were subsequently observed stopped and the
 outer Job empty. This measures the inner per-run boundary, not the independent
 root's crash boundary. That initial notice over-attributed cleanup to the outer
-Job; the source-review correction below states only the observations. The added
-before-stop challenge and unwind cleanup require their own native run.
+Job; the source-review correction below states only the observations.
+
+The corrected fixture at `c5ef0af` passed the complete branch pipeline in
+[run 41162311992](https://github.com/shahzadlone/agent-swapper/actions/runs/41162311992),
+including native Windows execution with the before-stop challenges and unwind
+cleanup, all three platform suites, candidate archives and matching rebuilds.
+On the same recorded Windows build and runner image, the alternate-parent
+writer again executed after the inner empty receipt, the ordinary writer
+stopped and the peer continued. All fixture writers were subsequently observed
+stopped and the outer Job empty. Branch preview attestation was intentionally
+skipped; integrated `main` provenance requires its own run.
 
 Opus 5.5 xhigh reviewed the design, recommended explicit before-stop liveness,
 inconclusive failures and unwind cleanup, and agreed to keep the result scoped
