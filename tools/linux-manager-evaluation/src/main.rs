@@ -63,16 +63,7 @@ fn prerequisites() -> io::Result<Vec<PathFact>> {
         Path::new("/run/systemd/system").is_dir(),
         "system manager unavailable",
     )?;
-    for path in ["/proc/self/uid_map", "/proc/self/gid_map"] {
-        require(
-            identity_map(&bounded_file(path, 4096)?),
-            "non-initial identity map refused",
-        )?;
-    }
-    require(
-        bounded_file("/proc/1/cgroup", 4096)? == b"0::/init.scope\n",
-        "initial unified system-manager scope unavailable",
-    )?;
+    kernel::initial_namespace()?;
     let mut facts = Vec::new();
     for path in ["/", "/run", "/run/dbus", SOCKET] {
         let meta = fs::symlink_metadata(path)?;

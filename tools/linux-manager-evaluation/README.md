@@ -18,6 +18,12 @@ received process descriptor must identify PID 1 in local `fdinfo`. The observer
 requires full identity UID/GID maps and PID 1 in `/init.scope` on unified cgroup
 v2. Unsupported layouts fail without fallback. `DBUS_SYSTEM_BUS_ADDRESS` is
 ignored, and the harness verifies an override listener receives no connection.
+Namespace metadata is read through a verified procfs directory, with the
+kernel-generated self link resolved within that mount. Its PID view must agree
+with the running process. `openat2` refuses mount crossings and symlinks below
+the retained process/cgroup directories, so a bind-mounted file cannot supply
+a forged full-range identity map. An unavailable `openat2` is a refusal, not a
+fallback to ordinary path reads.
 
 All manager calls use its unique bus name. Success replies require the expected
 sender. Unit reads bracket properties with the invocation ID and recheck the
@@ -89,9 +95,21 @@ UID 0/PID 1 without `ProcessFD`. Ubuntu 22.04 returned ENODATA (61) for the
 optional invocation xattr; Ubuntu 24.04 returned the matching 32-byte hex ID.
 Kernel corroboration subsequently passed on both images at `9c56a93` in
 [run 41164302159](https://github.com/shahzadlone/agent-swapper/actions/runs/41164302159).
-The subsequent retained-handle retirement observer requires its own native results. The only
+Retained-handle retirement subsequently passed all three trials on both images
+at `181aab0` in [run 41164791650](https://github.com/shahzadlone/agent-swapper/actions/runs/41164791650).
+The subsequent procfs-overlay and replacement-socket controls require their own native results. The only
 service creation remains the existing explicitly gated hosted fixture. Never
 spoof its CI guards locally.
+
+The refusal fixture is additionally opted in with `ASWP_MANAGER_REFUSALS=1`.
+Each case runs in its own private mount namespace on disposable hosted CI:
+an overlaid identity map, a substituted ordinary directory at `/proc`, a
+user-owned bus socket, and a root-owned socket inode whose actual listener
+remains an ordinary user. It requires the specific refusal diagnostic, keeps
+the real-host positive baseline, drops privileges before running the observer,
+and cleans up only owned children. A root-side timeout independently bounds
+the namespace process group. It never mounts on the user's host or a
+self-hosted runner. These controls do not exhaust namespace or bus adversaries.
 
 The first Ubuntu 22.04 run at `94b52d9` authenticated the root socket listener
 and root/PID-1 manager, with no `ProcessFD` credential. Its live-unit check

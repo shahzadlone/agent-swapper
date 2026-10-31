@@ -3,7 +3,7 @@
 use crate::require;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
-    fs::{FileType, Mode, OFlags, openat},
+    fs::{FileType, Mode, OFlags, ResolveFlags, openat, openat2},
     process::{Pid, PidfdFlags, pidfd_open},
 };
 use serde::Serialize;
@@ -23,8 +23,25 @@ const READ: OFlags = OFlags::RDONLY
     .union(OFlags::NOFOLLOW)
     .union(OFlags::NONBLOCK);
 
+fn same_mount(parent: &OwnedFd, name: &str, flags: OFlags) -> io::Result<OwnedFd> {
+    openat2(
+        parent,
+        name,
+        flags,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
+    )
+    .map_err(|error| {
+        if error == rustix::io::Errno::XDEV {
+            io::Error::other("kernel metadata crosses a mount boundary")
+        } else {
+            error.into()
+        }
+    })
+}
+
 fn read_at(parent: &OwnedFd, name: &str, limit: usize) -> io::Result<Vec<u8>> {
-    let fd = openat(parent, name, READ, Mode::empty())?;
+    let fd = same_mount(parent, name, READ)?;
     require(
         FileType::from_raw_mode(rustix::fs::fstat(&fd)?.st_mode) == FileType::RegularFile,
         "kernel metadata is not a regular file",
@@ -35,6 +52,58 @@ fn read_at(parent: &OwnedFd, name: &str, limit: usize) -> io::Result<Vec<u8>> {
         .read_to_end(&mut bytes)?;
     require(bytes.len() <= limit, "kernel metadata exceeds bounds")?;
     Ok(bytes)
+}
+
+fn proc_root() -> io::Result<OwnedFd> {
+    let root = rustix::fs::open("/proc", DIRECTORY, Mode::empty())?;
+    root_directory(&root)?;
+    require(
+        rustix::fs::fstatfs(&root)?.f_type == rustix::fs::PROC_SUPER_MAGIC,
+        "process metadata is not procfs",
+    )?;
+    Ok(root)
+}
+
+fn own_process(root: &OwnedFd) -> io::Result<OwnedFd> {
+    // /proc/self is a kernel-generated ordinary symlink. Resolve it within
+    // this procfs mount; overlays and procfs magic links are refused. File
+    // reads underneath the resulting directory also refuse mount crossings.
+    let own = openat2(
+        root,
+        "self",
+        DIRECTORY & !OFlags::NOFOLLOW,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS | ResolveFlags::NO_XDEV,
+    )?;
+    let status = read_at(&own, "status", 65536)?;
+    let status = std::str::from_utf8(&status).map_err(io::Error::other)?;
+    let pids = status
+        .lines()
+        .filter_map(|line| line.strip_prefix("Pid:"))
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    require(
+        pids == [std::process::id().to_string()],
+        "procfs PID view disagrees with this process",
+    )?;
+    Ok(own)
+}
+
+pub(crate) fn initial_namespace() -> io::Result<()> {
+    let root = proc_root()?;
+    let own = own_process(&root)?;
+    for name in ["uid_map", "gid_map"] {
+        require(
+            crate::identity_map(&read_at(&own, name, 4096)?),
+            "non-initial identity map refused",
+        )?;
+    }
+    let init = same_mount(&root, "1", DIRECTORY)?;
+    root_directory(&init)?;
+    require(
+        read_at(&init, "cgroup", 4096)? == b"0::/init.scope\n",
+        "initial unified system-manager scope unavailable",
+    )
 }
 
 fn root_directory(fd: &OwnedFd) -> io::Result<()> {
@@ -53,7 +122,7 @@ fn check_scope_controls(fd: &OwnedFd) -> io::Result<()> {
         rustix::fs::fstatfs(fd)?.f_type == CGROUP2,
         "scope is not on cgroup v2",
     )?;
-    let control = openat(fd, "cgroup.procs", READ, Mode::empty())?;
+    let control = same_mount(fd, "cgroup.procs", READ)?;
     let stat = rustix::fs::fstat(&control)?;
     require(
         FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
@@ -61,14 +130,13 @@ fn check_scope_controls(fd: &OwnedFd) -> io::Result<()> {
             && stat.st_mode & 0o022 == 0,
         "migration control is not root-owned and protected",
     )?;
-    match openat(
+    match same_mount(
         fd,
         "cgroup.procs",
         OFlags::WRONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-        Mode::empty(),
     ) {
-        Err(rustix::io::Errno::ACCESS | rustix::io::Errno::PERM) => Ok(()),
-        Err(error) => Err(error.into()),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(()),
+        Err(error) => Err(error),
         Ok(_) => Err(io::Error::other(
             "ordinary observer can open a migration control for writing",
         )),
@@ -119,17 +187,11 @@ impl Process {
         // Open before /proc reads, and require it to remain live afterwards.
         // This prevents a PID reused during those reads from passing admission.
         let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
-        let proc_root = rustix::fs::open("/proc", DIRECTORY, Mode::empty())?;
-        root_directory(&proc_root)?;
-        require(
-            rustix::fs::fstatfs(&proc_root)?.f_type == rustix::fs::PROC_SUPER_MAGIC,
-            "process metadata is not procfs",
-        )?;
-        let proc_dir = openat(
+        let proc_root = proc_root()?;
+        let proc_dir = same_mount(
             &proc_root,
-            pid.as_raw_nonzero().get().to_string(),
+            &pid.as_raw_nonzero().get().to_string(),
             DIRECTORY,
-            Mode::empty(),
         )?;
         require(
             rustix::fs::fstatfs(&proc_dir)?.f_type == rustix::fs::PROC_SUPER_MAGIC,
@@ -225,7 +287,7 @@ impl Binding {
         }
         check_scope_controls(&dir)?;
         for component in ["system.slice", unit] {
-            dir = openat(&dir, component, DIRECTORY, Mode::empty())?;
+            dir = same_mount(&dir, component, DIRECTORY)?;
             check_scope_controls(&dir)?;
         }
         let stat = rustix::fs::fstat(&dir)?;
@@ -286,6 +348,19 @@ impl Binding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_process_metadata_comes_from_one_procfs_mount() -> io::Result<()> {
+        let root = proc_root()?;
+        let own = own_process(&root)?;
+        require(
+            crate::identity_map(&read_at(&own, "uid_map", 4096)?),
+            "local qualification requires the initial user namespace",
+        )?;
+        assert!(same_mount(&own, "../1/status", READ).is_err());
+        assert!(same_mount(&root, "self/status", READ).is_err());
+        Ok(())
+    }
 
     #[test]
     fn event_and_user_metadata_refuse_ambiguity() -> io::Result<()> {
