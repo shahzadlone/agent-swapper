@@ -29,7 +29,7 @@ use windows_sys::Wdk::{
 use windows_sys::Win32::{
     Foundation::{
         ERROR_NO_TOKEN, INVALID_HANDLE_VALUE, LocalFree, OBJ_CASE_INSENSITIVE, OBJ_DONT_REPARSE,
-        RtlNtStatusToDosError, UNICODE_STRING,
+        RtlNtStatusToDosError, STATUS_PENDING, STATUS_SUCCESS, UNICODE_STRING,
     },
     Security::{
         Authorization::{
@@ -476,29 +476,41 @@ fn validate_object_with_links(file: &File, kind: ObjectKind, allow_detached: boo
 }
 
 fn validate_local_device(file: &File) -> Result<()> {
-    let mut information = FILE_FS_DEVICE_INFORMATION::default();
-    let mut status_block = IO_STATUS_BLOCK::default();
+    let mut query = Box::new((
+        IO_STATUS_BLOCK::default(),
+        FILE_FS_DEVICE_INFORMATION::default(),
+    ));
     // SAFETY: live file handle and initialized, aligned fixed-size SDK outputs.
-    // This synchronous volume query uses the actual opened device, not a path
-    // or a server-provided filesystem name as evidence of local storage.
+    // The query uses the actual device, not a path or server-provided name.
+    // Heap storage also survives an unexpected pending completion on a caller's
+    // overlapped/non-synchronizable handle; see the explicit pending branch.
     let status = unsafe {
         NtQueryVolumeInformationFile(
             file.as_raw_handle(),
-            &mut status_block,
-            (&mut information as *mut FILE_FS_DEVICE_INFORMATION).cast(),
+            &mut query.0,
+            (&mut query.1 as *mut FILE_FS_DEVICE_INFORMATION).cast(),
             size_of::<FILE_FS_DEVICE_INFORMATION>() as u32,
             FileFsDeviceInformation,
         )
     };
+    if status == STATUS_PENDING {
+        // No documented completion event belongs to this query, and arbitrary
+        // caller handles need not grant SYNCHRONIZE. Never free memory that an
+        // unexpected late completion could write. Leak only these fixed-size
+        // outputs and fail closed; no successful pending path is assumed.
+        let _ = Box::into_raw(query);
+        return Err(Error::UnsupportedObject);
+    }
     if status < 0 {
         // SAFETY: pure integer NTSTATUS conversion, no pointer arguments.
         return Err(
             io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32).into(),
         );
     }
-    if status_block.Information != size_of::<FILE_FS_DEVICE_INFORMATION>()
-        || information.DeviceType != FILE_DEVICE_DISK
-        || information.Characteristics & (FILE_REMOTE_DEVICE | FILE_REMOVABLE_MEDIA) != 0
+    if status != STATUS_SUCCESS
+        || query.0.Information != size_of::<FILE_FS_DEVICE_INFORMATION>()
+        || query.1.DeviceType != FILE_DEVICE_DISK
+        || query.1.Characteristics & (FILE_REMOTE_DEVICE | FILE_REMOVABLE_MEDIA) != 0
     {
         return Err(Error::UnsupportedObject);
     }

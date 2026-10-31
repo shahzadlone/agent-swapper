@@ -420,6 +420,52 @@ fn exact_private_directories_allow_owner_updates_while_names_remain_retained() {
 }
 
 #[test]
+fn ancestors_without_untrusted_write_grants_allow_owner_atomic_updates() {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY};
+    let fixture = fixture();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let owner = policy.owner.sddl();
+    for (name, sddl) in [
+        (
+            "owner-rights",
+            "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)".to_owned(),
+        ),
+        (
+            "public-read",
+            format!(
+                "O:{owner}D:P(A;OICI;FA;;;{owner})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;;0x001200a9;;;WD)"
+            ),
+        ),
+    ] {
+        let parent = fixture.path().join(name);
+        let descriptor = LocalDescriptor::from_sddl(&sddl).unwrap();
+        drop(create(&parent, ObjectKind::Directory, &descriptor).unwrap());
+        let writer = std::fs::OpenOptions::new()
+            .access_mode(FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_TRAVERSE | SYNCHRONIZE)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&parent)
+            .unwrap();
+        let guard = policy
+            .open_or_create_private_root(&parent.join("private"))
+            .unwrap();
+        let peer = policy.open_existing_private_root(guard.path()).unwrap();
+        for number in 0..2 {
+            std::fs::write(parent.join("pending"), [number]).unwrap();
+            std::fs::rename(parent.join("pending"), parent.join("published")).unwrap();
+            assert_eq!(std::fs::read(parent.join("published")).unwrap(), [number]);
+        }
+        assert!(std::fs::rename(&parent, parent.with_extension("moved")).is_err());
+        drop(peer);
+        drop(guard);
+        drop(writer);
+    }
+    println!(
+        "::notice title=Windows ancestor update compatibility::OW-only and public-read ancestors allowed preexisting trusted writer handles, concurrent guarded reopen and atomic file replacement; ancestor names stayed retained; public AD4 remains a separate write-excluding policy"
+    );
+}
+
+#[test]
 fn returns_a_usable_normalized_path_beyond_the_legacy_path_limit() {
     let fixture = fixture();
     let policy = SecurityPolicy::for_current_process().unwrap();

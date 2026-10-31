@@ -337,8 +337,9 @@ It opens an actual fixed NTFS volume root, then opens each directory relative
 to the preceding retained handle. Missing directories use exclusive creation
 with the protected policy at creation time; a competing creator is handled by
 one reopen and validation, never by adoption without inspection or ACL repair.
-All handles exclude deletion sharing and inheritance. Public ancestors also
-exclude write sharing; exact private directories permit trusted writes. Directory handles
+All handles exclude deletion sharing and inheritance. Ancestors that grant
+other users subdirectory creation also exclude write sharing; exact private
+directories and ancestors granting other users only read access permit trusted writes. Directory handles
 retain TRAVERSE/EXECUTE access so that their sharing restrictions participate
 in the filesystem's share accounting. The final directory must
 match the exact protected three-principal policy. The separate existing-root
@@ -350,7 +351,7 @@ create-subdirectory (`0x4`) in addition to the public read-only mask. Every
 retained child is independently checked, every ancestor refuses untrusted
 DELETE and DELETE_CHILD, and the complete chain is checked again from leaf to
 volume root before returning. A nonempty chain alone is not credited as
-protection against every reparse tag: retained public-ancestor handles additionally
+protection against every reparse tag: retained AD4 ancestor handles additionally
 exclude write access, including ADD_SUBDIRECTORY/APPEND_DATA. Exact private
 directories use their three-principal DACL and retain deletion exclusion while
 permitting owner writes, as explained in the consumer qualification below. The implementation does
@@ -471,6 +472,58 @@ the combined fixture uses `temp_store=MEMORY`. A custom handle-relative SQLite
 VFS is an alternative if pathname custody or compatibility cannot be qualified,
 not an implemented component. A completed review of older code does not approve
 these follow-up implementations automatically.
+
+## Production integration review follow-up
+
+Two focused Opus 5.5 reviews at xhigh effort completed against `df9bdcc`.
+They found no confirmed ownership/drop-order defect in `Store`, `ProfileLease`
+or configuration publication, and no defect in the Owner Rights ancestor or
+zero-link snapshot rules. A preceding broad review timed out without findings
+and is not counted as evidence. These are source reviews, not a proof of safety.
+
+The boundary review identified unnecessary write exclusion for ancestors whose
+untrusted grants are strictly read-only. They now retain READ/WRITE sharing
+with deletion excluded, and are revalidated under that same strict policy.
+Only the AD4-permitting class upgrades to write-excluding custody. That reopen
+also compares actual volume serial and file ID before releasing the first
+handle. Native controls cover owner atomic updates under both an OW parent and
+a public-read parent, while the existing public-AD4 writer/reparse refusals
+remain mandatory. The consumer review's suggestion to allow writes on *all*
+ancestors was rejected: the measured AD4 reparse attack requires exclusion.
+
+The volume query's asynchronous completion was an unresolved contract question,
+not a reproduced defect. Its initialized IOSB and device output now live in one
+heap allocation. An unexpected `STATUS_PENDING` abandons only that fixed-size
+allocation and refuses the object, so a late native write cannot target freed
+stack/heap storage. Only `STATUS_SUCCESS` is admitted. A native fixture queries
+an overlapped file handle without SYNCHRONIZE access; this cannot force every
+possible driver completion path. Repeated unexpected pending responses could
+leak additional small allocations; no successful pending result is used.
+
+The actual volume-root handle still excludes writes for the guard's lifetime.
+This can refuse startup when a directory writer already exists and block trusted
+operations that open that root for writing, including root-targeted renames.
+This is an availability/compatibility limit, not a promise to withstand denial
+of service. Root reparse behavior remains unqualified; do not remove its write
+exclusion based on ordinary-directory tests. Any mutation probe requires a newly
+owned disposable volume, never an existing machine's volume root.
+
+Other review questions were checked against source: inherited private roots are
+admitted; `reject_links` tolerates missing components; registry opens pass a bare
+filename to SQLite; workspace mapping normalization is unchanged; and native
+`.cmd`/`.bat`/`.ps1` entrypoints are refused. The selected workspace, not the
+profile home, supplies the child cwd. Actual vendor acceptance of verbatim home
+paths and gents-created runtime ACLs remains part of real-provider qualification.
+Privileged DACL bypass, including SeRestorePrivilege holders, is outside the
+ordinary-other-user privacy model.
+
+At `3951b85`, both Windows ACL steps, including the temporary other-user/core
+consumer checks, and dashboard ConPTY transitions passed in
+[CI run 41147086157](https://github.com/shahzadlone/agent-swapper/actions/runs/41147086157).
+Its handover pack check failed after input-mode restoration, and Linux/macOS
+Clippy caught a newly collapsible condition after dead-code removal; the run
+was not successful overall. The condition is corrected, and the refined ancestor
+sharing and defensive volume-query changes need their own native results.
 
 ## Inherited descendants
 

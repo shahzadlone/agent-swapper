@@ -10,6 +10,24 @@ mod root;
 mod snapshots;
 
 #[test]
+fn validates_device_for_an_overlapped_handle_without_synchronize_access() {
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
+    let root = tempfile::tempdir().unwrap();
+    let policy = SecurityPolicy::for_current_process().unwrap();
+    let path = root.path().join("overlapped.txt");
+    drop(policy.create_new(&path, ObjectKind::File).unwrap());
+    let file = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_OVERLAPPED)
+        .open(&path)
+        .unwrap();
+    policy.validate_handle(&file, ObjectKind::File).unwrap();
+    println!(
+        "::notice title=Windows volume query compatibility::actual overlapped file without SYNCHRONIZE passed local-device and private-descriptor validation; unexpected pending completion remains a separate defensive refusal"
+    );
+}
+
+#[test]
 fn creates_protected_files_and_directories_and_checks_the_actual_handles() {
     let root = tempfile::tempdir().unwrap();
     let policy = SecurityPolicy::for_current_process().unwrap();

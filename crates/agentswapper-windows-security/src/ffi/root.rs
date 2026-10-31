@@ -1,6 +1,7 @@
 //! Candidate full-path custody. Only this constructor can combine AD4 ancestor
 //! classification with retained, independently validated children and refusal
-//! of write/delete sharing for public ancestors. Exact private directories
+//! of write/delete sharing for ancestors granting untrusted subdirectory creation.
+//! Exact private directories and ancestors without untrusted write grants
 //! permit trusted writers while retaining deletion exclusion. No caller
 //! can obtain an accepted ancestor snapshot using that exception.
 
@@ -16,7 +17,11 @@ const MAX_PATH_UNITS: usize = 32767;
 #[derive(Clone, Copy)]
 enum DirectoryPolicy {
     Private,
+    // Untrusted principals have no effective write-class rights. Trusted
+    // writers may therefore share this directory, just as for private ACLs.
     Ancestor,
+    // Untrusted AD4 grants require a write-excluding, share-accounted handle.
+    CreateSubdirectoryAncestor,
 }
 
 struct RetainedDirectory {
@@ -104,7 +109,7 @@ impl SecurityPolicy {
         let descriptor = self.creation_descriptor(ObjectKind::Directory)?;
         let mut directory = RetainedDirectory {
             file: open_volume_root(letter)?,
-            policy: DirectoryPolicy::Ancestor,
+            policy: DirectoryPolicy::CreateSubdirectoryAncestor,
         };
         let mut ancestors = Vec::with_capacity(names.len());
         for name in names {
@@ -150,12 +155,18 @@ impl SecurityPolicy {
             };
             // A private DACL grants no ordinary other user mutation rights.
             // Its directory must permit owner writes: Windows replacement APIs
-            // may open the target parent for writing. Otherwise, upgrade to a
-            // write-excluding handle and revalidate before any child lookup.
+            // may open the target parent for writing. The same holds for public
+            // read-only grants. Only untrusted AD4 grants need a write-excluding
+            // handle and fresh validation before any child lookup.
             let child = if self.validate_private_parent(&child).is_ok() {
                 RetainedDirectory {
                     file: child,
                     policy: DirectoryPolicy::Private,
+                }
+            } else if self.validate_ancestor_handle(&child).is_ok() {
+                RetainedDirectory {
+                    file: child,
+                    policy: DirectoryPolicy::Ancestor,
                 }
             } else {
                 self.validate_traversed_directory(&child)?;
@@ -167,19 +178,27 @@ impl SecurityPolicy {
                     FILE_SHARE_READ,
                 )?;
                 self.validate_traversed_directory(&guarded)?;
+                let original = object_information(&child)?;
+                let reopened = object_information(&guarded)?;
+                if original.dwVolumeSerialNumber != reopened.dwVolumeSerialNumber
+                    || original.nFileIndexHigh != reopened.nFileIndexHigh
+                    || original.nFileIndexLow != reopened.nFileIndexLow
+                {
+                    return Err(Error::UnsupportedObject);
+                }
                 // The original handle excluded deletion throughout the reopen.
                 drop(child);
                 RetainedDirectory {
                     file: guarded,
-                    policy: DirectoryPolicy::Ancestor,
+                    policy: DirectoryPolicy::CreateSubdirectoryAncestor,
                 }
             };
             ancestors.push(directory);
             directory = child;
         }
         // The final child cannot grant untrusted deletion rights. Every
-        // ancestor likewise denies DELETE/DELETE_CHILD. Public ancestors also
-        // exclude write sharing; exact private directories rely on their DACL.
+        // ancestor likewise denies DELETE/DELETE_CHILD. AD4 ancestors also
+        // exclude write sharing; other directories rely on their strict DACL.
         // Recheck each handle using the policy that selected its sharing mode
         // before publishing any usable pathname.
         match mode {
@@ -207,7 +226,10 @@ impl SecurityPolicy {
     fn validate_retained_directory(&self, directory: &RetainedDirectory) -> Result<()> {
         match directory.policy {
             DirectoryPolicy::Private => self.validate_private_parent(&directory.file),
-            DirectoryPolicy::Ancestor => self.validate_traversed_directory(&directory.file),
+            DirectoryPolicy::Ancestor => self.validate_ancestor_handle(&directory.file),
+            DirectoryPolicy::CreateSubdirectoryAncestor => {
+                self.validate_traversed_directory(&directory.file)
+            }
         }
     }
 

@@ -625,6 +625,16 @@ fn owner_rights_is_trusted_only_on_ancestors_with_an_independently_trusted_owner
         assert!(policy.validate_ancestor_descriptor(&bytes).is_err());
         assert!(validate_traversed_ancestor(&bytes, &policy.owner).is_err());
     }
+    let file = descriptor(ObjectKind::File, &trustees);
+    assert!(policy.validate_descriptor(&file, ObjectKind::File).is_err());
+    assert!(validate_detached_file(&file, &policy.owner).is_err());
+    let inherited_file = inherited(&trustees, USER);
+    assert!(
+        policy
+            .validate_inherited_file_descriptor(&inherited_file)
+            .is_err()
+    );
+    assert!(validate_detached_file(&inherited_file, &policy.owner).is_err());
 }
 
 #[test]
