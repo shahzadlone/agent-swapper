@@ -10,6 +10,8 @@ use windows_sys::Win32::{
     System::{IO::DeviceIoControl, Ioctl::VOLUME_DISK_EXTENTS},
 };
 
+mod root_probe;
+
 // Declaration order closes all volume handles before detaching the owned disk.
 struct OwnedNtfsVolume {
     root: File,
