@@ -476,19 +476,21 @@ fn validate_object_with_links(file: &File, kind: ObjectKind, allow_detached: boo
 }
 
 fn validate_local_device(file: &File) -> Result<()> {
-    let mut query = Box::new((
+    let query = Box::into_raw(Box::new((
         IO_STATUS_BLOCK::default(),
         FILE_FS_DEVICE_INFORMATION::default(),
-    ));
+    )));
     // SAFETY: live file handle and initialized, aligned fixed-size SDK outputs.
     // The query uses the actual device, not a path or server-provided name.
     // Heap storage also survives an unexpected pending completion on a caller's
-    // overlapped/non-synchronizable handle; see the explicit pending branch.
+    // overlapped/non-synchronizable handle. Ownership is already raw so no Box
+    // uniqueness borrow can overlap a late write. Both raw field pointers are
+    // aligned and disjoint within this live, initialized allocation.
     let status = unsafe {
         NtQueryVolumeInformationFile(
             file.as_raw_handle(),
-            &mut query.0,
-            (&mut query.1 as *mut FILE_FS_DEVICE_INFORMATION).cast(),
+            &raw mut (*query).0,
+            (&raw mut (*query).1).cast(),
             size_of::<FILE_FS_DEVICE_INFORMATION>() as u32,
             FileFsDeviceInformation,
         )
@@ -498,9 +500,12 @@ fn validate_local_device(file: &File) -> Result<()> {
         // caller handles need not grant SYNCHRONIZE. Never free memory that an
         // unexpected late completion could write. Leak only these fixed-size
         // outputs and fail closed; no successful pending path is assumed.
-        let _ = Box::into_raw(query);
         return Err(Error::UnsupportedObject);
     }
+    // SAFETY: every non-pending status completes the call. Native code no
+    // longer uses the output pointers; recover the unique allocation exactly
+    // once so every completed success/refusal frees it.
+    let query = unsafe { Box::from_raw(query) };
     if status < 0 {
         // SAFETY: pure integer NTSTATUS conversion, no pointer arguments.
         return Err(

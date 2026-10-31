@@ -500,6 +500,17 @@ an overlapped file handle without SYNCHRONIZE access; this cannot force every
 possible driver completion path. Repeated unexpected pending responses could
 leak additional small allocations; no successful pending result is used.
 
+A third focused Opus review at `114084b` found no confirmed security blocker in
+the policy split or query change. It caught a confounded rename assertion: the
+fixture's owner writer also excluded deletion. The revised controls close that
+writer and the peer guard, require sharing violation (32) with the sole remaining
+guard, then require successful rename after dropping it. The OW cases cover both
+the token-default owner and an explicit current-user owner. The query now
+relinquishes Box ownership **before** the native call and forms only raw field
+pointers; ownership is recovered only after a non-pending return. This also
+avoids creating a Box uniqueness borrow during a hypothetical late completion.
+Those follow-up controls need their own native results.
+
 The actual volume-root handle still excludes writes for the guard's lifetime.
 This can refuse startup when a directory writer already exists and block trusted
 operations that open that root for writing, including root-targeted renames.

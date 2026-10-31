@@ -412,8 +412,16 @@ fn exact_private_directories_allow_owner_updates_while_names_remain_retained() {
         std::fs::read(peer.path().join("published")).unwrap(),
         b"private update"
     );
-    assert!(std::fs::rename(&path, path.with_extension("moved")).is_err());
     drop(writer);
+    drop(peer);
+    let moved = path.with_extension("moved");
+    assert_eq!(
+        std::fs::rename(&path, &moved).unwrap_err().raw_os_error(),
+        Some(32)
+    );
+    drop(root);
+    std::fs::rename(&path, &moved).unwrap();
+    std::fs::rename(&moved, &path).unwrap();
     println!(
         "::notice title=Windows private directory compatibility::exact private root allowed owner ADD_FILE/ADD_SUBDIRECTORY handle, concurrent guarded reopen and child rename while retaining the directory name"
     );
@@ -429,6 +437,10 @@ fn ancestors_without_untrusted_write_grants_allow_owner_atomic_updates() {
         (
             "owner-rights",
             "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)".to_owned(),
+        ),
+        (
+            "user-owner-rights",
+            format!("O:{owner}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"),
         ),
         (
             "public-read",
@@ -455,10 +467,16 @@ fn ancestors_without_untrusted_write_grants_allow_owner_atomic_updates() {
             std::fs::rename(parent.join("pending"), parent.join("published")).unwrap();
             assert_eq!(std::fs::read(parent.join("published")).unwrap(), [number]);
         }
-        assert!(std::fs::rename(&parent, parent.with_extension("moved")).is_err());
-        drop(peer);
-        drop(guard);
         drop(writer);
+        drop(peer);
+        let moved = parent.with_extension("moved");
+        assert_eq!(
+            std::fs::rename(&parent, &moved).unwrap_err().raw_os_error(),
+            Some(32)
+        );
+        drop(guard);
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::rename(&moved, &parent).unwrap();
     }
     println!(
         "::notice title=Windows ancestor update compatibility::OW-only and public-read ancestors allowed preexisting trusted writer handles, concurrent guarded reopen and atomic file replacement; ancestor names stayed retained; public AD4 remains a separate write-excluding policy"
