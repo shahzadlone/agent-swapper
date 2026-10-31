@@ -22,10 +22,10 @@ pub(crate) fn normalize_root(path: &Path) -> Result<std::path::PathBuf> {
     if !path.is_absolute() {
         return Err(Error::UnsafePath);
     }
-    if let Ok(meta) = fs::symlink_metadata(path) {
-        if meta.file_type().is_symlink() {
-            return Err(Error::UnsafePath);
-        }
+    if let Ok(meta) = fs::symlink_metadata(path)
+        && meta.file_type().is_symlink()
+    {
+        return Err(Error::UnsafePath);
     }
     let mut tail = vec![path.file_name().ok_or(Error::UnsafePath)?.to_owned()];
     let mut parent = path.parent().ok_or(Error::UnsafePath)?;
