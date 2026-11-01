@@ -259,6 +259,9 @@ jobs:
       - name: Compare read-only executable identity observation
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_identity
+      - name: Evaluate inner-session terminal job control
+        timeout-minutes: 1
+        run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example terminal_job_control
       - name: Qualify root-owned service cleanup
         env:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe

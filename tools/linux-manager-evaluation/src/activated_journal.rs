@@ -20,37 +20,8 @@ pub(crate) fn serve(
     invocation: &str,
     terminal_requested: bool,
 ) -> io::Result<()> {
-    require(
-        !rustix::net::sockopt::socket_passcred(channel)?,
-        "descriptor channel must not request credentials",
-    )?;
-    require(
-        !rustix::fs::fcntl_getfl(channel)?.contains(rustix::fs::OFlags::NONBLOCK),
-        "lease channel must be blocking",
-    )?;
     let deadline = Instant::now() + Duration::from_secs(15);
-    // ASWP-GO-1 is the existing descriptor envelope, not the start grant.
-    let lease = File::from(transport::receive_until(channel, deadline)?);
-    let meta = lease.metadata()?;
-    if !(meta.is_file()
-        && meta.uid() == rustix::process::getuid().as_raw()
-        && meta.mode() & 0o7777 == 0o600
-        && meta.nlink() == 1)
-    {
-        refused_lease(directory, invocation, "metadata")?;
-        return Err(io::Error::other("invalid fixture profile lease"));
-    }
-    match lease.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => {
-            refused_lease(directory, invocation, "locked")?;
-            return Err(io::Error::other(
-                "fixture lease is locked by another open-file description",
-            ));
-        }
-        Err(std::fs::TryLockError::Error(error)) => return Err(error),
-    }
-    fs::DirBuilder::new().mode(0o700).create(directory)?;
+    let lease = acquire_lease(channel, directory, invocation, deadline)?;
     let terminal = if terminal_requested {
         Some(crate::terminal::pair()?)
     } else {
@@ -154,6 +125,45 @@ pub(crate) fn serve(
     // The manager kills remaining children when this main process exits.
     drop(lease);
     Ok(())
+}
+
+pub(crate) fn acquire_lease(
+    channel: &OwnedFd,
+    directory: &Path,
+    invocation: &str,
+    deadline: Instant,
+) -> io::Result<File> {
+    require(
+        !rustix::net::sockopt::socket_passcred(channel)?,
+        "descriptor channel must not request credentials",
+    )?;
+    require(
+        !rustix::fs::fcntl_getfl(channel)?.contains(rustix::fs::OFlags::NONBLOCK),
+        "lease channel must be blocking",
+    )?;
+    // ASWP-GO-1 is the existing descriptor envelope, not the start grant.
+    let lease = File::from(transport::receive_until(channel, deadline)?);
+    let meta = lease.metadata()?;
+    if !(meta.is_file()
+        && meta.uid() == rustix::process::getuid().as_raw()
+        && meta.mode() & 0o7777 == 0o600
+        && meta.nlink() == 1)
+    {
+        refused_lease(directory, invocation, "metadata")?;
+        return Err(io::Error::other("invalid fixture profile lease"));
+    }
+    match lease.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            refused_lease(directory, invocation, "locked")?;
+            return Err(io::Error::other(
+                "fixture lease is locked by another open-file description",
+            ));
+        }
+        Err(std::fs::TryLockError::Error(error)) => return Err(error),
+    }
+    fs::DirBuilder::new().mode(0o700).create(directory)?;
+    Ok(lease)
 }
 
 pub(crate) fn fixture_environment(command: &mut Command) -> io::Result<()> {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify a nondelegated systemd scope on a disposable hosted Linux runner."""
 import os
+import errno
 import json
 from pathlib import Path
 import re
@@ -24,6 +25,17 @@ def wait_for(check, seconds=15):
     while not check():
         require(time.monotonic() < deadline, "managed-scope fixture deadline exceeded")
         time.sleep(0.02)
+
+
+def check_deactivated_events(descriptor):
+    """Measure an already-open kernfs file after its owned scope disappears."""
+    try:
+        os.read(descriptor, 4096)
+    except OSError as error:
+        require(error.errno == errno.ENODEV,
+                f'held cgroup events failed for an unexpected reason: {error.errno}')
+    else:
+        raise RuntimeError('held events remained readable after scope removal')
 
 
 def membership():
@@ -224,6 +236,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                                stderr=subprocess.DEVNULL, close_fds=True)
     manager = None
     scope_descriptor = None
+    events_descriptor = None
     observer = None
     try:
         wait_for(lambda: (directory / 'outside-heartbeat').exists())
@@ -251,6 +264,8 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             opened, named = os.fstat(scope_descriptor), scope.stat()
             require((opened.st_dev, opened.st_ino) == (named.st_dev, named.st_ino)
                     and opened.st_uid == 0, "opened scope identity does not match")
+            events_descriptor = os.open('cgroup.events', os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                                        dir_fd=scope_descriptor)
             observer = Observer(os.environ['ASWP_MANAGED_OBSERVER'], unit, os.getuid(), main_pid, invocation)
             bound = observer.receive(10)
             check_bound(bound, unit, os.getuid(), main_pid, invocation, opened.st_dev, opened.st_ino)
@@ -274,6 +289,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             if not forced and not client_loss:
                 require(result == 0, "graceful managed service failed")
             wait_for(lambda: not scope.exists(), seconds=5)
+            check_deactivated_events(events_descriptor)
             try:
                 events = os.open('cgroup.events', os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
                                  dir_fd=scope_descriptor)
@@ -291,7 +307,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                     "detached worker survived manager cleanup")
             wait_for(lambda: (directory / 'outside-heartbeat').read_text() != before)
             require(outside.poll() is None, "outside writer was terminated")
-            print(f'::notice title=Linux Rust retirement {label}::authenticated original invocation retired; held cgroup directory removed; bound pidfd exited; Python kernel observations agree; no production custody receipt', flush=True)
+            print(f'::notice title=Linux Rust retirement {label}::authenticated original invocation retired; held events read returned ENODEV; fresh lookup under original directory returned ENOENT; bound pidfd exited; no production custody receipt', flush=True)
             print(f'::notice title=Linux managed scope {label}::target and same-user peer refused migration writes; detached writer stopped; original scope removed; outside writer continued; systemd-run exit {result}', flush=True)
     finally:
         observer_cleanup = None
@@ -300,6 +316,8 @@ def trial(root, forced, run_id, attempt, client_loss=False):
                 observer.close()
             except Exception as error:
                 observer_cleanup = error
+        if events_descriptor is not None:
+            os.close(events_descriptor)
         if scope_descriptor is not None:
             os.close(scope_descriptor)
         (directory / 'outside-stop').write_text('stop')

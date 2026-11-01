@@ -20,20 +20,50 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) fn shim(prefix: &str, directory: &Path) -> io::Result<()> {
+pub(crate) fn shim(prefix: &str, directory: &Path, guardian_session: bool) -> io::Result<()> {
+    if guardian_session {
+        crate::job_control::dispositions()?;
+        let mask = nix::sys::signal::SigSet::thread_get_mask()?;
+        require(
+            crate::job_control::JOB_SIGNALS
+                .into_iter()
+                .all(|signal| mask.contains(signal)),
+            "job shim did not inherit the blocked guardian mask",
+        )?;
+    }
     activated_journal::gated_ready(prefix, directory)?;
     let deadline = Instant::now() + Duration::from_secs(18);
     let slave = transport::receive_until(io::stdin().as_fd(), deadline)?;
     let nonce = journal_protocol::receive_start(io::stdin().as_fd(), deadline)?;
     crate::terminal::validate_slave(&slave)?;
-    rustix::process::setsid()?;
-    // The safe ioctl uses argument zero: never steal a controlling terminal.
-    rustix::process::ioctl_tiocsctty(&slave)?;
-    termios::tcsetpgrp(&slave, rustix::process::getpgrp())?;
+    if guardian_session {
+        let parent =
+            rustix::process::getppid().ok_or_else(|| io::Error::other("guardian absent"))?;
+        let own = rustix::process::getpid();
+        require(
+            rustix::process::getsid(None)? == parent
+                && rustix::process::getpgrp() == own
+                && termios::tcgetsid(&slave)? == parent
+                && termios::tcgetpgrp(&slave)? == own,
+            "job shim did not receive its foreground terminal",
+        )?;
+    } else {
+        rustix::process::setsid()?;
+        // The safe ioctl uses argument zero: never steal a controlling terminal.
+        rustix::process::ioctl_tiocsctty(&slave)?;
+        termios::tcsetpgrp(&slave, rustix::process::getpgrp())?;
+    }
     fuxix::io::cloexec_from(3, fuxix::io::Listed::now()).map_err(io::Error::from)?;
     let mut command = Command::new("/proc/self/exe");
     command
-        .args(["--activation-terminal-target", prefix])
+        .args([
+            if guardian_session {
+                "--activation-job-target"
+            } else {
+                "--activation-terminal-target"
+            },
+            prefix,
+        ])
         .arg(directory)
         .arg(journal_protocol::encoded(&nonce))
         .env_clear()
@@ -41,6 +71,10 @@ pub(crate) fn shim(prefix: &str, directory: &Path) -> io::Result<()> {
         .stdout(Stdio::from(slave.try_clone()?))
         .stderr(Stdio::from(slave));
     activated_journal::fixture_environment(&mut command)?;
+    if guardian_session {
+        use nix::sys::signal::{SigSet, SigmaskHow, pthread_sigmask};
+        pthread_sigmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)?;
+    }
     // exec preserves the PID already bound by the client's retained pidfd.
     Err(command.exec())
 }
@@ -53,14 +87,22 @@ fn line(input: BorrowedFd<'_>, deadline: Instant) -> io::Result<Vec<u8>> {
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "terminal input expired"))?;
         let timeout = Timespec::try_from(remaining).map_err(io::Error::other)?;
         let mut ready = [PollFd::new(&input, PollFlags::IN)];
-        if poll(&mut ready, Some(&timeout))? != 1 {
+        let polled = match poll(&mut ready, Some(&timeout)) {
+            Err(rustix::io::Errno::INTR) => continue,
+            value => value?,
+        };
+        if polled != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "terminal input deadline expired",
             ));
         }
         let mut byte = [0_u8];
-        if rustix::io::read(input, &mut byte)? != 1 {
+        let count = match rustix::io::read(input, &mut byte) {
+            Err(rustix::io::Errno::INTR) => continue,
+            value => value?,
+        };
+        if count != 1 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "terminal input ended",
@@ -118,7 +160,12 @@ fn mode_line(
     result
 }
 
-pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<()> {
+pub(crate) fn target(
+    prefix: &str,
+    directory: &Path,
+    nonce: &str,
+    guardian_session: bool,
+) -> io::Result<()> {
     activated_guardian::writer_check(prefix, directory)?;
     require(
         nonce.len() == 32
@@ -128,6 +175,12 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
         "invalid terminal nonce",
     )?;
     let pid = rustix::process::getpid();
+    let session = if guardian_session {
+        crate::job_control::target_signals()?;
+        rustix::process::getppid().ok_or_else(|| io::Error::other("guardian absent"))?
+    } else {
+        pid
+    };
     let input_stat = rustix::fs::fstat(io::stdin())?;
     for stream in [
         io::stdin().as_fd(),
@@ -140,13 +193,13 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
             stat.st_dev == input_stat.st_dev
                 && stat.st_ino == input_stat.st_ino
                 && stat.st_rdev == input_stat.st_rdev
-                && termios::tcgetsid(stream)? == pid
+                && termios::tcgetsid(stream)? == session
                 && termios::tcgetpgrp(stream)? == pid,
             "target does not own its controlling terminal",
         )?;
     }
     require(
-        rustix::process::getsid(None)? == pid && rustix::process::getpgrp() == pid,
+        rustix::process::getsid(None)? == session && rustix::process::getpgrp() == pid,
         "target session identity changed",
     )?;
     let saved = termios::tcgetattr(io::stdin())?;
@@ -166,8 +219,52 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
     )?;
     output.flush()?;
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut descendant = None;
     loop {
         match line(io::stdin().as_fd(), deadline)?.as_slice() {
+            b"spawn" if guardian_session => {
+                require(descendant.is_none(), "fixed descendant already exists")?;
+                let mut command = Command::new("/proc/self/exe");
+                command
+                    .args(["--activation-job-descendant", prefix])
+                    .arg(directory)
+                    .env_clear();
+                activated_journal::fixture_environment(&mut command)?;
+                let mut child = command.spawn()?;
+                drop(command);
+                activated_guardian::wait_until(Instant::now() + Duration::from_secs(3), || {
+                    require(
+                        child.try_wait()?.is_none(),
+                        "fixed descendant exited before readiness",
+                    )?;
+                    match fs::read_to_string(directory.join("descendant-ready")) {
+                        Ok(pid) => {
+                            require(
+                                pid == child.id().to_string(),
+                                "descendant readiness PID differs",
+                            )?;
+                            Ok(true)
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                        Err(error) => Err(error),
+                    }
+                })?;
+                writeln!(output, "CHILD:{}", child.id())?;
+                // Never signal or reap this descendant after readiness. The
+                // hosted case must observe manager-owned scope retirement.
+                descendant = Some(child);
+            }
+            b"suspend" if guardian_session => {
+                let mut raw = saved.clone();
+                raw.make_raw();
+                let input = io::stdin();
+                let guard = ModeGuard::apply(input.as_fd(), &raw)?;
+                output.write_all(b"SUSPEND>")?;
+                output.flush()?;
+                nix::sys::signal::raise(nix::sys::signal::Signal::SIGTSTP)?;
+                guard.restore()?;
+                writeln!(output, "RESUMED")?;
+            }
             b"size" => {
                 let size = termios::tcgetwinsize(io::stdin())?;
                 writeln!(output, "SIZE:{}:{}", size.ws_row, size.ws_col)?;
@@ -198,6 +295,64 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
         }
         output.flush()?;
     }
+}
+
+pub(crate) fn descendant(prefix: &str, directory: &Path) -> io::Result<()> {
+    use nix::sys::signal::{SigSet, Signal};
+    activated_guardian::writer_check(prefix, directory)?;
+    crate::job_control::target_signals()?;
+    require(
+        nix::sys::prctl::get_pdeathsig()?.is_none(),
+        "descendant inherited a parent-death signal",
+    )?;
+    let parent =
+        rustix::process::getppid().ok_or_else(|| io::Error::other("target parent absent"))?;
+    let group = rustix::process::getpgrp();
+    let session = rustix::process::getsid(None)?;
+    require(
+        group == parent && session != parent && session != rustix::process::getpid(),
+        "descendant is outside its target group",
+    )?;
+    for stream in [
+        io::stdin().as_fd(),
+        io::stdout().as_fd(),
+        io::stderr().as_fd(),
+    ] {
+        crate::terminal::validate_slave(stream)?;
+        require(
+            termios::tcgetsid(stream)? == session && termios::tcgetpgrp(stream)? == group,
+            "descendant did not inherit the inner terminal",
+        )?;
+    }
+    // A blocked SIGHUP prevents terminal/session loss from being an alternate
+    // explanation for descendant death. No parent-death signal or destructor
+    // cleanup is installed; the root manager must retire this writer.
+    let mut mask = SigSet::empty();
+    mask.add(Signal::SIGHUP);
+    mask.thread_block()?;
+    fs::write(
+        directory.join("descendant-ready.tmp"),
+        std::process::id().to_string(),
+    )?;
+    fs::rename(
+        directory.join("descendant-ready.tmp"),
+        directory.join("descendant-ready"),
+    )?;
+    let until = Instant::now() + Duration::from_secs(45);
+    let mut counter = 0_u64;
+    while Instant::now() < until {
+        fs::write(
+            directory.join("descendant-heartbeat.tmp"),
+            counter.to_string(),
+        )?;
+        fs::rename(
+            directory.join("descendant-heartbeat.tmp"),
+            directory.join("descendant-heartbeat"),
+        )?;
+        counter += 1;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    fs::write(directory.join("descendant-voluntary-exit"), "deadline")
 }
 
 #[cfg(test)]

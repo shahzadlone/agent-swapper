@@ -25,16 +25,29 @@ fn prepare_mode(
     prefix: &str,
     terminal: bool,
 ) -> (ProfileId, String, Prepared) {
+    prepare_using(
+        store,
+        alias,
+        prefix,
+        if terminal {
+            Bound::connect_terminal
+        } else {
+            Bound::connect
+        },
+    )
+}
+
+fn prepare_using(
+    store: &mut Store,
+    alias: &str,
+    prefix: &str,
+    connect: fn(&str) -> std::io::Result<Bound>,
+) -> (ProfileId, String, Prepared) {
     let profile = store
         .register(Harness::Claude, alias.parse().unwrap())
         .unwrap();
     let lease = store.lease(profile.id).unwrap();
-    let bound = if terminal {
-        Bound::connect_terminal(prefix)
-    } else {
-        Bound::connect(prefix)
-    }
-    .unwrap();
+    let bound = connect(prefix).unwrap();
     let logical = Uuid::new_v4();
     assert_ne!(logical.simple().to_string(), bound.identity().invocation);
     let run = store
@@ -394,6 +407,350 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
         );
         assert!(reopened.verify().unwrap().consistent);
         drop(master);
+    }
+}
+
+fn job_topology(master: impl AsFd, pid: u32, guardian: u32, foreground: u32, stopped: bool) {
+    assert_eq!(
+        rustix::termios::tcgetsid(&master).unwrap().as_raw_pid(),
+        guardian as i32
+    );
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let fields: Vec<_> = stat
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .collect();
+    assert_eq!(fields[1], guardian.to_string());
+    assert_eq!(fields[2], pid.to_string());
+    assert_eq!(fields[3], guardian.to_string());
+    assert_ne!(fields[4], "0");
+    assert_eq!(fields[5], foreground.to_string());
+    assert_eq!(fields[0] == "T", stopped);
+}
+
+fn descendant_state(pid: u32, parent: u32, id: &Identity, stopped: bool) {
+    let until = Instant::now() + Duration::from_secs(3);
+    loop {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let fields: Vec<_> = stat
+            .rsplit_once(") ")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .collect();
+        assert_eq!(fields[1], parent.to_string());
+        assert_eq!(fields[2], parent.to_string());
+        assert_eq!(fields[3], id.guardian_pid.to_string());
+        assert_ne!(fields[4], "0");
+        assert_eq!(fields[5], parent.to_string());
+        if (fields[0] == "T") == stopped {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "descendant stop/continue state did not settle"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        fs::read_to_string(format!("/proc/{pid}/cgroup")).unwrap(),
+        format!("0::/system.slice/{}\n", id.unit)
+    );
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+    let mask = status
+        .lines()
+        .find_map(|line| line.strip_prefix("SigBlk:"))
+        .unwrap();
+    assert_eq!(
+        u64::from_str_radix(mask.trim(), 16).unwrap() & 1,
+        1,
+        "descendant must block SIGHUP"
+    );
+}
+
+fn descendant_heartbeat(scope: &Path, previous: Option<&str>) -> String {
+    let until = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Ok(value) = fs::read_to_string(scope.join("descendant-heartbeat"))
+            && Some(value.as_str()) != previous
+        {
+            return value;
+        }
+        assert!(
+            Instant::now() < until,
+            "descendant heartbeat did not advance"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+#[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
+fn guardian_session_stops_resume_and_retire_without_releasing_journal_policy() {
+    let (prefix, directory) = environment();
+    for finish in [
+        "resume",
+        "disconnect",
+        "guardian",
+        "hangup-running",
+        "hangup-stopped",
+        "journal",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let mut store = Store::open(&root).unwrap();
+        let (profile, run, prepared) = prepare_using(
+            &mut store,
+            "job-control",
+            &prefix,
+            Bound::connect_job_control,
+        );
+        let id = prepared.identity();
+        let pid = prepared.pid();
+        let scope = directory.join(&id.invocation);
+        let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
+        quiescent(&prepared, &directory);
+        job_topology(&master, pid, id.guardian_pid, id.guardian_pid, false);
+        let blocker = Connection::open(root.join("registry.sqlite3")).unwrap();
+        if finish == "journal" {
+            store.db.busy_timeout(Duration::from_millis(20)).unwrap();
+            blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        }
+        let nonce = *Uuid::new_v4().as_bytes();
+        let start = prepared.start_after(nonce, |child| {
+            journal_while_gated(&mut store, &run, child, &directory, &id)?;
+            job_topology(&master, child, id.guardian_pid, id.guardian_pid, false);
+            assert!(!scope.join("final-exec").exists());
+            let mut output = [rustix::event::PollFd::new(
+                &master,
+                rustix::event::PollFlags::IN,
+            )];
+            assert_eq!(
+                rustix::event::poll(
+                    &mut output,
+                    Some(&rustix::event::Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0
+                    })
+                )
+                .unwrap(),
+                0
+            );
+            Ok::<(), Error>(())
+        });
+        if finish == "journal" {
+            let failure = match start {
+                Err(failure) => failure,
+                Ok(_) => panic!("journal conflict released job GO"),
+            };
+            assert!(matches!(failure.live_at_refusal, Some(Ok(()))));
+            assert!(
+                matches!(failure.cause, StartCause::Journal(Error::Database(rusqlite::Error::SqliteFailure(ref error, _)))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy)
+            );
+            assert!(
+                failure
+                    .closed
+                    .retire()
+                    .unwrap()
+                    .connection_close_error
+                    .is_none()
+            );
+            assert_eq!(
+                fs::read_to_string(scope.join("guardian-withdrawn-before-go")).unwrap(),
+                id.invocation
+            );
+            assert!(!scope.join("final-exec").exists());
+            terminal_retired(&master, false);
+            blocker.execute_batch("ROLLBACK").unwrap();
+        } else {
+            let mut running = start.unwrap();
+            let nonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(
+                terminal_output(&master, b"\x1b[0m\r\n"),
+                format!("\x1b[32mREADY:{pid}:{nonce}:→\x1b[0m\r\n").as_bytes()
+            );
+            assert_eq!(
+                fs::read_to_string(scope.join("final-exec")).unwrap(),
+                format!("{pid}:{nonce}")
+            );
+            job_topology(&master, pid, id.guardian_pid, pid, false);
+            let witness =
+                aswp_linux_manager_evaluation::journal_client::Witness::bind(&prefix, &id, pid)
+                    .unwrap();
+            terminal_input(&master, b"spawn\n");
+            let child_line = terminal_output(&master, b"\r\n");
+            // Echo may be delivered before the target's readiness response.
+            let child_line = if child_line == b"spawn\r\n" {
+                terminal_output(&master, b"\r\n")
+            } else {
+                child_line.strip_prefix(b"spawn\r\n").unwrap().to_vec()
+            };
+            let child: u32 = std::str::from_utf8(&child_line)
+                .unwrap()
+                .strip_prefix("CHILD:")
+                .unwrap()
+                .strip_suffix("\r\n")
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(
+                fs::read_to_string(scope.join("descendant-ready")).unwrap(),
+                child.to_string()
+            );
+            let descendant_fd = rustix::process::pidfd_open(
+                rustix::process::Pid::from_raw(child as i32).unwrap(),
+                rustix::process::PidfdFlags::empty(),
+            )
+            .unwrap();
+            descendant_state(child, pid, &id, false);
+            let mut child_watch = [rustix::event::PollFd::new(
+                &descendant_fd,
+                rustix::event::PollFlags::IN,
+            )];
+            assert_eq!(
+                rustix::event::poll(
+                    &mut child_watch,
+                    Some(&rustix::event::Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0
+                    })
+                )
+                .unwrap(),
+                0
+            );
+            descendant_heartbeat(&scope, None);
+            assert!(running.resume().is_err(), "resume accepted without a stop");
+            if finish != "hangup-running" {
+                terminal_input(&master, b"\x1a");
+                assert_eq!(running.wait_stopped().unwrap(), 20);
+                assert_eq!(terminal_output(&master, b"^Z"), b"^Z");
+                job_topology(&master, pid, id.guardian_pid, pid, true);
+                descendant_state(child, pid, &id, true);
+                let paused = descendant_heartbeat(&scope, None);
+                thread::sleep(Duration::from_millis(100));
+                assert_eq!(descendant_heartbeat(&scope, None), paused);
+                assert!(
+                    running.wait_stopped().is_err(),
+                    "accepted another stop while one is pending"
+                );
+                assert!(matches!(store.acquire_lease(profile), Err(Error::Busy)));
+            }
+            if finish == "resume" {
+                let paused = descendant_heartbeat(&scope, None);
+                running.resume().unwrap();
+                terminal_input(&master, b"size\n");
+                assert_eq!(
+                    terminal_output(&master, b"SIZE:24:80\r\n"),
+                    b"size\r\nSIZE:24:80\r\n"
+                );
+                descendant_state(child, pid, &id, false);
+                descendant_heartbeat(&scope, Some(&paused));
+                terminal_input(&master, b"suspend\n");
+                assert_eq!(
+                    terminal_output(&master, b"SUSPEND>"),
+                    b"suspend\r\nSUSPEND>"
+                );
+                assert_eq!(running.wait_stopped().unwrap(), 20);
+                job_topology(&master, pid, id.guardian_pid, pid, true);
+                // Self-suspension stops this process, not every writer. The
+                // descendant keeps running, so stop notices are not quiescence.
+                let previous = descendant_heartbeat(&scope, None);
+                descendant_heartbeat(&scope, Some(&previous));
+                assert!(matches!(store.acquire_lease(profile), Err(Error::Busy)));
+                running.resume().unwrap();
+                assert_eq!(terminal_output(&master, b"RESUMED\r\n"), b"RESUMED\r\n");
+                terminal_input(&master, b"size\n");
+                assert_eq!(
+                    terminal_output(&master, b"SIZE:24:80\r\n"),
+                    b"size\r\nSIZE:24:80\r\n"
+                );
+                terminal_input(&master, b"\x03");
+                let until = Instant::now() + Duration::from_secs(4);
+                while !scope.join("target-exit").exists() {
+                    assert!(Instant::now() < until, "resumed target did not interrupt");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                assert_eq!(
+                    fs::read_to_string(scope.join("target-exit")).unwrap(),
+                    "None:Some(2)"
+                );
+            }
+            if finish.starts_with("hangup-") {
+                running.close_terminal_for_fixture().unwrap();
+                drop(master);
+                // The activation control connection remains open. Its EOF
+                // therefore cannot explain the observed terminal-loss path.
+                assert!(witness.retire().unwrap().connection_close_error.is_none());
+                assert_eq!(
+                    fs::read_to_string(scope.join("guardian-terminal-hangup")).unwrap(),
+                    id.invocation
+                );
+                assert!(!scope.join("guardian-clean-eof").exists());
+                assert!(
+                    running
+                        .close()
+                        .retire()
+                        .unwrap()
+                        .connection_close_error
+                        .is_none()
+                );
+            } else {
+                let closed = if finish == "guardian" {
+                    running.crash_guardian().unwrap()
+                } else {
+                    running.close()
+                };
+                assert!(closed.retire().unwrap().connection_close_error.is_none());
+                assert!(witness.retire().unwrap().connection_close_error.is_none());
+                terminal_retired(&master, finish == "resume");
+                if finish == "disconnect" {
+                    assert_eq!(
+                        fs::read_to_string(scope.join("guardian-clean-eof")).unwrap(),
+                        id.invocation
+                    );
+                    assert!(!scope.join("target-exit").exists());
+                } else {
+                    assert!(!scope.join("guardian-clean-eof").exists());
+                }
+            }
+            let mut child_watch = [rustix::event::PollFd::new(
+                &descendant_fd,
+                rustix::event::PollFlags::IN,
+            )];
+            assert_eq!(
+                rustix::event::poll(
+                    &mut child_watch,
+                    Some(&rustix::event::Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0
+                    })
+                )
+                .unwrap(),
+                1
+            );
+            assert!(
+                child_watch[0]
+                    .revents()
+                    .contains(rustix::event::PollFlags::IN)
+            );
+            assert!(!scope.join("descendant-voluntary-exit").exists());
+            let retired = descendant_heartbeat(&scope, None);
+            thread::sleep(Duration::from_millis(100));
+            assert_eq!(descendant_heartbeat(&scope, None), retired);
+        }
+        unresolved(&store, profile, &run);
+        drop(blocker);
+        drop(store);
+        let reopened = Store::open(&root).unwrap();
+        unresolved(&reopened, profile, &run);
+        assert_eq!(
+            reopened.run(&run).unwrap().observed_pid,
+            if finish == "journal" { None } else { Some(pid) }
+        );
+        assert!(reopened.verify().unwrap().consistent);
     }
 }
 

@@ -637,3 +637,12 @@ It qualifies fixed provider-free experiments, not a production manager backend
 or provider readiness. The separate [exec-observation report](linux-exec-confirmation.md)
 records the comparison's limitations. Caller-terminal relay and job-control
 integration remain open; normal Linux launches remain uncontained.
+
+The subsequent guardian-owned-session checkpoint, including real Store
+stop/resume cases, descendant cleanup and the bounded kernfs retirement retry,
+passed the complete pipeline at `ee50260` in
+[run 41271890000](https://github.com/shahzadlone/agent-swapper/actions/runs/41271890000).
+See [job-control evidence and limitations](linux-terminal-job-control.md).
+The existing terminal/exec integration on main at `21c0afb` also passed its
+full pipeline and preview attestation in
+[run 41270730612](https://github.com/shahzadlone/agent-swapper/actions/runs/41270730612).

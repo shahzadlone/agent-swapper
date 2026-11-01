@@ -157,6 +157,25 @@ fn populated(bytes: &[u8]) -> io::Result<bool> {
     value.ok_or_else(|| io::Error::other("missing cgroup population event"))
 }
 
+fn retirement_events_absent(events: io::Result<Vec<u8>>) -> io::Result<bool> {
+    match events {
+        Ok(bytes) => {
+            populated(&bytes)?;
+            Ok(false)
+        }
+        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::NODEV.raw_os_error()) => {
+            // kernfs can deactivate the file between open and read. This is
+            // unresolved, never removal evidence. The bounded watcher retries
+            // via the same retained directory and must still observe absence.
+            Ok(false)
+        }
+        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::NOENT.raw_os_error()) => {
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn check_user(bytes: &[u8], user: u32) -> io::Result<()> {
     let text = std::str::from_utf8(bytes).map_err(io::Error::other)?;
     let rows = text
@@ -378,31 +397,58 @@ impl Binding {
     }
 
     pub(crate) fn retirement(&self) -> io::Result<Option<Retirement>> {
-        match read_at(&self.scope, "cgroup.events", 4096) {
-            Ok(bytes) => {
-                populated(&bytes)?;
-                Ok(None)
-            }
-            Err(error) if error.raw_os_error() == Some(rustix::io::Errno::NOENT.raw_os_error()) => {
-                require(
-                    self.main.exited()?,
-                    "original scope removed while bound main process remains live",
-                )?;
-                Ok(Some(Retirement {
-                    device: self.device,
-                    inode: self.inode,
-                    original_directory_removed: true,
-                    main_pidfd_exited: true,
-                }))
-            }
-            Err(error) => Err(error),
+        if !retirement_events_absent(read_at(&self.scope, "cgroup.events", 4096))? {
+            return Ok(None);
         }
+        require(
+            self.main.exited()?,
+            "original scope removed while bound main process remains live",
+        )?;
+        Ok(Some(Retirement {
+            device: self.device,
+            inode: self.inode,
+            original_directory_removed: true,
+            main_pidfd_exited: true,
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deactivated_events_never_count_as_retirement_evidence() -> io::Result<()> {
+        assert!(!retirement_events_absent(Ok(
+            b"populated 1\nfrozen 0\n".to_vec()
+        ))?);
+        assert!(!retirement_events_absent(Ok(
+            b"populated 0\nfrozen 0\n".to_vec()
+        ))?);
+        for _ in 0..3 {
+            assert!(!retirement_events_absent(Err(
+                rustix::io::Errno::NODEV.into()
+            ))?);
+        }
+        assert!(retirement_events_absent(Err(
+            rustix::io::Errno::NOENT.into()
+        ))?);
+        for error in [
+            rustix::io::Errno::IO,
+            rustix::io::Errno::ACCESS,
+            rustix::io::Errno::XDEV,
+            rustix::io::Errno::BADF,
+        ] {
+            assert_eq!(
+                retirement_events_absent(Err(error.into()))
+                    .err()
+                    .and_then(|error| error.raw_os_error()),
+                Some(error.raw_os_error())
+            );
+        }
+        assert!(retirement_events_absent(Ok(b"populated 0\nextra 0\n".to_vec())).is_err());
+        Ok(())
+    }
 
     #[test]
     fn own_process_metadata_comes_from_one_procfs_mount() -> io::Result<()> {
