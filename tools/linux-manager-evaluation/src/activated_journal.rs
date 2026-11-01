@@ -18,6 +18,7 @@ pub(crate) fn serve(
     prefix: &str,
     directory: &Path,
     invocation: &str,
+    terminal_requested: bool,
 ) -> io::Result<()> {
     require(
         !rustix::net::sockopt::socket_passcred(channel)?,
@@ -50,24 +51,28 @@ pub(crate) fn serve(
         Err(std::fs::TryLockError::Error(error)) => return Err(error),
     }
     fs::DirBuilder::new().mode(0o700).create(directory)?;
+    let terminal = if terminal_requested {
+        Some(crate::terminal::pair()?)
+    } else {
+        None
+    };
     let (grant, child_input) = transport::pair()?;
     let mut command = Command::new("/proc/self/exe");
     command
-        .args(["--activation-gated-writer", prefix])
+        .args([
+            if terminal_requested {
+                "--activation-terminal-shim"
+            } else {
+                "--activation-gated-writer"
+            },
+            prefix,
+        ])
         .arg(directory)
         .env_clear()
         .stdin(Stdio::from(child_input))
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    for key in [
-        "GITHUB_ACTIONS",
-        "RUNNER_ENVIRONMENT",
-        "ASWP_CI_SOCKET_ACTIVATION",
-        "GITHUB_RUN_ID",
-        "GITHUB_RUN_ATTEMPT",
-    ] {
-        command.env(key, std::env::var(key).map_err(io::Error::other)?);
-    }
+    fixture_environment(&mut command)?;
     let mut child = command.spawn()?;
     drop(command);
     activated_guardian::wait_until(deadline, || {
@@ -90,7 +95,19 @@ pub(crate) fn serve(
     let prepared =
         serde_json::to_vec(&serde_json::json!({"kind": "aswp-fixture-prepared-1", "child": child.id(), "invocation": invocation}))
             .map_err(io::Error::other)?;
-    transport::send_until(channel, &prepared, &[], deadline)?;
+    let descriptors = terminal
+        .as_ref()
+        .map(|(master, _)| master.as_fd())
+        .into_iter()
+        .collect::<Vec<_>>();
+    transport::send_until(channel, &prepared, &descriptors, deadline)?;
+    drop(descriptors);
+    // Only the client retains a master after this response. Keep its slave
+    // behind the shim gate until the client has durably journaled the PID.
+    let slave = terminal.map(|(master, slave)| {
+        drop(master);
+        slave
+    });
     let nonce = match journal_protocol::receive_start(channel, deadline) {
         Ok(nonce) => nonce,
         Err(error) if journal_protocol::is_withdrawal(&error) => {
@@ -104,6 +121,9 @@ pub(crate) fn serve(
         Err(error) => return Err(error),
     };
     require(child.try_wait()?.is_none(), "gated writer exited before GO")?;
+    if let Some(slave) = slave {
+        transport::send_until(&grant, transport::GO, &[slave.as_fd()], deadline)?;
+    }
     transport::send_until(
         &grant,
         &journal_protocol::start_packet(&nonce),
@@ -112,16 +132,40 @@ pub(crate) fn serve(
     )?;
     drop(grant);
     activated_guardian::wait_until(Instant::now() + Duration::from_secs(35), || {
-        require(
-            child.try_wait()?.is_none(),
-            "gated writer exited before disconnect",
-        )?;
-        transport::eof(channel)
+        if let Some(status) = child.try_wait()? {
+            require(terminal_requested, "gated writer exited before disconnect")?;
+            use std::os::unix::process::ExitStatusExt;
+            fs::write(
+                directory.join("target-exit.tmp"),
+                format!("{:?}:{:?}", status.code(), status.signal()),
+            )?;
+            fs::rename(
+                directory.join("target-exit.tmp"),
+                directory.join("target-exit"),
+            )?;
+            return Ok(true);
+        }
+        if transport::eof(channel)? {
+            fs::write(directory.join("guardian-clean-eof"), invocation)?;
+            return Ok(true);
+        }
+        Ok(false)
     })?;
-    fs::write(directory.join("guardian-clean-eof"), invocation)?;
-    // The manager kills the remaining child when this main process exits.
-    // Keep the duplicate lease alive through the complete guardian lifetime.
+    // The manager kills remaining children when this main process exits.
     drop(lease);
+    Ok(())
+}
+
+pub(crate) fn fixture_environment(command: &mut Command) -> io::Result<()> {
+    for key in [
+        "GITHUB_ACTIONS",
+        "RUNNER_ENVIRONMENT",
+        "ASWP_CI_SOCKET_ACTIVATION",
+        "GITHUB_RUN_ID",
+        "GITHUB_RUN_ATTEMPT",
+    ] {
+        command.env(key, std::env::var(key).map_err(io::Error::other)?);
+    }
     Ok(())
 }
 
@@ -133,7 +177,7 @@ fn refused_lease(directory: &Path, invocation: &str, reason: &str) -> io::Result
     fs::write(parent.join(format!("{invocation}.lease-refused")), reason)
 }
 
-pub(crate) fn writer(prefix: &str, directory: &Path) -> io::Result<()> {
+pub(crate) fn gated_ready(prefix: &str, directory: &Path) -> io::Result<()> {
     activated_guardian::writer_check(prefix, directory)?;
     let peer = crate::activation_packet::peer(io::stdin())?;
     require(
@@ -151,9 +195,14 @@ pub(crate) fn writer(prefix: &str, directory: &Path) -> io::Result<()> {
             "writer output is not the null device",
         )?;
     }
-    rustix::process::setsid()?;
     fs::write(directory.join("ready.tmp"), std::process::id().to_string())?;
     fs::rename(directory.join("ready.tmp"), directory.join("ready"))?;
+    Ok(())
+}
+
+pub(crate) fn writer(prefix: &str, directory: &Path) -> io::Result<()> {
+    gated_ready(prefix, directory)?;
+    rustix::process::setsid()?;
     let nonce = journal_protocol::receive_start(
         io::stdin().as_fd(),
         Instant::now() + Duration::from_secs(18),

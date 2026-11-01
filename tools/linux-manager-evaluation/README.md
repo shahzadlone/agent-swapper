@@ -178,3 +178,18 @@ binary-only roles, never linked by the client library. These tests are hosted,
 opt-in and ignored by ordinary test runs. No observed retirement becomes a
 custody receipt. See the activated journal checkpoint in
 [the design notes](../../docs/linux-managed-launch.md).
+
+The optional `PTY1` fixture mode passes an authenticated PTY master to the
+client, then releases its slave to a fixed shim only after journaled GO. The
+shim acquires its own controlling terminal and execs the fixed terminal target
+with the same PID. It never modifies the caller's terminal or accepts a provider
+command. This is inner-PTY qualification; an interactive client relay, shell
+suspend/resume and production provider execution remain separate gates.
+
+The independent `exec_event` example evaluates kernel final-exec observation
+using only its own fixed child. It neither activates a service nor changes the
+PTY protocol. See [the experiment and limits](../../docs/linux-exec-confirmation.md).
+
+The companion `exec_identity` example measures a read-only procfs alternative,
+including fast exits that cannot be positively observed. Both remain isolated
+experiments; neither selects a production execution mechanism.

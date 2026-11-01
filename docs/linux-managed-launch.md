@@ -525,3 +525,115 @@ and the subsequent crash/harness follow-up at `60d67bb`
 ([run 41265660485](https://github.com/shahzadlone/agent-swapper/actions/runs/41265660485)).
 Their remaining platform/packaging results, and the latest small wake-up
 follow-up, are tracked separately before integration.
+
+### Inner terminal and final-exec checkpoint
+
+The full journal follow-up pipeline at `2f87dc8` passed in
+[run 41265192617](https://github.com/shahzadlone/agent-swapper/actions/runs/41265192617),
+including all platform suites, dependency policies, candidate packaging and
+reproducible rebuilds. It was integrated into main as `d19371d`. The later
+crash/wake-up checkpoint remains separately tracked.
+
+The next isolated `PTY1` fixture adds an inner PTY. Terminal bytes travel on its
+master descriptor; the credential-bearing control connection remains separate.
+The prepared response requires exactly one close-on-exec, nonblocking PTY
+master and the bound guardian's credentials. Wrong descriptors, excess rights,
+missing rights and truncated controls are refused; received capabilities close
+on every refusal. Validation opens the peer with `NOCTTY`, so it cannot acquire
+a controlling terminal for the client.
+
+The guardian starts a fixed shim behind the existing gate and transfers the
+terminal slave only after the real Store callback commits the observed PID.
+The shim creates its session, acquires the controlling terminal without stealing
+one, sets the foreground group and execs the fixed target at that same PID.
+Only standard streams survive exec; no lease, control socket or manager witness
+is inherited. No arbitrary target, environment or provider data is accepted.
+
+The new hosted case tests three endings: control disconnect, terminal Ctrl-C
+and an actual SQLite write conflict. It keeps an independent master open
+through retirement to exclude PTY hangup as an alternative cleanup cause.
+Before GO and during the successful journal callback the target's final-exec
+marker must be absent; afterwards the target reports the journaled PID and
+nonce. Checks cover controlling session/foreground group, resize dimensions,
+echo-off fake password input, UTF-8/escape bytes and raw-mode Ctrl-C bytes,
+then normal Ctrl-C signal termination after restoring terminal modes. The
+write-conflict case must retire without final exec. Every case retains an
+unresolved journal record after lease release and Store reopening.
+
+Local validation passes 37 library and 25 binary tests plus strict Clippy;
+the existing 12 coordinator guard/timeout tests also pass. Hosted terminal
+execution and the focused Opus source review are pending at this checkpoint.
+These checks do not qualify a caller-terminal relay, SIGWINCH handling,
+suspend/resume, shell foreground restoration, long sessions, arbitrary exec
+failure reporting or provider login/refresh behavior. Normal Linux launches
+remain uncontained.
+
+### Terminal source-review follow-up
+
+The complete base terminal pipeline at `720372b` passed in
+[run 41266991013](https://github.com/shahzadlone/agent-swapper/actions/runs/41266991013).
+Opus 5.5 xhigh then found a possible torn read of the exit marker and several
+tests that did not fully establish their stated terminal behavior. The marker
+now uses atomic rename. The received capability stays local until sender,
+invocation, descriptor and kernel child checks pass; it is never inspected as
+a terminal before message authentication or retained on a refused prepare.
+
+Master-negative tests now reach the actual ioctl with valid descriptor flags.
+Slave checks require a devpts character TTY that refuses the master-only
+TIOCGPTN operation; all standard streams must identify the same slave inode.
+This avoids relying on an assumed device-major range. A mode guard restores
+the inner terminal on prompt-write failure, read timeout and oversized input;
+these failure paths now have local tests.
+
+The hosted test independently observes no controlling session, a shim argv,
+no controlling device and no terminal output during the successful journal
+callback. After GO it observes the new session and foreground group through
+kernel/procfs data and binds a separate manager/process witness. Echo must be
+present before hiding input and after both hidden and raw input. The raw
+payload includes line-editing, signal, newline-translation and flow-control
+bytes. One case queues typeahead before GO, observes its line-discipline echo
+while the shim remains gated, and requires the command response only after
+the target starts. No implicit flush is added that could lose input racing GO.
+
+A fourth ending kills the original guardian through its retained pidfd while
+the target is in raw mode. All endings require master EIO after retirement;
+that is evidence of no remaining slave holder, not by itself evidence that
+the target never executed. Scope and child retirement still leave the journal
+unresolved. Normal target writes can block until the guardian's bounded
+lifetime and manager cleanup; this fixed fixture is not a general relay.
+
+The strengthened revision passes 37 library tests, 26 binary tests and strict
+Clippy locally. Its revised hosted terminal case remains pending. Separately,
+the prior crash/wake-up checkpoint `9fb76b0` passed the full platform/package
+pipeline in [run 41266261801](https://github.com/shahzadlone/agent-swapper/actions/runs/41266261801)
+and was integrated into main as `2e90693`.
+
+The strengthened terminal case at `191948d` passed both Ubuntu jobs in
+[run 41268750270](https://github.com/shahzadlone/agent-swapper/actions/runs/41268750270).
+The focused Opus follow-up confirmed credential-before-ioctl ordering and the
+new echo, raw-byte and typeahead assertions. Its remaining test improvements
+are implemented: retirement drains a verified nonblocking master under a
+two-second deadline before checking the cleared session; only the interrupt
+case may leave a Ctrl-C echo. Prompt failure and hangup now assert their actual
+causes. Slave-as-master refusal pins TIOCGPTPEER's EIO, and master-as-slave
+checks TIOCGPTN before the devpts filesystem condition, so the negative test
+cannot pass at an earlier filesystem check. This works without opening the
+often permission-restricted `/dev/pts/ptmx` alias. Local tests and strict
+Clippy pass.
+
+### Integrated terminal and exec-observation evidence
+
+The combined checkpoint at `20baa4a` passed the complete pipeline in
+[run 41269466816](https://github.com/shahzadlone/agent-swapper/actions/runs/41269466816):
+both Ubuntu manager jobs, all three platform suites, dependency policies,
+candidate archives and reproducible rebuilds. It includes the bounded terminal
+retirement refinement from `0417826`, the eight exec-event controls and the
+read-only executable-identity comparison. The earlier combined revision
+`1729798` also passed its full pipeline in
+[run 41268881520](https://github.com/shahzadlone/agent-swapper/actions/runs/41268881520).
+
+This closes the pending hosted checks for the terminal changes described above.
+It qualifies fixed provider-free experiments, not a production manager backend
+or provider readiness. The separate [exec-observation report](linux-exec-confirmation.md)
+records the comparison's limitations. Caller-terminal relay and job-control
+integration remain open; normal Linux launches remain uncontained.
