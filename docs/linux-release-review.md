@@ -104,7 +104,7 @@ An ordinary-user subprocess control copies the scripts into an owned directory
 with a shadow `json.py`: isolated invocations reach the intended early refusal,
 do not execute the shadow and leave no bytecode. The same owned canary executes
 without isolation, proving the negative control is meaningful. Cleanup reporting
-also requires all seven owned filesystem names to be absent, including dangling
+also requires all owned filesystem names to be absent, including dangling
 symlinks; the administrator separately checks its units and scope teardown.
 All 46 local Linux harness controls pass. Native qualification is pending.
 
@@ -147,6 +147,16 @@ verified backups and reopening. That test and strict workspace Clippy passed
 locally, and the checked-in generator reproduced a valid fixture. Cross-platform
 CI for this fixture revision is pending. See
 [the fixture notes](../crates/agentswapper-core/tests/fixtures/historical/README.md).
+
+## Generation-layout preparation
+
+The activated fixture now reserves distinct manifests for its original and next
+generation; the reader derives their paths from the selector. Both reference the
+same fixed images and units. A pure contract test verifies the exact Rust-facing
+field inventory, distinct valid generations, initial selection and artifact
+hashes. All 47 Linux harness tests pass locally. Native coverage of the new
+layout, followed by real service selector-switch and mutation controls, remains
+required before the admission-lifetime finding is closed.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,

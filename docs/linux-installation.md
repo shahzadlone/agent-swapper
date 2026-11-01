@@ -166,8 +166,8 @@ constructor and generation-lifetime controls require their native CI result.
 
 ## Real-service qualification consumer
 
-The fixed-user activation fixture now creates an additional protected manifest
-and selector under its unique `/run/aswp-activation-<run>-<attempt>` prefix. It
+The fixed-user activation fixture creates protected manifests and a selector
+under its unique `/run/aswp-activation-<run>-<attempt>` prefix. It
 uses the exact installed guardian and unit-file hashes. The one fixture binary
 contains all test roles, so its image occupies the three image roles in this
 qualification layout; this is not a production three-helper installation.
@@ -188,6 +188,16 @@ opaque-retirement tests. Mutable-template refusal still requires no accepted
 connection and restores the original mode. The complete native activation suite
 must qualify this new path; local controls do not substitute for that result.
 No local root service, provider account or production installer is used.
+
+The real-service fixture now reserves two deterministic generation manifests at
+`/run/<prefix>.installation.<generation>.json`. Its selector initially names the
+first. The qualification reader derives the manifest filename from the validated
+selection, so switching that selection need not replace the file retained by a
+live generation. Both manifests describe the same fixed fixture images and units;
+this qualifies metadata lifetime, not an executable upgrade. Installation and
+cleanup verify both exact documents, and cleanup reporting checks all eight
+owned asset names. The later real-service selector-switch controls are still
+required; creating a second manifest alone does not prove that transition.
 
 The first complete installed-policy run at `541f06c` passed activation and all
 eleven journal/receipt controls on both native runners, then exceeded the

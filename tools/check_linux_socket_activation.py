@@ -135,16 +135,24 @@ def ordinary_ids(uid, gid):
     return uid, gid
 
 
+def installation_generations(prefix):
+    return tuple(hashlib.sha256(value.encode()).hexdigest()[:32]
+                 for value in (prefix, prefix + ':next'))
+
+
 def installation_files(prefix, uid, gid, image_hash, version, units):
     require(re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', version), 'invalid fixture installation version')
     require(re.fullmatch(r'[0-9a-f]{64}', image_hash), 'invalid fixture image hash')
-    generation = hashlib.sha256(prefix.encode()).hexdigest()[:32]
-    manifest = dict(schema=1, protocol=1, version=version, generation=generation, user=uid, group=gid,
+    generations = installation_generations(prefix)
+    manifest = dict(schema=1, protocol=1, version=version, user=uid, group=gid,
                     guardian_sha256=image_hash, session_helper_sha256=image_hash, exec_shim_sha256=image_hash,
                     service_template_sha256=hashlib.sha256(units[prefix + '@.service'].encode()).hexdigest(),
                     socket_unit_sha256=hashlib.sha256(units[prefix + '.socket'].encode()).hexdigest())
-    return {prefix + '.installation.json': json.dumps(manifest, sort_keys=True),
-            prefix + '.selection.json': json.dumps(dict(schema=1, generation=generation), sort_keys=True)}
+    files = {f'{prefix}.installation.{generation}.json':
+             json.dumps(dict(manifest, generation=generation), sort_keys=True)
+             for generation in generations}
+    files[prefix + '.selection.json'] = json.dumps(dict(schema=1, generation=generations[0]), sort_keys=True)
+    return files
 
 
 def verify_config(path, contents):
@@ -527,7 +535,9 @@ def live_before_disconnect(directory, report):
 
 def verify_cleanup(prefix):
     paths = [Path('/run') / (prefix + suffix)
-             for suffix in ('.owner', '.selection.json', '.installation.json')]
+             for suffix in ('.owner', '.selection.json')]
+    paths += [Path('/run') / f'{prefix}.installation.{generation}.json'
+              for generation in installation_generations(prefix)]
     paths += [guardian_image(prefix), endpoint(prefix)]
     paths += [Path('/run/systemd/system') / (prefix + suffix)
               for suffix in ('@.service', '.socket')]
