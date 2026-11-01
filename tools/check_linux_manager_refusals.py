@@ -15,7 +15,7 @@ CASES = {
     'fake-proc': 'process metadata is not procfs',
     'socket-owner': 'bus path is not root-owned',
     'socket-peer': 'bus listener peer is not root',
-    'socket-stall': 'manager binding deadline exceeded',
+    'socket-stall': ('manager binding deadline exceeded', 'manager transport admission expired'),
     'socket-close': 'manager observation unavailable or refused:',
 }
 PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_MANAGER_REFUSALS'
@@ -111,7 +111,13 @@ def mounted_case(case, binary, uid, gid):
                            stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
             stdout, stderr = target.communicate(input=b'GO', timeout=12)
             detail = stderr.decode('utf-8', errors='replace')
-            require(target.returncode == 125 and not stdout and CASES[case] in detail,
+            expected = CASES[case]
+            if isinstance(expected, str):
+                expected = (expected,)
+            # The whole-observation and transport deadlines share the same
+            # eight-second bound. Either may report first; the listener below
+            # must still observe authentication followed by observer EOF.
+            require(target.returncode == 125 and not stdout and any(reason in detail for reason in expected),
                     f'{case}: observer did not refuse at the expected check: ' + detail[-2000:])
             if case in ('socket-stall', 'socket-close'):
                 events, errors = listener.communicate(timeout=3)

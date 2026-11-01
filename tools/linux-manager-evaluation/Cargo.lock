@@ -3,6 +3,18 @@
 version = 4
 
 [[package]]
+name = "agentswapper-linux-manager"
+version = "0.1.0-dev"
+dependencies = [
+ "agentswapper-linux-runtime",
+ "nix",
+ "rustix",
+ "serde",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "agentswapper-linux-runtime"
 version = "0.1.0-dev"
 dependencies = [
@@ -15,6 +27,7 @@ dependencies = [
 name = "aswp-linux-manager-evaluation"
 version = "0.0.0"
 dependencies = [
+ "agentswapper-linux-manager",
  "agentswapper-linux-runtime",
  "fuxix",
  "nix",

@@ -320,3 +320,14 @@ production dependency changes. Source inspection covers the `traceme`,
 uses no memory/register operations or externally supplied PID. The containing
 example retains `unsafe_code = forbid`. This limited review does not qualify
 ptrace-based production launch or provider compatibility.
+
+
+The read-only Linux manager extraction introduces the local
+`agentswapper-linux-manager` workspace crate. It uses the already pinned zbus
+6.2.0, Tokio 1.54.1, nix 0.31.3, rustix 1.1.6 and serde, plus the shared runtime.
+Both lockfiles retain their existing registry versions. Its only implemented
+consumer is the qualification client; it is absent from core/CLI normal build
+graphs and from the helper runtime's dependencies. The boundary check also refuses
+application, encryption, database and fixture-only transport dependencies in the
+new manager crate. Production integration still needs a separate policy/launch
+consumer and its own package and platform evidence.
