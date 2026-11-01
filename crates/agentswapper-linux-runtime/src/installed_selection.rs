@@ -68,7 +68,7 @@ fn identity() -> io::Result<(u32, u32)> {
 /// ```
 #[cfg_attr(
     not(feature = "qualification"),
-    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_runtime::installed_selection::SelectedInstallation;\nfn custom_path() { let _ = SelectedInstallation::open_for_qualification; }\n```"
+    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_runtime::installed_selection::SelectedInstallation;\nfn custom_path() { let _ = SelectedInstallation::open_for_qualification; }\n```\n```compile_fail,E0599\nuse agentswapper_linux_runtime::installed_selection::SelectedInstallation;\nfn custom_paths() { let _ = SelectedInstallation::open_paths_for_qualification; }\n```"
 )]
 #[must_use = "retain the selector until the new admission is complete"]
 pub struct SelectedInstallation {
@@ -121,6 +121,24 @@ impl SelectedInstallation {
         self.selector.require_current(&self.selector_path)?;
         self.artifacts.require_current()?;
         self.selector.require_current(&self.selector_path)
+    }
+    /// Layout override for fixed, disposable hosted fixtures only. Absent from
+    /// ordinary builds; identity, generation, ownership and hash checks remain.
+    #[cfg(feature = "qualification")]
+    pub fn open_paths_for_qualification(
+        selector: &Path,
+        manifest: &Path,
+        images: [&Path; 3],
+        units: [&Path; 2],
+    ) -> io::Result<Self> {
+        let (user, group) = identity()?;
+        Self::read(selector, |generation| {
+            InstalledArtifacts::open_paths_for_qualification(
+                InstalledManifest::open_for_qualification(manifest, user, group, generation)?,
+                images,
+                units,
+            )
+        })
     }
     pub fn artifacts(&self) -> &InstalledArtifacts {
         &self.artifacts

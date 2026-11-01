@@ -460,6 +460,16 @@ fn run() -> io::Result<Report> {
 
 /// Entry for the isolated client/observer executable. No custody receipts.
 pub fn run_cli() {
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("--installation-version")])
+    {
+        println!(
+            "{}",
+            agentswapper_linux_runtime::installed_manifest::VERSION
+        );
+        return;
+    }
     if let Err(error) = run().and_then(|report| write_report(&report)) {
         let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
         eprintln!("manager observation unavailable or refused: {diagnostic}");

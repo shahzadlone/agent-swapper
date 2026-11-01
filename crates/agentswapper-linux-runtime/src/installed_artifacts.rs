@@ -40,7 +40,7 @@ impl Paths {
 /// ```
 #[cfg_attr(
     not(feature = "qualification"),
-    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_runtime::installed_artifacts::InstalledArtifacts;\nfn custom_path() { let _ = InstalledArtifacts::open_for_qualification; }\n```"
+    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_runtime::installed_artifacts::InstalledArtifacts;\nfn custom_path() { let _ = InstalledArtifacts::open_for_qualification; }\n```\n```compile_fail,E0599\nuse agentswapper_linux_runtime::installed_artifacts::InstalledArtifacts;\nfn custom_paths() { let _ = InstalledArtifacts::open_paths_for_qualification; }\n```"
 )]
 #[must_use = "retain the manifest and artifact handles through admission"]
 pub struct InstalledArtifacts {
@@ -108,6 +108,25 @@ impl InstalledArtifacts {
             .require_current(&self.paths.service_template)?;
         self.socket_unit.require_current(&self.paths.socket_unit)?;
         self.manifest.require_current()
+    }
+    /// Fixed fixture paths for a real disposable service. The caller still
+    /// needs a protected manifest and matching protected files at every path.
+    #[cfg(feature = "qualification")]
+    pub fn open_paths_for_qualification(
+        manifest: InstalledManifest,
+        images: [&std::path::Path; 3],
+        units: [&std::path::Path; 2],
+    ) -> io::Result<Self> {
+        Self::read(
+            manifest,
+            Paths {
+                guardian: images[0].to_owned(),
+                session_helper: images[1].to_owned(),
+                exec_shim: images[2].to_owned(),
+                service_template: units[0].to_owned(),
+                socket_unit: units[1].to_owned(),
+            },
+        )
     }
     pub fn manifest(&self) -> &InstalledManifest {
         &self.manifest

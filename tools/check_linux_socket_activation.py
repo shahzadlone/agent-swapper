@@ -17,7 +17,7 @@ import time
 
 from check_linux_managed_scope import check_controls, private_directory, wait_for
 
-PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_SOCKET_ACTIVATION,ASWP_MANAGED_OBSERVER'
+PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_SOCKET_ACTIVATION,ASWP_MANAGED_OBSERVER,ASWP_CI_INSTALLATION_VERSION'
 
 
 def require(ok, message):
@@ -128,6 +128,28 @@ def ordinary_ids(uid, gid):
     uid, gid = int(uid), int(gid)
     require(0 < uid < 2**31 and 0 < gid < 2**31, 'ordinary target UID and GID required')
     return uid, gid
+
+
+def installation_files(prefix, uid, gid, image_hash, version, units):
+    require(re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', version), 'invalid fixture installation version')
+    require(re.fullmatch(r'[0-9a-f]{64}', image_hash), 'invalid fixture image hash')
+    generation = hashlib.sha256(prefix.encode()).hexdigest()[:32]
+    manifest = dict(schema=1, protocol=1, version=version, generation=generation, user=uid, group=gid,
+                    guardian_sha256=image_hash, session_helper_sha256=image_hash, exec_shim_sha256=image_hash,
+                    service_template_sha256=hashlib.sha256(units[prefix + '@.service'].encode()).hexdigest(),
+                    socket_unit_sha256=hashlib.sha256(units[prefix + '.socket'].encode()).hexdigest())
+    return {prefix + '.installation.json': json.dumps(manifest, sort_keys=True),
+            prefix + '.selection.json': json.dumps(dict(schema=1, generation=generation), sort_keys=True)}
+
+
+def verify_config(path, contents):
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY)
+    with os.fdopen(descriptor, 'rb') as stream:
+        meta = os.fstat(stream.fileno())
+        require(stat.S_ISREG(meta.st_mode) and meta.st_uid == 0 and stat.S_IMODE(meta.st_mode) == 0o644,
+                'fixture installation metadata is not root-owned mode 0644')
+        require(stream.read(16 * 1024 + 1) == contents.encode(),
+                'fixture installation metadata changed; refusing service control')
 
 
 def unit_files(prefix, directory, uid, gid):
@@ -289,7 +311,12 @@ def admin(verb, directory, uid, gid):
             require(unit_properties(name, ('LoadState',)) == {'LoadState': 'not-found'},
                     'fixture unit name already resolves in the system manager')
         data = source_image(uid)
-        ownership = json.dumps(identity | {'guardian_sha256': hashlib.sha256(data).hexdigest()}, sort_keys=True)
+        version = os.environ.get('ASWP_CI_INSTALLATION_VERSION', '')
+        configs = installation_files(prefix, uid, gid, hashlib.sha256(data).hexdigest(), version, files)
+        for name in configs:
+            require(not os.path.lexists(Path('/run') / name), 'fixture installation metadata already exists')
+        ownership = json.dumps(identity | {'guardian_sha256': hashlib.sha256(data).hexdigest(),
+                                         'installation_version': version}, sort_keys=True)
         created = []
         try:
             create_owned_file(marker, ownership.encode(), 0o600, created)
@@ -297,6 +324,10 @@ def admin(verb, directory, uid, gid):
             verify_image(guardian_image(prefix), hashlib.sha256(data).hexdigest())
             for name, contents in files.items():
                 create_owned_file(parent / name, contents.encode(), 0o644, created)
+            for name, contents in configs.items():
+                path = Path('/run') / name
+                create_owned_file(path, contents.encode(), 0o644, created)
+                verify_config(path, contents)
         except BaseException:
             rollback_created(created)
             raise
@@ -319,14 +350,23 @@ def admin(verb, directory, uid, gid):
         ownership = json.loads(marker.read_text())
     except ValueError as error:
         raise RuntimeError('fixture ownership marker is invalid') from error
-    require(isinstance(ownership, dict) and set(ownership) == set(identity) | {'guardian_sha256'}
+    require(isinstance(ownership, dict) and set(ownership) == set(identity) | {'guardian_sha256', 'installation_version'}
             and all(ownership[key] == value for key, value in identity.items())
             and isinstance(ownership['guardian_sha256'], str)
-            and re.fullmatch(r'[0-9a-f]{64}', ownership['guardian_sha256']),
+            and re.fullmatch(r'[0-9a-f]{64}', ownership['guardian_sha256'])
+            and isinstance(ownership['installation_version'], str)
+            and re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', ownership['installation_version']),
             'fixture ownership marker differs from this run')
     protected_image_parent(prefix)
     if os.path.lexists(guardian_image(prefix)):
         verify_image(guardian_image(prefix), ownership['guardian_sha256'])
+    configs = installation_files(prefix, uid, gid, ownership['guardian_sha256'], ownership['installation_version'], files)
+    for name, contents in configs.items():
+        path = Path('/run') / name
+        if verb == 'template-refusal':
+            require(os.path.lexists(path), 'template control lacks its installation metadata')
+        if os.path.lexists(path):
+            verify_config(path, contents)
     for name, contents in files.items():
         path = parent / name
         if verb == 'template-refusal':
@@ -369,6 +409,11 @@ def admin(verb, directory, uid, gid):
     if os.path.lexists(guardian_image(prefix)):
         verify_image(guardian_image(prefix), ownership['guardian_sha256'])
         guardian_image(prefix).unlink()
+    for name, contents in configs.items():
+        path = Path('/run') / name
+        if os.path.lexists(path):
+            verify_config(path, contents)
+            path.unlink()
     marker.unlink()
 
 
@@ -478,6 +523,13 @@ def live_before_disconnect(directory, report):
 def suite():
     prefix = fixture_prefix()
     require(os.geteuid() != 0, 'activation suite requires an ordinary runner')
+    observer = os.environ.get('ASWP_MANAGED_OBSERVER')
+    require(observer and Path(observer).is_absolute(), 'Rust activation observer path is required')
+    version = subprocess.run([observer, '--installation-version'], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=5, check=True)
+    require(not version.stderr and re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}\n', version.stdout),
+            'invalid ordinary observer installation version')
+    environment = dict(os.environ, ASWP_CI_INSTALLATION_VERSION=version.stdout.strip())
     script = str(Path(__file__).resolve())
     connections, descriptors = [], []
     with tempfile.TemporaryDirectory(prefix='aswp-activation-') as temporary:
@@ -487,7 +539,7 @@ def suite():
                       '--admin']
         identity_args = [str(directory), str(os.getuid()), str(os.getgid())]
         try:
-            subprocess.run(admin_args + ['install'] + identity_args, check=True, timeout=50)
+            subprocess.run(admin_args + ['install'] + identity_args, env=environment, check=True, timeout=50)
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')
@@ -513,7 +565,7 @@ def suite():
             require(set(directory.iterdir()) == {bind_marker} and bind_marker.read_text() == invocation,
                     'bind-only guardian did not record clean EOF or created unexpected files')
             bind_marker.unlink()
-            subprocess.run(admin_args + ['template-refusal'] + identity_args, check=True, timeout=50)
+            subprocess.run(admin_args + ['template-refusal'] + identity_args, env=environment, check=True, timeout=50)
             require(not any(directory.iterdir()), 'mutable-template refusal created an activation worker or marker')
             print('::notice title=Linux activation binding::kernel message sender matched manager MainPID and invocation; guardian recorded clean EOF and original scope retired; no launch data or worker', flush=True)
             for packets, shutdown in [((b'X',), False), ((b'',), False),
@@ -670,7 +722,7 @@ def suite():
                 connection.close()
             for descriptor in descriptors:
                 os.close(descriptor)
-            subprocess.run(admin_args + ['cleanup'] + identity_args, check=True, timeout=50)
+            subprocess.run(admin_args + ['cleanup'] + identity_args, env=environment, check=True, timeout=50)
     print('::notice title=Linux fixed-user activation cleanup::temporary socket, template units, root-owned Rust guardian image, service instances and fixture files removed', flush=True)
 
 

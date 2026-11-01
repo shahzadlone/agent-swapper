@@ -163,3 +163,28 @@ stated evidence before a production managed launcher is enabled.
 Local runtime/manager tests, nineteen combined doctests, all 49 evaluator tests,
 strict manager/evaluator Clippy and dependency boundaries pass. The added policy
 constructor and generation-lifetime controls require their native CI result.
+
+## Real-service qualification consumer
+
+The fixed-user activation fixture now creates an additional protected manifest
+and selector under its unique `/run/aswp-activation-<run>-<attempt>` prefix. It
+uses the exact installed guardian and unit-file hashes. The one fixture binary
+contains all test roles, so its image occupies the three image roles in this
+qualification layout; this is not a production three-helper installation.
+Explicit custom locations are feature-gated and still undergo the same identity,
+generation, file-protection and digest checks.
+
+The ordinary observer reports the runtime version before any privileged fixture
+operation. The administrator validates that bounded value, exclusively creates
+the metadata, records the version in its root-only ownership marker, and verifies
+the metadata before service control and removal. Invalid versions and changed
+metadata refuse before creating files or controlling services. Partial creation
+uses the existing inode-specific rollback. Cleanup reconstructs expected data
+from the original marker rather than trusting a later environment value.
+
+All activated client and independent-witness policies now use
+`ServicePolicy::installed`, including the real journal/terminal consumer and
+opaque-retirement tests. Mutable-template refusal still requires no accepted
+connection and restores the original mode. The complete native activation suite
+must qualify this new path; local controls do not substitute for that result.
+No local root service, provider account or production installer is used.
