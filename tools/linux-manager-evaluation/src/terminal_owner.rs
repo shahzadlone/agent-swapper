@@ -1,5 +1,5 @@
 //! Surviving parent for fixed owned-terminal qualification executables.
-use crate::{
+use super::{
     job_control,
     outer_terminal::{self, Terminal, require},
 };

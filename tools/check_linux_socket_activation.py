@@ -594,6 +594,15 @@ def suite():
                         'managed relay did not preserve the active/suspended session across old deadlines: '
                         + (result.stdout + result.stderr)[-4000:])
 
+                store_relay = Path(__file__).resolve().parents[1] / 'target/debug/examples/linux_managed_store_probe'
+                result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
+                                        str(store_relay), '--store'], environment=test_env)
+                print(result.stdout[-16000:], end='', flush=True)
+                print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
+                require(result.returncode == 0 and result.stdout.count(': pass') == 22,
+                        'real Store terminal composition did not pass all 22 cases: '
+                        + (result.stdout + result.stderr)[-4000:])
+
         finally:
             for connection in connections:
                 connection.close()

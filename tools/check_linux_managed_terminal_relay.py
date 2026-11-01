@@ -8,6 +8,8 @@ import re
 import select
 import shlex
 import signal
+import sqlite3
+import uuid
 import struct
 import sys
 import tempfile
@@ -44,11 +46,30 @@ def state(pid):
     return Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()[0]
 
 
+def lease_path(root):
+    metadata = root / 'journal.json'
+    if not metadata.exists():
+        return root / 'lease'
+    data = json.loads(metadata.read_text())
+    assert set(data) == {'profile', 'run'}
+    for value in data.values():
+        assert str(uuid.UUID(value)) == value
+    database = root / 'state' / 'registry.sqlite3'
+    with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as connection:
+        record = connection.execute('SELECT profile, exit_code, outcome, requires_spawn_observation, local_scope FROM runs WHERE id=?', (data['run'],)).fetchone()
+        assert record is not None and record[:4] == (data['profile'], None, None, 1)
+        assert json.loads(record[4])['backend'] == 'linux_cgroup'
+        assert connection.execute('PRAGMA quick_check').fetchone() == ('ok',)
+    if (root / 'retired').exists():
+        assert (root / 'journal-audited').read_text() == 'consistent and unresolved'
+    return root / 'state' / 'locks' / (data['profile'] + '.lock')
+
+
 def retired(owned, root):
     assert (root / 'retired').is_file() and (root / 'restored').is_file()
     assert 'outcome unresolved' in (root / 'intent').read_text()
     # No guardian or client copy may retain the original OFD lease afterwards.
-    with (root / 'lease').open('rb+') as lease:
+    with lease_path(root).open('rb+') as lease:
         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if owned.shell:
         # Bash readline changes terminal modes while displaying its prompt.
@@ -406,7 +427,7 @@ def failures(binary, scenario, env, owned_parent=False):
             before = heartbeat.read_text()
             time.sleep(0.1)
             assert heartbeat.read_text() == before and not (marker_root / 'descendant-voluntary-exit').exists()
-            with (root / 'lease').open('rb+') as lease:
+            with lease_path(root).open('rb+') as lease:
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
             print(f'{"exec-" if env.get("ASWP_CI_EXEC_GATE") == "1" else ""}managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass (scope cleanup; restoration requires surviving owner)', flush=True)
         finally:
@@ -498,7 +519,7 @@ def admission(binary, phase, scenario, env, owned_parent):
             else:
                 os.close(fd)
                 raise AssertionError('original admission scope remains active')
-            with (root / 'lease').open('rb+') as lease:
+            with lease_path(root).open('rb+') as lease:
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if scenario == 'intent-error':
                 assert (root / 'intent').read_text() == 'existing intent canary'
@@ -563,11 +584,41 @@ def long_session(binary, env):
 
 
 def main():
-    assert sys.platform == 'linux' and (len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] == '--long-session'))
+    assert sys.platform == 'linux' and (len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] in ('--long-session', '--store', '--store-refusal')))
     binary = Path(sys.argv[1]).resolve(strict=True)
+    if len(sys.argv) == 3 and sys.argv[2] == '--store-refusal':
+        with tempfile.TemporaryDirectory(prefix='aswp-store-refusal-') as path:
+            root = Path(path)
+            owned = OwnedPty(binary, root, environment={'ASWP_ACTIVATION_PREFIX': 'aswp-activation-0-0', 'ASWP_CI_EXEC_GATE': '1'})
+            try:
+                owned.finish(125)
+                assert not (root / 'state').exists() and not (root / 'journal.json').exists()
+                assert not (root / 'ready').exists()
+                print('Store terminal consumer refuses ordinary host before registry or manager access: pass', flush=True)
+            finally:
+                owned.close()
+        return
     env = environment()
     if len(sys.argv) == 3:
-        long_session(binary, dict(env, ASWP_CI_EXEC_GATE='1'))
+        exec_env = dict(env, ASWP_CI_EXEC_GATE='1')
+        if sys.argv[2] == '--long-session':
+            long_session(binary, exec_env)
+        else:
+            for scenario in ('bytes-resize-tail', 'exit-code-7', 'target-realtime',
+                             'delayed-final-drain', 'blocked-known-exit', 'flood-term'):
+                direct(binary, scenario, exec_env, True)
+            direct(binary, 'bytes-resize-tail', exec_env, True, fresh=True)
+            shell_job(binary, False, exec_env, True, fresh=True)
+            for scenario in ('fg', 'bg-fg', 'bg-expire', 'resume-race'):
+                stopped_exit(binary, scenario, exec_env, True)
+            for scenario in ('unknown-exit', 'client-kill', 'outer-hangup'):
+                failures(binary, scenario, exec_env, True)
+            for phase in ('go-send', 'release-send'):
+                for scenario in ('term', 'ctrl-c'):
+                    admission(binary, phase, scenario, exec_env, True)
+            for phase, scenario in (('go', 'intent-error'), ('release', 'spawn-error'), ('release', 'ready-error')):
+                admission(binary, phase, scenario, exec_env, True)
+            print('::notice::real Store terminal composition: 22 cases passed with actual profile leases and durable run observations; retirement preserves unresolved journal policy', flush=True)
         return
     for owned_parent in (False, True):
         for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
