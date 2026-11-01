@@ -57,3 +57,14 @@ hosted-fixture environment allowlist. The child enters the shared foreground
 group only after checking its direct parent and registering its parent-death
 signal. The existing direct relay remains separately tested. The new combined
 cases are described in the [relay report](linux-managed-terminal-relay.md).
+
+A subsequent source audit tightened error cleanup: the bounded child destructor
+can time out, so returning from that destructor is not evidence that the child
+has stopped changing the terminal. The owner now retains a separate process
+pidfd and restores on Drop only after that original descriptor reports exit or
+reap, with no polling error. Without `PIDFD_THREAD`, readiness waits for the
+whole thread group; see [pidfd_open(2)](https://man7.org/linux/man-pages/man2/pidfd_open.2.html).
+Explicit normal stop restoration still follows the exclusive waiter's stop
+event. An eighth local case exercises refusal of an unsupported external stop:
+the owned child exits, and the error path restores every original attribute.
+Unknown child retirement never grants error-path restoration authority.

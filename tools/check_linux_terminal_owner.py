@@ -52,6 +52,13 @@ def direct(binary, scenario):
                 os.kill(owned.pid, signal.SIGTERM)
                 owned.finish(-signal.SIGTERM)
                 assert (root / 'owner-restored-exit').read_text() == 'None:Some(15)'
+            elif scenario == 'external-stop-refusal':
+                # This signal is explicitly outside the prototype's supported
+                # stop protocol. The error path must retire the owned child
+                # before its retained pidfd permits restoration.
+                os.kill(owned.pid, signal.SIGTSTP)
+                owned.finish(125)
+                assert not (root / 'owner-restored-exit').exists()
             else:
                 raise AssertionError('unknown terminal-owner scenario')
             assert select.select([child], [], [], 0)[0]
@@ -125,13 +132,13 @@ def shell_job(binary, forced, cancel=False):
 def main():
     assert sys.platform == 'linux' and len(sys.argv) == 2
     binary = Path(sys.argv[1]).resolve(strict=True)
-    for scenario in ('normal', 'child-sigkill', 'owner-sigterm'):
+    for scenario in ('normal', 'child-sigkill', 'owner-sigterm', 'external-stop-refusal'):
         direct(binary, scenario)
     shell_job(binary, False)
     shell_job(binary, True)
     shell_job(binary, False, cancel=True)
     shell_job(binary, True, cancel=True)
-    print('::notice::surviving terminal owner: seven owned-PTY cases passed; background cancellation preserves subsequent shell mode changes; individual child death only; no combined manager or whole-group loss guarantee', flush=True)
+    print('::notice::surviving terminal owner: eight owned-PTY cases passed; error cleanup verifies child exit; background cancellation preserves subsequent shell mode changes; individual child death only; no whole-group loss guarantee', flush=True)
 
 
 if __name__ == '__main__':

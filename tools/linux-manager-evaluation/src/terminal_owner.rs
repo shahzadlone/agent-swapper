@@ -10,6 +10,7 @@ use rustix::{
 };
 use std::{
     fs, io,
+    os::fd::OwnedFd,
     path::Path,
     process::Command,
     time::{Duration, Instant},
@@ -19,18 +20,39 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
     fs::rename(directory.join(format!("{name}.tmp")), directory.join(name))
 }
 
-struct Owner(Terminal);
+struct Owner(Terminal, Option<OwnedFd>);
 impl Drop for Owner {
     fn drop(&mut self) {
-        let _ = self.0.restore_saved();
+        let Some(child) = &self.1 else {
+            return;
+        };
+        let mut ready = [PollFd::new(child, PollFlags::IN)];
+        if poll(
+            &mut ready,
+            Some(&Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )
+        .is_ok()
+            && ready[0]
+                .revents()
+                .intersects(PollFlags::IN | PollFlags::HUP)
+            && !ready[0]
+                .revents()
+                .intersects(PollFlags::ERR | PollFlags::NVAL)
+        {
+            let _ = self.0.restore_saved();
+        }
     }
 }
 
 pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<()> {
     let signals = Signals::new()?;
-    // Declared before child: error unwinding kills/reaps the fixed child before
-    // this guard restores modes, then restores the parent's signal mask.
-    let mut terminal = Owner(Terminal::capture(directory)?);
+    // Declared before child: cleanup attempts child retirement first. A bounded
+    // child destructor is not proof of exit; this guard requires its retained
+    // process pidfd to confirm exit before restoring any modes on error.
+    let mut terminal = Owner(Terminal::capture(directory)?, None);
     let mut command = Command::new(std::env::current_exe()?);
     command
         .arg(if managed { "--owned-child" } else { "--child" })
@@ -60,7 +82,8 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<()> {
     let child_pid =
         Pid::from_raw(child.pid.as_raw()).ok_or_else(|| io::Error::other("invalid child PID"))?;
     let child_fd = pidfd_open(child_pid, PidfdFlags::empty())?;
-    let until = Instant::now() + Duration::from_secs(if managed { 55 } else { 15 });
+    terminal.1 = Some(child_fd.try_clone()?);
+    let until = Instant::now() + Duration::from_secs(if managed { 70 } else { 15 });
     let mut ready = false;
     let mut cancellation = None;
     let result;
