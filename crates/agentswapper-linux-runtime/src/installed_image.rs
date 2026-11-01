@@ -31,6 +31,7 @@ impl ProtectedImage {
     pub fn open(path: &Path) -> io::Result<Self> {
         let image = crate::protected_file::open(path)?;
         let stat = fstat(&image)?;
+        crate::protected_file::single_link(&stat)?;
         require(
             stat.st_uid == 0 && stat.st_mode & 0o7777 == 0o755,
             "image is not a root-owned mode-0755 regular file",

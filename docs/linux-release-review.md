@@ -35,7 +35,7 @@ separately. These changes do not supply restart recovery or target-exit evidence
 | Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
 | Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
 | systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
-| Installed inode lifetime | Specify no hardlink deduplication or metadata rewrites of live generations, then enforce and test the chosen host/installer prerequisites. |
+| Installed inode lifetime | Single-link admission and retained-link mutation controls implemented; native results pending. Installer must preserve independent, unchanged inodes while admitted runs retain them. |
 | Policy API | Guard admitted policies from reuse; test production path derivation and narrow caller-selected generation/layout APIs. |
 | Build features | Verify shipped CLI feature graphs exclude qualification APIs. |
 

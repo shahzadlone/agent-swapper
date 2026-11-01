@@ -1,27 +1,30 @@
-# Linux installation metadata
+# Linux installation contract
 
-The shared runtime can read a bounded, root-protected installation manifest.
-This is a metadata checkpoint; the production managed launcher remains disabled.
-No installer, root service or provider configuration is created by this code.
+The runtime validates selected installation metadata and retains the original
+artifacts through real service binding. The normal managed launcher is still
+disabled. These readers do not install a service, change provider configuration,
+or establish namespace provenance.
 
-`InstalledManifest::open` derives the location from an ordinary UID and a
-32-character lowercase hexadecimal generation:
-`/etc/agentswapper/installations/<uid>/<generation>.json`. It uses the retained
-`ProtectedConfig` descriptor and rejects symlinks, writable ancestry, incorrect
-ownership or mode, oversized data and changes since opening. The caller must
-independently establish a trusted namespace; root ownership alone is insufficient.
+## Fixed paths and identity
 
-The JSON has exactly these fields: `schema`, `protocol`, `version`, `generation`,
-`user`, `group`, `guardian_sha256`, `session_helper_sha256`, `exec_shim_sha256`,
+`SelectedInstallation::open` derives the current ordinary UID and primary GID,
+requires matching real/effective identities, and reads
+`/etc/agentswapper/installations/<uid>/active.json`. The production constructor
+accepts no caller-selected path, UID or generation and no environment override.
+The selector has exactly `schema: 1` and a nonzero, 32-character lowercase
+hexadecimal `generation`.
+
+That generation selects
+`/etc/agentswapper/installations/<uid>/<generation>.json`. Its exact fields are
+`schema`, `protocol`, `version`, `generation`, `user`, `group`,
+`guardian_sha256`, `session_helper_sha256`, `exec_shim_sha256`,
 `service_template_sha256` and `socket_unit_sha256`. Schema and protocol are 1;
-the version must equal the runtime crate's package version. UID and primary GID
-must match the supplied ordinary identity. Generations and hashes must be
-nonzero lowercase hexadecimal strings of exactly 32 and 64 characters.
-Missing, duplicate, unknown or incompatible fields fail with a fixed diagnostic
-that does not echo file contents.
+version matches the runtime package version. Identity and generation must match
+the selection. Each hash is nonzero lowercase hexadecimal of length 64.
+Missing, duplicate, unknown or incompatible fields refuse with fixed diagnostics.
 
-The manifest contains no executable paths or arbitrary command arguments. Paths
-are derived from the validated identity and generation:
+The manifest contains no executable paths or command arguments. Its validated
+identity and generation derive the following locations:
 
 | Asset | Fixed location |
 | --- | --- |
@@ -30,190 +33,97 @@ are derived from the validated identity and generation:
 | Socket unit | `/usr/lib/systemd/system/agentswapper-<uid>-<generation>.socket` |
 | Endpoint | `/run/agentswapper/<uid>/<generation>.sock` |
 
-The returned hashes are expected values, not proof that the artifacts match.
-A caller-selected generation does not authorize launching anything. A protected
-generation selector, retained artifact hash verification, loaded-unit matching,
-clean helper bootstrap and installation/upgrade/removal procedures remain open.
-The package version check alone cannot distinguish two builds with the same
-version; artifact hashes must establish that later boundary.
+`InstalledManifest::open` and `InstalledArtifacts::open` are lower-level metadata
+readers. A caller-selected generation does not create a `SelectedInstallation`,
+service policy, launch permission or retirement receipt. Custom path/layout
+constructors and the raw-path service policy are qualification-only; default
+API doctests and dependency-feature checks enforce that separation.
 
-Local validation covers incompatible fields and identities, bounded input,
-duplicate fields, the public API boundary, strict runtime/evaluation Clippy and
-dependency boundaries. The hosted asset matrix adds six manifest controls:
-valid protected data, protocol mismatch, user mismatch, unknown field, duplicate
-field and a symlink. The fixture obtains the runtime version from its ordinary
-probe before entering a disposable private mount namespace; missing or invalid
-version input refuses before creating or mounting a fixture. Root drops its
-identity before running the probe, and no fixture image is executed. Native
-qualification of this checkpoint is pending.
+## Retained file checks
 
-## Retained artifact digests
+The shared opener resolves components through validated root-owned directory
+handles. It refuses symlinks, writable ancestry, devices, FIFOs and unprotected
+regular files. Opens use close-on-exec, nonblocking and no-controlling-terminal
+flags. Configurations must have mode 0644 and at most 16 KiB. Executable images
+must have mode 0755, no file capabilities, and an executable, non-nosuid mount.
+The caller must establish a trusted namespace independently: root UID metadata
+alone is not provenance.
 
-`ProtectedImage::require_sha256` compares an expected SHA-256 against the
-retained descriptor using bounded positional reads. Images are limited to
-128 MiB; configuration retains its 16 KiB limit. Hashing does not disturb shared
-file offsets. Both image and configuration reads check the original metadata
-before and after reading. Reopening an image path also requires the original
-inode and metadata, so identical-byte replacement refuses. Running-executable
-corroboration now checks the retained image's original metadata too.
+Every installed file must have exactly one hard link both at opening and when
+its original stamp is captured. The stamp covers inode identity, link count,
+size, modification/change times, mode and ownership. Later checks validate the
+retained inode and reopen its protected pathname. Replacing a file with identical
+bytes, replacing an ancestor or overlaying the pathname still refuses.
 
-These APIs verify caller-supplied expected values; they do not yet connect all
-five manifest assets or select an authorized generation. They assume trusted
-root and namespace provenance, and do not freeze files against later root
-changes. Hash mismatches and malformed expected hashes produce fixed messages
-without echoing contents or supplied values.
+`InstalledArtifacts` retains the original manifest and all three images and two
+unit files. Each file must match its own manifest hash. Image hashing uses bounded
+positional reads up to 128 MiB; configuration keeps its 16 KiB limit. Checks before
+and after reading detect changes without disturbing shared file offsets. Hashes
+use the existing locked `sha2 0.10.9` dependency. The package version alone cannot
+distinguish builds; artifact hashes supply that comparison.
 
-The hash implementation reuses the application's locked `sha2 0.10.9` graph.
-The isolated evaluator adds those same eight existing package versions; no
-registry version changes in the application lockfile. The dependency-boundary
-check compares their versions and registry sources between the two locks;
-Cargo validates the locked archive checksums.
+These checks do not freeze files against trusted root or prove which bytes
+systemd previously loaded. They also do not authenticate the activation endpoint.
 
-Local digest controls cover published SHA-256 test vectors, mismatched bytes,
-malformed hashes, exact size limits, overflow, empty files, multiple read blocks
-and preserved file offsets. The hosted matrix adds eight controls: image and
-configuration hash matches/mismatches, retained-image stability, identical-byte
-replacement, in-place edits and mode changes. No fixture image is executed.
-Native qualification of these digest controls remains pending.
+## Admission and active generations
 
-## Complete retained artifact set
+`ServicePolicy::installed` captures ordinary credentials, matches the manifest's
+identity, validates template text, and retains the complete selection. Binding
+corroborates the original manager invocation, process image, credentials and
+scope. It rechecks the selector and every retained artifact before completing
+admission. A selector change during admission refuses, including identical-byte
+replacement. An already-admitted policy cannot be reused for another binding.
 
-`InstalledArtifacts::open` consumes a protected manifest, derives all five paths,
-opens the three executable images and two unit files, and checks each against
-its own manifest hash. It retains every descriptor and the original manifest.
-Before returning, it revalidates every protected path and the manifest. Later
-`require_current` checks detect changes relative to those original observations.
-The value is not cloneable; custom fixture locations require the qualification
-feature and are absent from ordinary application builds.
+After successful binding, the policy retains its original manifest and artifacts
+independently of the selector. Updating the selector does not terminate an
+admitted run, including a bound run that has not yet prepared its target. Later
+preparation and observation use that original binding and key. Original artifact
+changes still refuse revalidation. Retirement remains independently observable
+and does not manufacture an unknown target exit.
 
-This closes the connection between expected manifest hashes and retained files.
-It still does not prove which unit bytes systemd loaded, select the authorized
-generation, authorize execution, or freeze files against trusted-root changes.
-No production launcher consumes this value yet.
+An installer must publish a new generation with independent inodes, then replace
+only the selector. It must keep old generations while admitted runs retain them,
+and must not hardlink-deduplicate, chmod, chown, touch or rewrite active assets.
+Root can revoke availability by changing these files; this is not an immutability
+or revocation protocol. Safe installation, update, rollback, removal and restart
+recovery still require their own implementation and evidence.
 
-The hosted matrix adds ten full-set controls with distinct bytes and hashes for
-each artifact: a valid set, one mismatched file for each of the five roles,
-a missing helper, and identical-byte replacement of a retained guardian,
-service template or manifest. All artifacts are inert and never executed.
-Local runtime tests, positive and negative API doctests, strict runtime/evaluator
-Clippy, dependency boundaries and harness refusal tests pass. Native results for
-the full-set controls are pending.
+## Qualification and evidence
 
-## Protected generation selection
+The hosted fixed-user fixture uses protected metadata under its unique `/run`
+prefix, two distinct generation manifests, and the actual hashes of its installed
+binary and unit files. The same fixed binary occupies all three executable roles;
+this is not a production three-helper installation. No local root service or real
+provider account is used.
 
-`SelectedInstallation::open` reads
-`/etc/agentswapper/installations/<current-uid>/active.json`. It accepts no path,
-UID or generation override and requires matching real/effective ordinary UID
-and primary GID. The bounded, mode-0644 protected selector has exactly two
-fields: `schema: 1` and a nonzero 32-character lowercase hexadecimal `generation`.
-Unknown or duplicate fields, path-like strings and incompatible schemas refuse
-without echoing their contents.
+The administrator reserves names exclusively, authenticates its root-only
+ownership marker and exact assets before mutation/service control, and rolls back
+partial creation using retained inode identities. Generation controls atomically
+replace only a reserved selector and restore the original choice. Cleanup checks
+all owned metadata, image, endpoint and unit names, including dangling symlinks.
+Privileged Python roles use isolated startup and explicit sibling-module loading.
 
-The selected generation determines the manifest and all five artifacts. The
-selector is retained and rechecked around artifact validation. Missing or
-incompatible generations fail; the reader does not try another generation or
-fall back to uncontained execution. A selector update during admission refuses,
-including replacement with identical contents. This is metadata admission under
-a trusted namespace, not permission to launch a process.
+| Checkpoint | Evidence |
+| --- | --- |
+| Installation selection, complete digests and real service policy | Full CI through `7df8703`, including both native Ubuntu suites and independent rebuilds: [41304842096](https://github.com/shahzadlone/agent-swapper/actions/runs/41304842096) |
+| Path reopening with unchanged retained inode metadata | Full CI at `7791f02`: [41303860668](https://github.com/shahzadlone/agent-swapper/actions/runs/41303860668) |
+| Selector replacement before final admission, after successful binding, and original image changes | Both native Ubuntu suites passed at `241ded2`: [41306656317](https://github.com/shahzadlone/agent-swapper/actions/runs/41306656317); full pipeline pending at documentation time |
+| Missing/premature admission-transition mutations in ordinary observers | Both mutants built locally; native results pending |
+| Vendor-unit `/lib` versus `/usr/lib` spelling | Hosted measurement added; results pending |
+| Single-link admission and link additions after observation | Ordinary runtime tests passed; native controls pending |
 
-After admission, `into_artifacts` performs a final recheck and transfers the
-admitted generation to its active-run owner. That owner must retain those
-artifacts instead of selecting a newer generation during a live run. An eventual
-installer must keep old assets while admitted runs still need them. No installer,
-upgrade transaction, active-run transition or managed production launcher is
-implemented by this reader.
+The admission barrier and deliberately mutated observers exist only in test
+builds/disposable source copies. The installed guardian remains unmodified, and
+a mutation must fail at its exact intended boundary. The protected-asset matrix
+also tests bounded/ambiguous JSON, every artifact's distinct hash, absent assets,
+protected positive controls, replacement, in-place edits, permissions and links.
 
-The hosted matrix adds ten selection controls: valid selection, path-like
-generation, unknown/duplicate fields, absent generation, incompatible manifest
-version, replaced selector, replaced manifest, changed guardian and a switch
-to a second complete valid generation while the first observation is held.
-Custom fixture layouts remain qualification-only. Local runtime tests and
-thirteen API doctests, strict runtime/evaluator Clippy, dependency boundaries
-and harness refusal tests pass; native selection qualification is pending.
+The first full installed-policy attempt exceeded an aggregate fixture deadline
+because repeated hashes used an unoptimized development dependency. Optimizing
+only the pinned SHA-256 dependency resolved it; no checks, bounds or deadlines
+were relaxed. Both native suites and independent rebuilds passed at `71ab9af`
+([41302398455](https://github.com/shahzadlone/agent-swapper/actions/runs/41302398455)).
 
-The first digest checkpoint (`5f3469c`) passed the asset matrix on both native
-runners. Ubuntu 22.04 then stopped at the dependency-boundary step, whose new
-`tomllib` import required Python 3.11. The checker now uses Cargo's JSON metadata
-on the older interpreter too. Native rerun of that correction is pending.
-
-## Selected artifacts in service policy
-
-`ServicePolicy::installed` captures the current caller's ordinary credentials,
-requires the selected manifest identity to match, and retains the complete
-selection. It checks the retained template's text and uses its actual protected
-path and guardian handle during the existing loaded-service and original-process
-checks. The selector remains live through the final binding recheck. Only then
-does the policy retain the admitted artifacts independently of the selector.
-Active rechecks validate all original artifacts and the original manifest.
-
-The read-only `ServicePolicy::require_current` supports checking retained files
-before connection. It does not observe a manager or admit a process. The explicit
-fixed-path policy remains available for independently authorized locations.
-Neither constructor grants execution authority or verifies the loaded socket
-unit and endpoint; production connection/bootstrap integration is still open.
-
-Native selection controls now hold the actual selected service policy before
-mutating its files. A paired control hands off the admitted artifacts before
-switching to another complete generation and requires those original artifacts
-to remain valid. This tests installation metadata lifetime; it is not yet a
-real manager binding through the new installed constructor. Existing native
-service binding uses the explicit constructor. Both paths still need their
-stated evidence before a production managed launcher is enabled.
-
-Local runtime/manager tests, nineteen combined doctests, all 49 evaluator tests,
-strict manager/evaluator Clippy and dependency boundaries pass. The added policy
-constructor and generation-lifetime controls require their native CI result.
-
-## Real-service qualification consumer
-
-The fixed-user activation fixture creates protected manifests and a selector
-under its unique `/run/aswp-activation-<run>-<attempt>` prefix. It
-uses the exact installed guardian and unit-file hashes. The one fixture binary
-contains all test roles, so its image occupies the three image roles in this
-qualification layout; this is not a production three-helper installation.
-Explicit custom locations are feature-gated and still undergo the same identity,
-generation, file-protection and digest checks.
-
-The ordinary observer reports the runtime version before any privileged fixture
-operation. The administrator validates that bounded value, exclusively creates
-the metadata, records the version in its root-only ownership marker, and verifies
-the metadata before service control and removal. Invalid versions and changed
-metadata refuse before creating files or controlling services. Partial creation
-uses the existing inode-specific rollback. Cleanup reconstructs expected data
-from the original marker rather than trusting a later environment value.
-
-All activated client and independent-witness policies now use
-`ServicePolicy::installed`, including the real journal/terminal consumer and
-opaque-retirement tests. Mutable-template refusal still requires no accepted
-connection and restores the original mode. The complete native activation suite
-must qualify this new path; local controls do not substitute for that result.
-No local root service, provider account or production installer is used.
-
-The real-service fixture now reserves two deterministic generation manifests at
-`/run/<prefix>.installation.<generation>.json`. Its selector initially names the
-first. The qualification reader derives the manifest filename from the validated
-selection, so switching that selection need not replace the file retained by a
-live generation. Both manifests describe the same fixed fixture images and units;
-this qualifies metadata lifetime, not an executable upgrade. Installation and
-cleanup verify both exact documents, and cleanup reporting checks all eight
-owned asset names. The later real-service selector-switch controls are still
-required; creating a second manifest alone does not prove that transition.
-
-The first complete installed-policy run at `541f06c` passed activation and all
-eleven journal/receipt controls on both native runners, then exceeded the
-six-minute aggregate activation/terminal step limit. Repeated full-image hashing
-was running in an unoptimized dependency build. A local ordinary-user read-only
-measurement of the same protected 63,398,224-byte system file took 1.28–1.42
-seconds per digest before optimizing `sha2 0.10.9`, and 0.080–0.097 seconds after.
-The image was never executed. Both development workspaces now optimize that
-pinned dependency; release hashing already uses the optimized release profile.
-All file checks, digest bounds and fixture deadlines remain in effect. The
-complete native rerun must establish whether the aggregate timeout is resolved.
-
-The optimized checkpoint `71ab9af` passed the full native suite on both Ubuntu
-runners and the complete release/rebuild pipeline (`41302398455`). The asset
-matrix now adds four pathname controls: ancestor-directory replacement and a
-private leaf bind mount for both images and configuration. They preserve all
-metadata on the retained inode and the original bytes, then require the distinct
-pathname-mismatch diagnostic. These additional cases need their own native
-result; they do not change filesystem trust or authorize launching helpers.
+See [production integration](linux-production-integration.md) and
+[review follow-up](linux-release-review.md) for the remaining namespace,
+loaded-unit/socket, clean helper bootstrap and launch-integration gates.

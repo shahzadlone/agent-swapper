@@ -20,6 +20,8 @@ CASES = {
     'config-replaced': 'installed configuration changed since admission began',
     'config-modified': 'installed configuration changed since admission began',
     'config-mode-changed': 'installed configuration changed since admission began',
+    'config-hardlink': 'installed file must have exactly one link',
+    'config-link-added': 'installed configuration changed since admission began',
     'config-ancestor-replaced': 'installed configuration path no longer names the retained file',
     'config-mount-overlaid': 'installed configuration path no longer names the retained file',
     'manifest-protected': None,
@@ -36,6 +38,8 @@ CASES = {
     'image-replaced': 'installed image changed since admission began',
     'image-modified': 'installed image changed since admission began',
     'image-mode-changed': 'installed image changed since admission began',
+    'image-hardlink': 'installed file must have exactly one link',
+    'image-link-added': 'installed image changed since admission began',
     'image-ancestor-replaced': 'installed image path no longer names the retained file',
     'image-mount-overlaid': 'installed image path no longer names the retained file',
     'bundle-protected': None,
@@ -203,6 +207,8 @@ def retained_asset_control(command, image, case):
                 image.write_text(json.dumps(dict(schema=1, generation=NEXT_GENERATION)))
             elif case in ('config-mode-changed', 'image-mode-changed'):
                 image.chmod(0o664)
+            elif case in ('config-link-added', 'image-link-added'):
+                os.link(image, image.with_name('held-alias'))
             stdout, stderr = child.communicate(b'R', timeout=5)
             return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
         finally:
@@ -305,6 +311,8 @@ def mounted_case(case, binary, uid, gid):
             image.chmod(0o775)
         elif case == 'user-owned':
             os.chown(image, uid, gid)
+        elif case in ('config-hardlink', 'image-hardlink'):
+            os.link(image, base / 'alias')
         script = str(Path(__file__).resolve())
         role = '--config-probe' if case.startswith('config-') else '--probe'
         if case.startswith('manifest-'):
@@ -315,6 +323,7 @@ def mounted_case(case, binary, uid, gid):
             role = '--selection-probe'
         retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed',
                            'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed',
+                           'config-link-added', 'image-link-added',
                            'config-ancestor-replaced', 'config-mount-overlaid',
                            'image-ancestor-replaced', 'image-mount-overlaid',
                            'bundle-guardian-replaced', 'bundle-template-replaced', 'bundle-manifest-replaced',

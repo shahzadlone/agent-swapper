@@ -21,6 +21,7 @@ impl ProtectedConfig {
     pub fn open(path: &Path) -> io::Result<Self> {
         let file = crate::protected_file::open(path)?;
         let metadata = fstat(&file)?;
+        crate::protected_file::single_link(&metadata)?;
         if metadata.st_uid != 0 {
             return Err(io::Error::other(
                 "installed configuration is no longer root-owned",
