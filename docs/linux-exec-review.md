@@ -11,11 +11,11 @@ The following findings require resolution before product integration:
 | Finding | Disposition |
 | --- | --- |
 | Cancellation can remain pending through admission and release | Cancellation guards now bracket journaling and run after the last recheck, immediately before GO/release; qualified in the complete 815a878 run |
-| A target dying while the relay is paused can lose its queued outcome | Add stopped-target death tests through shell fg/bg and repair event/drain ordering |
-| A known target exit can be replaced by a drain-timeout failure | Separate bounded output truncation from the authenticated target result |
+| A target dying while the relay is paused can lose its queued outcome | Queued final reports are checked before resume; qualified in the complete 082629f run |
+| A known target exit can be replaced by a drain-timeout failure | Known exits keep their status after bounded output truncation; qualified in the complete 082629f run |
 | Socket reset can hide a queued final report | Reproduced locally; bounded retry qualified in the complete 815a878 run |
 | Early relay errors discard their retirement witness | Admission and post-entry errors now attempt explicit retirement using retained witnesses; qualified in the complete 815a878 run |
-| Guardian resume/hangup/marker paths can discard a terminal wait result | Consolidate raw terminal-status handling and test the competing transitions |
+| Guardian resume/hangup/marker paths can discard a terminal wait result | One raw terminal-status handler now serves ordinary and resume waits; qualified in the complete 082629f run |
 | External stops during cooked admission/cleanup windows | Explicitly outside the current fixture contract; define and qualify phase-specific behavior before production |
 
 For the reset finding, two real socketpair regressions failed against the old
@@ -28,7 +28,7 @@ sequenced-packet endpoint closes with unread input, as shown in
 [Linux's Unix socket release code](https://github.com/torvalds/linux/blob/v6.8/net/unix/af_unix.c#L604-L610).
 
 All 65 isolated Rust tests and strict qualification Clippy pass locally for
-this correction. Hosted evidence passed in the complete 815a878 run. It introduces no production
+this correction. Hosted evidence remains pending. It introduces no production
 receipt or profile-reuse authority.
 
 The terminal-guard branch's Ubuntu 24.04 job in
@@ -41,7 +41,7 @@ the new root-owned, non-writable parent. Installation still refuses a noexec
 image filesystem; no host mount is changed. Exclusive creation, recorded image
 hash, ownership-bound cleanup and unrelated-file preservation are unchanged.
 Fourteen coordinator tests pass, including the noexec-runtime case, a noexec
-image refusal and untrusted image-parent refusals. Native image-placement checks passed in the complete 815a878 run.
+image refusal and untrusted image-parent refusals. New hosted evidence is pending.
 
 The review recommends wiring the real Store through the shared runtime with
 fixed targets before accepting arbitrary launch envelopes. Production also
@@ -67,19 +67,72 @@ The checks do not make cancellation atomic with a later successful send.
 
 All 65 isolated Rust tests, 14 coordinator tests and strict qualification Clippy
 pass locally for the admission correction. The expanded 45-case native manager
-suite passed; this remains qualification code, not a production launcher.
+suite is pending; this remains qualification code, not a production launcher.
 
 The first alternate-path run, 41281817958, refused `/opt` on both hosted
 runners because that directory did not meet the root-owned/non-writable
 requirement. The correction uses `/usr/lib` and validates every ancestor,
 including `/usr`; it does not loosen ownership or mode policy. Each refusal
-still occurs before installation. Native qualification passed in the 815a878 run.
+still occurs before installation. Native qualification passed in the complete 815a878 run.
 
-The full [run 41282533178](https://github.com/shahzadlone/agent-swapper/actions/runs/41282533178)
-passed on `815a878`: both native manager jobs (124777197243 and 124777197393),
-Linux/macOS/Windows tests, dependency checks, unsigned candidate builds and
-independent rebuilds. Its 45 managed cases include the 13 cancellation/error
-retirement cases, followed by the separate long-session check. Main combines
-these with the two already qualified fresh-entry cases for a 47-case suite;
-that integration is checked again by main CI. Paused-exit and drain corrections
-remain on separate qualification branches.
+The next composition correction checks the control queue again after an outer
+stop. A valid queued stop followed by retirement advances only protocol sequence;
+it cannot grant live stop/resume authority, and only an authenticated final
+report with the original child pidfd dead can resolve it. A failed resume recheck
+likewise accepts only that final report. Receipt of another stop, malformed
+data or expiry still fails closed.
+
+Known final status now has a five-second idle drain budget and fifteen-second
+overall cap. Actual read/write progress refreshes only the idle budget. While
+backgrounded, the relay does no terminal I/O and waits within those bounds for
+foreground reacquisition. Expiry records output truncation and preserves the
+verified target status. Missing target status retains the earlier two-second
+bounded failure policy. Cancellation, terminal restoration and original-scope
+retirement remain independent. These are fixture bounds, not product defaults.
+
+The guardian reports every raw terminal wait through one handler, including a
+terminal event observed inside the resume branch, before best-effort marker I/O.
+It checks terminal wait status before terminal hangup. Eleven new native cases
+cover stopped SIGKILL through fg, bg/fg and background expiry, a held resume
+with concurrent target death, a three-second reader pause, permanently blocked
+final output, and refused diagnostic marker replacement. Local Rust and strict
+Clippy pass; the 58-case combined managed suite (including fresh entry) passed native qualification on both hosts.
+
+The preceding admission checkpoint `815a878` passed all 45 managed cases plus
+the long-session check on Ubuntu 22.04/24.04 in jobs 124777197243 and
+124777197393 of [run 41282533178](https://github.com/shahzadlone/agent-swapper/actions/runs/41282533178).
+The `/usr/lib` image-path and queued-report correction also passed both native
+manager jobs in [run 41282501325](https://github.com/shahzadlone/agent-swapper/actions/runs/41282501325).
+Full candidate/rebuild results are checked separately before main integration.
+
+An additional real-Store fixture now cancels at the final GO and held-exec
+release guards. A second Store connection verifies the committed intent/spawn
+observation before refusal. Both cases retain original witnesses, observe
+retirement, confirm no target instructions, then reopen SQLite and verify
+consistent replay and unresolved profile policy despite an available OS lease.
+This composes journal durability with withdrawal; it is not yet a Store-backed
+terminal frontend. Strict core Clippy and coordinator checks pass locally; the
+privileged fixture is run only on disposable native CI.
+
+The first combined run (41282864768) stopped at the existing terminal-hangup
+journal test: reporting an already reaped target before checking terminal
+hangup omitted its diagnostic marker. The correction preserves both observations,
+reporting terminal status first and recording a separately observed HUP as
+best-effort diagnostics. The existing hangup assertion remains unchanged.
+
+
+The full [run 41283540204](https://github.com/shahzadlone/agent-swapper/actions/runs/41283540204)
+passed on `082629f`, including native manager jobs 124780142287 (Ubuntu 24.04)
+and 124780142313 (Ubuntu 22.04), platform tests, dependency checks, unsigned
+candidate builds and independent rebuilds. Both native jobs ran the 58 managed
+terminal cases, the separate long-session check and the real-Store final-guard
+withdrawal regression. The paused-outcome branch also passed its complete
+[run 41283538949](https://github.com/shahzadlone/agent-swapper/actions/runs/41283538949).
+
+Two earlier combined runs failed a terminal-snapshot assertion on opposite
+hosts. The harness now waits for the `after` snapshot to contain data and prints
+both snapshots on mismatch. This addresses the shell redirection/create-before-write
+race; the original empty-snapshot cause cannot be proved from those older logs.
+The corrected combined source is integrated unchanged into main; main CI checks
+that integration again. These results qualify the fixed-target test harness,
+not a production managed launcher or authority to complete an unresolved run.

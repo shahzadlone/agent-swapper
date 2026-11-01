@@ -550,7 +550,8 @@ def suite():
                 test_env = dict(os.environ, ASWP_ACTIVATION_PREFIX=prefix,
                                 ASWP_ACTIVATION_DIRECTORY=str(directory))
                 passed = []
-                for test in ('actual_lease_and_journal_gate_two_independent_activations',
+                for test in ('cancellation_after_durable_journal_never_releases_target_or_completes_run',
+                             'actual_lease_and_journal_gate_two_independent_activations',
                              'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent',
                              'invalid_or_independently_locked_lease_never_spawns_writer',
                              'guardian_sigkill_retires_writer_without_clearing_journal',
@@ -582,8 +583,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 47,
-                        'managed relay did not pass all forty-seven owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 58,
+                        'managed relay did not pass all fifty-eight owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
                 result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
                                         str(relay), '--long-session'], environment=test_env)

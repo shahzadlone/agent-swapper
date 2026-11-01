@@ -891,7 +891,6 @@ impl Running {
             return Ok(JobEvent::Exited(status));
         }
         require(!job.stopped, "duplicate job stop before resume")?;
-        self.0.recheck()?;
         let next = job
             .sequence
             .checked_add(1)
@@ -908,7 +907,6 @@ impl Running {
                 sequence: next,
             },
         )?;
-        self.0.recheck()?;
         let job = self
             .0
             .job
@@ -916,10 +914,36 @@ impl Running {
             .ok_or_else(|| io::Error::other("job state disappeared"))?;
         job.sequence = next;
         job.stopped = true;
+        if let Err(error) = self.0.recheck() {
+            // A valid stop may already be followed by death. Preserve its
+            // sequence for the final report, but never expose a stale stop as
+            // live authority. A second stop is refused by job.stopped above.
+            return match self.receive_job_event() {
+                Ok(event @ JobEvent::Exited(_)) => Ok(event),
+                _ => Err(error),
+            };
+        }
         Ok(JobEvent::Stopped(signal))
     }
     /// Only the pending stop can be resumed. A transport error can follow
     /// delivery; close and retire instead of treating failure as no resume.
+    /// Recheck queued events after foreground reacquisition. If the original
+    /// child died during resume validation, accept only its authenticated final
+    /// report; no failed resume grants permission to signal a replacement.
+    pub fn resume_or_observe(&mut self) -> io::Result<JobEvent> {
+        match self.poll_job()? {
+            JobEvent::Pending => {}
+            event => return Ok(event),
+        }
+        match self.resume() {
+            Ok(()) => Ok(JobEvent::Pending),
+            Err(error) => match self.receive_job_event() {
+                Ok(event @ JobEvent::Exited(_)) => Ok(event),
+                _ => Err(error),
+            },
+        }
+    }
+
     pub fn resume(&mut self) -> io::Result<()> {
         self.0.recheck()?;
         let job = self

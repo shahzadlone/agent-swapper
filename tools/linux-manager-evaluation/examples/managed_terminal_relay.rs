@@ -94,6 +94,31 @@ fn resize(terminal: &Terminal, master: impl AsFd) -> io::Result<()> {
     Ok(())
 }
 
+struct Drain {
+    idle: Instant,
+    total: Instant,
+    known_exit: bool,
+}
+impl Drain {
+    fn new(known_exit: bool) -> Self {
+        let now = Instant::now();
+        Self {
+            idle: now + Duration::from_secs(if known_exit { 5 } else { 2 }),
+            total: now + Duration::from_secs(if known_exit { 15 } else { 2 }),
+            known_exit,
+        }
+    }
+    fn progress(&mut self) {
+        if self.known_exit {
+            self.idle = Instant::now() + Duration::from_secs(5);
+        }
+    }
+    fn expired(&self) -> bool {
+        let now = Instant::now();
+        now >= self.idle || now >= self.total
+    }
+}
+
 fn relay(
     directory: &Path,
     signals: &Signals,
@@ -140,14 +165,14 @@ fn relay(
                 JobEvent::Pending => {}
                 JobEvent::Closed => {
                     control_closed = true;
-                    draining = Some(Instant::now() + Duration::from_secs(2));
+                    draining = Some(Drain::new(false));
                 }
                 JobEvent::Exited(status) => {
                     marker(directory, "observed-exit", &format!("{status:?}"))?;
                     // Still drain terminal bytes and independently retire the
                     // original scope. A target exit is not all-writer custody.
                     control_closed = true;
-                    draining = Some(Instant::now() + Duration::from_secs(2));
+                    draining = Some(Drain::new(true));
                 }
                 JobEvent::Stopped(signal) => {
                     require(!stopped, "duplicate pending inner stop")?;
@@ -168,19 +193,43 @@ fn relay(
                         },
                         "observed",
                     )?;
+                    // A queued exit may have arrived while we were stopped.
+                    // Observe it before any foreground resume attempt.
+                    continue;
                 }
             }
         }
         let foreground = terminal.foreground()?;
-        if paused && foreground && !control_closed {
-            // Resize and raw-mode ownership are restored before asking the
-            // guardian to continue its original, still-unreaped child group.
-            resize(terminal, &master)?;
-            terminal.enter()?;
-            running.resume()?;
+        if paused && foreground {
+            if !control_closed {
+                // A resume observation may itself discover target death.
+                resize(terminal, &master)?;
+                terminal.enter()?;
+                match running.resume_or_observe()? {
+                    JobEvent::Pending => {
+                        marker(directory, "resumed-foreground", "raw")?;
+                    }
+                    JobEvent::Exited(status) => {
+                        marker(directory, "observed-exit", &format!("{status:?}"))?;
+                        control_closed = true;
+                        draining = Some(Drain::new(true));
+                    }
+                    JobEvent::Closed => {
+                        control_closed = true;
+                        draining = Some(Drain::new(false));
+                    }
+                    JobEvent::Stopped(_) => {
+                        return Err(io::Error::other("duplicate pending inner stop"));
+                    }
+                }
+            } else {
+                // Reacquire only the outer terminal for exact-byte draining.
+                // An authenticated dead target is never resumed or resized.
+                terminal.enter()?;
+                marker(directory, "drain-resumed-foreground", "raw")?;
+            }
             paused = false;
             stopped = false;
-            marker(directory, "resumed-foreground", "raw")?;
         }
         require(
             !terminal.is_raw() || foreground,
@@ -190,11 +239,18 @@ fn relay(
             marker(directory, "drained", "inner EOF and queued output consumed")?;
             break;
         }
-        if let Some(deadline) = draining {
-            require(
-                Instant::now() < deadline,
-                "terminal output drain remained blocked",
-            )?;
+        if draining.as_ref().is_some_and(Drain::expired) {
+            if running.observed_exit().is_some() {
+                // Bounded output loss is distinct from a verified exit. In the
+                // background, never steal the terminal merely to drain bytes.
+                marker(
+                    directory,
+                    "output-truncated",
+                    "bounded final drain expired; target status preserved",
+                )?;
+                break;
+            }
+            return Err(io::Error::other("terminal output drain remained blocked"));
         }
         let active = foreground && terminal.is_raw() && !paused;
         let mut outer_events = PollFlags::empty();
@@ -253,7 +309,13 @@ fn relay(
         )?;
         if active {
             if outer.contains(PollFlags::OUT) {
+                let queued = output.len();
                 write_queue(&terminal, &mut output)?;
+                if output.len() < queued
+                    && let Some(drain) = &mut draining
+                {
+                    drain.progress();
+                }
             }
             // HUP may coexist with remaining PTY output. Drain before EIO;
             // never use terminal closure as a containment or exit receipt.
@@ -261,7 +323,13 @@ fn relay(
                 && output.len() < CAPACITY
                 && inner.intersects(PollFlags::IN | PollFlags::HUP | PollFlags::ERR)
             {
+                let queued = output.len();
                 inner_closed = read_queue(&master, &mut output, true)?;
+                if output.len() > queued
+                    && let Some(drain) = &mut draining
+                {
+                    drain.progress();
+                }
             }
             if !control_closed && inner.contains(PollFlags::OUT) {
                 write_queue(&master, &mut input)?;
