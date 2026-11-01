@@ -1,5 +1,6 @@
 """Guard checks for the disposable system-manager qualification fixture."""
 from pathlib import Path
+import errno
 import json
 import subprocess
 import tempfile
@@ -11,6 +12,18 @@ import check_linux_managed_scope as probe
 
 
 class ManagedScopeTests(unittest.TestCase):
+    def test_deactivated_event_witness_requires_the_exact_kernel_error(self):
+        with patch.object(probe.os, 'read', side_effect=OSError(errno.ENODEV, 'device gone')):
+            probe.check_deactivated_events(17)
+        for outcome in (OSError(errno.EIO, 'I/O error'), OSError(errno.ENOENT, 'missing'), b'populated 0\n', b''):
+            with self.subTest(outcome=outcome), patch.object(probe.os, 'read') as read:
+                if isinstance(outcome, Exception):
+                    read.side_effect = outcome
+                else:
+                    read.return_value = outcome
+                with self.assertRaises(RuntimeError):
+                    probe.check_deactivated_events(17)
+
     def test_direct_transport_must_agree_with_the_differential_snapshot(self):
         unit = 'aswp-managed-12-1-graceful'
         scope = '/system.slice/' + unit + '.service'

@@ -121,7 +121,28 @@ suspension stops only the target, and the descendant must keep writing while
 the target is stopped. Thus a stop notice is not evidence that all writers are
 quiescent. The profile lease and unresolved journal policy continue to block
 reuse throughout this state. Strict Clippy passes locally; the strengthened
-hosted descendant checks remain pending.
+hosted descendant checks passed on Ubuntu 22.04 at `30c57d0` in
+[run 41271412053](https://github.com/shahzadlone/agent-swapper/actions/runs/41271412053).
+Ubuntu 24.04 failed earlier in the existing manager-retirement experiment with
+ENODEV, so it did not execute the strengthened descendant cases in that run.
+
+### Retirement metadata race
+
+The Ubuntu 24.04 failure exposed a read-side lifetime race: kernfs can return
+ENODEV after a file was opened but its backing node became inactive. This is
+consistent with the [kernel's read implementation](https://github.com/torvalds/linux/blob/v7.0/fs/kernfs/file.c).
+The observer now treats that specific error as an unresolved sample and retries
+within its existing 20-second deadline. It still requires a later ENOENT lookup
+under the original held cgroup directory, the original main pidfd's exit and
+authenticated manager retirement. Persistent ENODEV expires without producing
+retirement evidence; malformed data and other I/O errors remain failures.
+
+The hosted manager fixture additionally retains an unread `cgroup.events`
+descriptor across removal. Its old descriptor must return ENODEV while a fresh
+lookup under the held directory returns ENOENT. This measures both sides of the
+race without adding any production retry authority or fault-injection hook.
+Local tests distinguish pending deactivation, actual path absence and unrelated
+errors. Native validation of this correction remains pending.
 
 Remaining integration work includes the actual manager-owned guardian,
 authenticated stop/resume framing, durable launch ordering, arbitrary target
