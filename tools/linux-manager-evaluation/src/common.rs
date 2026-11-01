@@ -9,10 +9,6 @@ pub(crate) fn require(ok: bool, message: &str) -> io::Result<()> {
     }
 }
 
-pub(crate) fn identity_map(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok_and(|s| s.split_whitespace().eq(["0", "0", "4294967295"]))
-}
-
 pub(crate) fn valid_invocation(value: &str) -> bool {
     value.len() == 32
         && value.bytes().any(|b| b != b'0')

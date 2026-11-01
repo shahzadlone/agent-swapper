@@ -19,7 +19,7 @@ mod journal_protocol;
 #[allow(dead_code, reason = "service uses only the shared own-scope witness")]
 mod kernel;
 mod terminal;
-use common::{identity_map, require, valid_invocation};
+use common::{require, valid_invocation};
 use std::io;
 
 fn main() {
