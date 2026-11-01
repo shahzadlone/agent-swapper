@@ -249,6 +249,13 @@ jobs:
           cargo +1.98.0 test --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           python3 tools/linux-manager-evaluation/check_transport.py tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation --require-manager
+      - name: Measure protected vendor unit path spelling
+        timeout-minutes: 2
+        env:
+          ASWP_CI_SOCKET_ACTIVATION: '1'
+        run: |
+          python3 -m unittest discover -s tools -p test_linux_unit_fragment.py -v
+          python3 tools/check_linux_unit_fragment.py
       - name: Refuse overlaid process metadata and replacement bus peers
         env:
           ASWP_MANAGER_REFUSALS: '1'

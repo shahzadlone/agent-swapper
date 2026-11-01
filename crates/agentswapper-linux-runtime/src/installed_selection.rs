@@ -93,6 +93,7 @@ impl SelectedInstallation {
         load: impl FnOnce(&str) -> io::Result<InstalledArtifacts>,
     ) -> io::Result<Self> {
         let selector = ProtectedConfig::open(path)?;
+        selector.require_single_link()?;
         let selection = Selection::parse(&selector.read()?)?;
         let artifacts = load(&selection.generation)?;
         let value = Self {
@@ -172,6 +173,8 @@ mod tests {
         let bad = [
             valid.replace("schema\":1", "schema\":2"),
             valid.replace(GENERATION, "../other"),
+            valid.replace(GENERATION, &GENERATION[..31]),
+            valid.replace(GENERATION, &format!("{GENERATION}a")),
             valid.replace(GENERATION, &"0".repeat(32)),
             valid.replace(GENERATION, &GENERATION.to_uppercase()),
             valid.replacen('{', "{\"schema\":1,", 1),

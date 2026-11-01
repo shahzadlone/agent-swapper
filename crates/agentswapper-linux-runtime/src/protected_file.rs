@@ -31,6 +31,12 @@ fn protected_directory(fd: impl AsFd) -> io::Result<()> {
         "installed file ancestor is not root-owned and protected",
     )
 }
+pub(crate) fn single_link(stat: &rustix::fs::Stat) -> io::Result<()> {
+    require(
+        stat.st_nlink == 1,
+        "installed file must have exactly one link",
+    )
+}
 pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
     require(
         path.is_absolute() && path.as_os_str().len() <= 4096,
@@ -82,6 +88,28 @@ mod tests {
         time::Duration,
     };
     use wait_timeout::ChildExt;
+
+    #[test]
+    fn hardlinks_cannot_share_an_installed_inode() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("asset");
+        let alias = directory.path().join("alias");
+        let file = std::fs::File::create(&path)?;
+        single_link(&fstat(&file)?)?;
+        std::fs::hard_link(&path, &alias)?;
+        let error = single_link(&fstat(&file)?)
+            .err()
+            .ok_or_else(|| io::Error::other("shared installed inode was accepted"))?;
+        assert_eq!(
+            error.to_string(),
+            "installed file must have exactly one link"
+        );
+        std::fs::remove_file(alias)?;
+        single_link(&fstat(&file)?)?;
+        std::fs::remove_file(path)?;
+        assert!(single_link(&fstat(&file)?).is_err());
+        Ok(())
+    }
 
     fn no_controlling_terminal() -> io::Result<()> {
         let stat = std::fs::read_to_string("/proc/self/stat")?;

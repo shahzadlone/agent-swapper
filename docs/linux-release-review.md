@@ -28,30 +28,50 @@ must be checked against code and native behavior.
 The local checks and the native result for each revision must be recorded
 separately. These changes do not supply restart recovery or target-exit evidence.
 
-## Remaining review work
+## Review checkpoints
 
 | Area | Required follow-up |
 | --- | --- |
-| Admission lifetime | Real binding across both selector boundaries and both deliberately broken observers passed in complete CI at `f6cce6d` (`41306933304`). |
-| Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
-| systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
-| Installed inode lifetime | Specify no hardlink deduplication or metadata rewrites of live generations, then enforce and test the chosen host/installer prerequisites. |
-| Policy API | Guard admitted policies from reuse; test production path derivation and narrow caller-selected generation/layout APIs. |
-| Build features | Verify shipped CLI feature graphs exclude qualification APIs. |
+| Admission lifetime | Real binding and both deliberate observer mutations passed in complete CI at `f6cce6d` (`41306933304`). |
+| Observation lifetime | Live completion retains the original binding/key and never selects a new generation. Fresh diagnostic witnesses are qualification-only and their receipts fail Store association. Restart recovery remains a separate unimplemented production gate. |
+| systemd path compatibility | Vendor-path difference measured at `f54f80a`. Generated per-user units now use `/etc/systemd/system`; exact-path controls passed on both Ubuntu images in full CI at `4b31ce9` (`41308172474`). |
+| Installed inode lifetime | Installation-only single-link admission and retained-link mutation controls passed in full CI at `4b31ce9` (`41308172474`). Installer must preserve independent, unchanged inodes while admitted runs retain them. |
+| Policy API | Admitted-policy reuse refused; path-derivation contract covered. Lower-level metadata readers cannot construct a selection or launch authority; raw service policies and layout overrides are qualification-only. |
+| Build features | Default dependency-feature checks and negative API doctests pass; candidate builds use the default production graph. |
+
+The vendor-path measurement creates one exclusively owned, inactive unit under
+`/usr/lib/systemd/system` on each hosted Ubuntu image. It queries the loaded
+`FragmentPath`, checks that it names the same inode, records the `/lib` alias,
+and removes its unit. The fixture has no activation dependencies and refuses
+manual start. Both hosted measurements passed at `f54f80a`: Ubuntu 22.04
+reported `/lib`, and Ubuntu 24.04 reported `/usr/lib`, with the original inode
+in both cases. Per-user generated units now use the administrator directory
+`/etc/systemd/system`. Both runners reported that exact path at `4b31ce9`; runtime fragment equality and protected-path checks remain strict.
 
 Source review suggested that selector admission ends at successful `bind`.
+
 That is the current implementation: already-bound services retain their original
 generation even if launch preparation happens later. A selector change does not
-terminate existing work. Real-service controls now pass on both Ubuntu images.
-Installer integration still needs a documented update/removal policy and its
-own active-generation tests.
+terminate existing work. Real-service and mutation controls now pass on both
+Ubuntu images; installer integration must preserve the documented original
+artifact lifetime and provide its own update/removal tests.
+
+The first inode-policy CI run exposed an overbroad check: a generic process-image
+test encountered a hardlinked system executable. Single-link policy now belongs
+to installation selection, manifest and complete artifact admission. Generic
+read-only image observations retain their existing change detection. Native
+controls exercise the actual installation consumers, plus link additions after
+opening; no system executable or test's image identity was changed to avoid the
+refusal. All 65 protected-asset controls and the complete pipeline passed at
+`4b31ce9` (`41308172474`), including both native Ubuntu suites and independent
+release rebuilds.
 
 ## Native evidence
 
-- `f6cce6d`: complete generation/journal CI passed (`41306933304`), including
-  both deliberate-mutation jobs, both native Ubuntu suites, all three platform
-  test jobs and independent candidate rebuilds.
-- `9cff2a5`: full association and installed-policy CI passed (`41303525675`).
+- `4b31ce9`: complete installation-path and inode-policy CI passed
+  (`41308172474`), including both native Ubuntu suites and independent rebuilds.
+- `9cff2a5`: complete unique-invocation association CI passed (`41303525675`).
+
 - `4ef99d1`: full import-isolation, pathname and journal-authority pipeline passed
   (`41304050468`), including both native Ubuntu suites and independent rebuilds.
 - `7df8703`: full retirement-retry CI passed (`41304842096`), including
@@ -157,8 +177,8 @@ provenance sidecars and a generator document their origin. A regression test
 checks complete event preservation, pending-run fencing, completed-run reuse,
 verified backups and reopening. That test and strict workspace Clippy passed
 locally, and the checked-in generator reproduced a valid fixture. Full CI passed
-at `4494f35` (`41306277254`) after the macOS fixture used the Store's canonical
-temporary path, preserving SQLite's no-symlink policy. See
+at `4494f35` (`41306277254`), after the macOS test used the Store's canonical
+temporary path so SQLite's no-symlink policy stayed intact. See
 [the fixture notes](../crates/agentswapper-core/tests/fixtures/historical/README.md).
 
 ## Generation-layout preparation
@@ -167,9 +187,9 @@ The activated fixture now reserves distinct manifests for its original and next
 generation; the reader derives their paths from the selector. Both reference the
 same fixed images and units. A pure contract test verifies the exact Rust-facing
 field inventory, distinct valid generations, initial selection and artifact
-hashes. All 47 Linux harness controls passed locally. Full CI at `f6cce6d`
-(`41306933304`) passed the subsequent real selector-switch and mutation controls
-on both Ubuntu images, closing this qualified consumer's admission-lifetime finding.
+hashes. All 47 Linux harness tests passed locally. Both native Ubuntu suites
+passed the later real selector-switch and mutation controls at `f6cce6d`
+(`41306933304`), closing the admission-lifetime finding for this qualified consumer.
 
 ### Service admission across selector replacement
 
@@ -187,7 +207,7 @@ The deterministic pre-admission barrier is available only to qualification
 builds and executes every normal admission check. A default-build compile-fail
 test checks that it is absent. Binding also rejects an already-admitted policy.
 Local manager tests, default doctests, strict evaluator Clippy and 48 Linux
-harness controls passed. Deliberately
+harness controls passed. Real service controls await hosted CI; deliberately
 mutated observers additionally check that these cases detect a missing or
 prematurely executed admission transition. The builder edits disposable source
 copies, requires exactly one matching transition and barrier, and uses separate
@@ -196,8 +216,8 @@ The guardian always uses the original binary. Only the ordinary observers carry
 the faults; both must fail with the specific expected diagnostic, after the
 unmodified controls pass. Two dedicated Ubuntu jobs keep this compilation out
 of the bounded journal/terminal step. Both mutated observers built locally and
-all 50 ordinary Linux harness controls passed. Complete CI at `f6cce6d`
-(`41306933304`) subsequently passed both mutation jobs and both native suites.
+all 50 ordinary Linux harness controls passed. Both mutation jobs and both full
+native manager suites passed in the complete `f6cce6d` pipeline (`41306933304`).
 
 ## Source-review follow-up at 7df8703
 
@@ -221,8 +241,8 @@ the consumer closes the control connection rather than retrying preparation.
 committed and no new event was written. A receipt is still returned for explicit
 disposal. These semantics do not provide restart recovery or automatic fallback.
 All ten local observer controls and strict workspace qualification Clippy pass.
-Complete CI passed at `b9c3bb6` (`41306625239`) and the combined generation
-checkpoint `f6cce6d` (`41306933304`).
+The revised receipt controls passed in full CI at `b9c3bb6` (`41306625239`)
+and in the combined `f6cce6d` checkpoint (`41306933304`).
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,

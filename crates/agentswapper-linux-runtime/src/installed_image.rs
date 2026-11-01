@@ -53,6 +53,15 @@ impl ProtectedImage {
         Ok(value)
     }
 
+    pub(crate) fn require_single_link(&self) -> io::Result<()> {
+        let stat = fstat(&self.file)?;
+        crate::protected_file::single_link(&stat)?;
+        require(
+            self.stamp == Stamp::from_stat(stat),
+            "installed image changed since admission began",
+        )
+    }
+
     fn require_unchanged(&self) -> io::Result<()> {
         require(
             self.stamp == Stamp::read(&self.file)?,

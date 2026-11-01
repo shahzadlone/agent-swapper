@@ -60,14 +60,19 @@ impl InstalledArtifacts {
     fn read(manifest: InstalledManifest, paths: Paths) -> io::Result<Self> {
         manifest.require_current()?;
         let guardian = ProtectedImage::open(&paths.guardian)?;
+        guardian.require_single_link()?;
         guardian.require_sha256(manifest.guardian().1)?;
         let session_helper = ProtectedImage::open(&paths.session_helper)?;
+        session_helper.require_single_link()?;
         session_helper.require_sha256(manifest.session_helper().1)?;
         let exec_shim = ProtectedImage::open(&paths.exec_shim)?;
+        exec_shim.require_single_link()?;
         exec_shim.require_sha256(manifest.exec_shim().1)?;
         let service_template = ProtectedConfig::open(&paths.service_template)?;
+        service_template.require_single_link()?;
         service_template.require_sha256(manifest.service_template().1)?;
         let socket_unit = ProtectedConfig::open(&paths.socket_unit)?;
+        socket_unit.require_single_link()?;
         socket_unit.require_sha256(manifest.socket_unit().1)?;
         let value = Self {
             manifest,

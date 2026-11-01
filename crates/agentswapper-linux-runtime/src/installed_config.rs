@@ -32,6 +32,13 @@ impl ProtectedConfig {
         let stamp = Stamp::from_stat(metadata);
         Ok(Self { file, stamp })
     }
+    /// Installation generations require independent inodes. Generic protected
+    /// configuration observations may also inspect hardlinked system files.
+    pub(crate) fn require_single_link(&self) -> io::Result<()> {
+        let metadata = fstat(&self.file)?;
+        crate::protected_file::single_link(&metadata)?;
+        self.stamp.require_config(Stamp::from_stat(metadata))
+    }
     /// Read at most 16 KiB from the retained file, independently of shared file
     /// offsets. Content parsing, version checks and installation authorization
     /// remain the consumer's responsibility. This is not a snapshot against root.
