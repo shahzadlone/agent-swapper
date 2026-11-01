@@ -1,4 +1,5 @@
 //! Protected, bounded installed configuration data. No manifest authorization.
+use crate::file_stamp::Stamp;
 use rustix::fs::fstat;
 use std::{
     io,
@@ -16,40 +17,6 @@ pub struct ProtectedConfig {
     stamp: Stamp,
 }
 
-// Exclude access time: reading must not invalidate the observation. These are
-// change detectors under a trusted root, not an atomic or cryptographic proof
-// of the bytes that a separate process loaded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stamp([i128; 12]);
-impl Stamp {
-    fn read(file: impl AsFd) -> io::Result<Self> {
-        Ok(Self::from_stat(fstat(file)?))
-    }
-    fn from_stat(stat: rustix::fs::Stat) -> Self {
-        Self([
-            stat.st_dev.into(),
-            stat.st_ino.into(),
-            stat.st_nlink.into(),
-            stat.st_size.into(),
-            stat.st_mtime.into(),
-            stat.st_mtime_nsec.into(),
-            stat.st_ctime.into(),
-            stat.st_ctime_nsec.into(),
-            stat.st_mode.into(),
-            stat.st_uid.into(),
-            stat.st_gid.into(),
-            stat.st_rdev.into(),
-        ])
-    }
-    fn require_same(self, current: Self) -> io::Result<()> {
-        if self != current {
-            return Err(io::Error::other(
-                "installed configuration changed since admission began",
-            ));
-        }
-        Ok(())
-    }
-}
 impl ProtectedConfig {
     pub fn open(path: &Path) -> io::Result<Self> {
         let file = crate::protected_file::open(path)?;
@@ -69,19 +36,24 @@ impl ProtectedConfig {
     /// offsets. Content parsing, version checks and installation authorization
     /// remain the consumer's responsibility. This is not a snapshot against root.
     pub fn read(&self) -> io::Result<Vec<u8>> {
-        self.stamp.require_same(Stamp::read(&self.file)?)?;
+        self.stamp.require_config(Stamp::read(&self.file)?)?;
         let bytes = read_bounded(&self.file)?;
-        self.stamp.require_same(Stamp::read(&self.file)?)?;
+        self.stamp.require_config(Stamp::read(&self.file)?)?;
         Ok(bytes)
+    }
+    /// Compare bounded retained bytes with an independently trusted SHA-256.
+    /// This does not establish the origin of the expected hash.
+    pub fn require_sha256(&self, expected: &str) -> io::Result<()> {
+        crate::asset_digest::bytes(&self.read()?, expected)
     }
     /// Revalidate the retained inode and protected pathname against the opening
     /// stamp. A new inode with identical bytes also refuses. An independent
     /// observer covers only its own observation window, not a previous load.
     pub fn require_current(&self, path: &Path) -> io::Result<()> {
-        self.stamp.require_same(Stamp::read(&self.file)?)?;
+        self.stamp.require_config(Stamp::read(&self.file)?)?;
         let current = Self::open(path)?;
-        self.stamp.require_same(current.stamp)?;
-        self.stamp.require_same(Stamp::read(&self.file)?)
+        self.stamp.require_config(current.stamp)?;
+        self.stamp.require_config(Stamp::read(&self.file)?)
     }
 }
 impl AsFd for ProtectedConfig {
@@ -112,11 +84,11 @@ mod tests {
     #[test]
     fn every_config_stamp_change_refuses() -> io::Result<()> {
         let original = Stamp([7; 12]);
-        original.require_same(original)?;
+        original.require_config(original)?;
         for field in 0..12 {
             let mut changed = original;
             changed.0[field] += 1;
-            assert!(original.require_same(changed).is_err());
+            assert!(original.require_config(changed).is_err());
         }
         Ok(())
     }
@@ -135,16 +107,16 @@ mod tests {
         std::fs::rename(&replacement, &path)?;
         assert!(
             original
-                .require_same(Stamp::read(std::fs::File::open(&path)?)?)
+                .require_config(Stamp::read(std::fs::File::open(&path)?)?)
                 .is_err()
         );
-        assert!(original.require_same(Stamp::read(&file)?).is_err());
+        assert!(original.require_config(Stamp::read(&file)?).is_err());
         let before = Stamp::read(&file)?;
         file.write_all(b"changed")?;
-        assert!(before.require_same(Stamp::read(&file)?).is_err());
+        assert!(before.require_config(Stamp::read(&file)?).is_err());
         let before = Stamp::read(&file)?;
         file.set_permissions(std::fs::Permissions::from_mode(0o664))?;
-        assert!(before.require_same(Stamp::read(&file)?).is_err());
+        assert!(before.require_config(Stamp::read(&file)?).is_err());
         Ok(())
     }
     #[test]

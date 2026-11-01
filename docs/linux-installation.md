@@ -46,3 +46,31 @@ probe before entering a disposable private mount namespace; missing or invalid
 version input refuses before creating or mounting a fixture. Root drops its
 identity before running the probe, and no fixture image is executed. Native
 qualification of this checkpoint is pending.
+
+## Retained artifact digests
+
+`ProtectedImage::require_sha256` compares an expected SHA-256 against the
+retained descriptor using bounded positional reads. Images are limited to
+128 MiB; configuration retains its 16 KiB limit. Hashing does not disturb shared
+file offsets. Both image and configuration reads check the original metadata
+before and after reading. Reopening an image path also requires the original
+inode and metadata, so identical-byte replacement refuses. Running-executable
+corroboration now checks the retained image's original metadata too.
+
+These APIs verify caller-supplied expected values; they do not yet connect all
+five manifest assets or select an authorized generation. They assume trusted
+root and namespace provenance, and do not freeze files against later root
+changes. Hash mismatches and malformed expected hashes produce fixed messages
+without echoing contents or supplied values.
+
+The hash implementation reuses the application's locked `sha2 0.10.9` graph.
+The isolated evaluator adds those same eight existing package versions; no
+registry version changes in the application lockfile. The dependency-boundary
+check compares their versions and checksums between the two locks.
+
+Local digest controls cover published SHA-256 test vectors, mismatched bytes,
+malformed hashes, exact size limits, overflow, empty files, multiple read blocks
+and preserved file offsets. The hosted matrix adds eight controls: image and
+configuration hash matches/mismatches, retained-image stability, identical-byte
+replacement, in-place edits and mode changes. No fixture image is executed.
+Native qualification of these digest controls remains pending.

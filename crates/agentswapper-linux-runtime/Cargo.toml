@@ -15,6 +15,7 @@ rustix = { version = "=1.1.6", features = ["net", "fs", "event", "termios", "pty
 zeroize.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "=0.10.9"
 nix = { version = "=0.31.3", default-features = false, features = ["signal", "term"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

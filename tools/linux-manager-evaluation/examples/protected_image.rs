@@ -8,6 +8,19 @@ use std::{
     io::{self, Read, Write},
     path::Path,
 };
+const FIXTURE_SHA256: &str = "5b47177a0de17ca8c0bd2c1fda5d757ae4ed450cab5dada43018e9d7b9095dd9";
+
+fn hold() -> io::Result<()> {
+    println!("installed-asset: retained");
+    io::stdout().flush()?;
+    // The qualification harness bounds this wait and drops root before exec.
+    let mut command = [0; 1];
+    io::stdin().read_exact(&mut command)?;
+    if command != *b"R" {
+        return Err(io::Error::other("invalid asset recheck request"));
+    }
+    Ok(())
+}
 
 fn run() -> io::Result<()> {
     if rustix::process::getuid().is_root()
@@ -31,6 +44,19 @@ fn run() -> io::Result<()> {
         [_, mode, path] if mode == "--config" => {
             ProtectedConfig::open(Path::new(path))?.read()?;
         }
+        [_, mode, path] if mode == "--config-digest" => {
+            let config = ProtectedConfig::open(Path::new(path))?;
+            config.require_sha256(FIXTURE_SHA256)?;
+            config.require_current(Path::new(path))?;
+        }
+        [_, mode, path] if mode == "--image-digest" || mode == "--image-recheck" => {
+            let image = ProtectedImage::open(Path::new(path))?;
+            image.require_sha256(FIXTURE_SHA256)?;
+            if mode == "--image-recheck" {
+                hold()?;
+            }
+            image.require_current(Path::new(path))?;
+        }
         [_, mode, path] if mode == "--manifest" => {
             let manifest = InstalledManifest::open_for_qualification(
                 Path::new(path),
@@ -43,15 +69,7 @@ fn run() -> io::Result<()> {
         [_, mode, path] if mode == "--config-recheck" => {
             let config = ProtectedConfig::open(Path::new(path))?;
             config.read()?;
-            println!("installed-asset: retained");
-            io::stdout().flush()?;
-            // Only the qualification harness uses this handshake. Its owned
-            // child deadline bounds the wait; no service is created or launched.
-            let mut command = [0; 1];
-            io::stdin().read_exact(&mut command)?;
-            if command != *b"R" {
-                return Err(io::Error::other("invalid configuration recheck request"));
-            }
+            hold()?;
             config.require_current(Path::new(path))?;
         }
         _ => return Err(io::Error::other("expected an installed fixture asset path")),

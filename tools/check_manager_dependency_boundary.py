@@ -2,6 +2,7 @@
 """Keep the qualification client out of production dependency graphs."""
 import subprocess
 import json
+import tomllib
 from pathlib import Path
 
 
@@ -18,6 +19,20 @@ def check():
     versions = [{p['name']: p['version'] for p in packages if p['name'] in names} for packages in locks]
     if versions[0] != versions[1] or versions[0].keys() != names:
         raise RuntimeError('root and isolated manager dependency pins differ')
+    # The asset hash implementation reuses the application's pinned SHA-256
+    # graph. The application also contains a newer transitive sha2 major; do not
+    # collapse multiple versions into a name-keyed dictionary for this check.
+    digests = {'sha2', 'digest', 'crypto-common', 'cpufeatures', 'block-buffer',
+               'generic-array', 'typenum', 'version_check'}
+    hash_pins = []
+    for name in ('Cargo.lock', 'tools/linux-manager-evaluation/Cargo.lock'):
+        packages = tomllib.loads((root / name).read_text())['package']
+        hash_pins.append({(p['name'], p['version'], p.get('checksum'))
+                          for p in packages if p['name'] in digests})
+    if not hash_pins[1] <= hash_pins[0] or {p[0] for p in hash_pins[1]} != digests:
+        raise RuntimeError('isolated asset hash dependencies differ from application pins')
+    if {p[1] for p in hash_pins[1] if p[0] == 'sha2'} != {'0.10.9'}:
+        raise RuntimeError('asset SHA-256 implementation changed without a pin review')
     forbidden = {'agentswapper-linux-manager', 'aswp-linux-manager-evaluation', 'zbus', 'tokio', 'unix-ancillary'}
     for package in ('agentswapper-core', 'agentswapper-cli'):
         result = subprocess.run(['cargo', '+1.98.0', 'tree', '--locked', '-p', package,

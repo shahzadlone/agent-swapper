@@ -25,6 +25,14 @@ CASES = {
     'manifest-unknown': 'installed manifest is invalid or incompatible',
     'manifest-duplicate': 'installed manifest is invalid or incompatible',
     'manifest-symlink': '(os error 40)',
+    'config-digest': None,
+    'config-digest-mismatch': 'installed asset digest mismatch',
+    'image-digest': None,
+    'image-digest-mismatch': 'installed asset digest mismatch',
+    'image-retained': None,
+    'image-replaced': 'installed image changed since admission began',
+    'image-modified': 'installed image changed since admission began',
+    'image-mode-changed': 'installed image changed since admission began',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
@@ -71,7 +79,7 @@ def identity(uid, gid):
     return uid, gid
 
 
-def retained_config_control(command, image, case):
+def retained_asset_control(command, image, case):
     # The child drops root before exec. Mutate only this namespace's owned tmpfs
     # file after the ordinary observer has retained its original descriptor.
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -79,17 +87,17 @@ def retained_config_control(command, image, case):
         try:
             ready, _, _ = select.select([child.stdout], [], [], 5)
             require(bool(ready) and child.stdout.readline(128) == b'installed-asset: retained\n',
-                    'retained configuration observer did not reach its hold')
-            if case == 'config-replaced':
+                    'retained asset observer did not reach its hold')
+            if case in ('config-replaced', 'image-replaced'):
                 replacement = image.with_name('replacement')
                 replacement.write_bytes(image.read_bytes())
-                replacement.chmod(0o644)
+                replacement.chmod(0o644 if case.startswith('config-') else 0o755)
                 require(replacement.stat().st_ino != image.stat().st_ino,
                         'replacement control needs a distinct inode')
                 replacement.replace(image)
-            elif case == 'config-modified':
+            elif case in ('config-modified', 'image-modified'):
                 image.write_bytes(b'changed owned configuration\n')
-            elif case == 'config-mode-changed':
+            elif case in ('config-mode-changed', 'image-mode-changed'):
                 image.chmod(0o664)
             stdout, stderr = child.communicate(b'R', timeout=5)
             return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
@@ -118,7 +126,7 @@ def mounted_case(case, binary, uid, gid):
                        stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=5)
         mounted = True
         image = base / 'image'
-        # These inert bytes are never executed. The probe only opens metadata.
+        # These inert bytes are never executed. The probe checks metadata/content.
         image.write_bytes(b'owned image-policy fixture\n')
         image.chmod(0o644 if case.startswith(('config-', 'manifest-')) and case != 'config-executable' else 0o755)
         if case.startswith('manifest-'):
@@ -137,6 +145,8 @@ def mounted_case(case, binary, uid, gid):
             image.write_text(contents)
         if case == 'config-oversize':
             image.write_bytes(b'x' * (16 * 1024 + 1))
+        if case in ('config-digest-mismatch', 'image-digest-mismatch'):
+            image.write_bytes(b'different owned asset\n')
         if case == 'capability':
             # Linux VFS_CAP_REVISION_2, effective CAP_NET_BIND_SERVICE. The file
             # remains root-owned and is never executed, including by the probe.
@@ -155,11 +165,16 @@ def mounted_case(case, binary, uid, gid):
         role = '--config-probe' if case.startswith('config-') else '--probe'
         if case.startswith('manifest-'):
             role = '--manifest-probe'
-        retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed')
+        retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed',
+                           'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed')
         if retained:
-            role = '--config-recheck-probe'
+            role = '--config-recheck-probe' if case.startswith('config-') else '--image-recheck-probe'
+        elif case.startswith('config-digest'):
+            role = '--config-digest-probe'
+        elif case.startswith('image-digest'):
+            role = '--image-digest-probe'
         command = ['/usr/bin/python3', '-I', '-S', script, role, binary, str(image), str(uid), str(gid)]
-        result = (retained_config_control(command, image, case) if retained else
+        result = (retained_asset_control(command, image, case) if retained else
                   subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=5))
         expected = CASES[case]
         if expected is None:
@@ -187,7 +202,10 @@ def mounted_case(case, binary, uid, gid):
 def main():
     gate()
     args = sys.argv[1:]
-    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe', '--config-recheck-probe', '--manifest-probe'):
+    modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck', '--manifest-probe': '--manifest',
+             '--config-digest-probe': '--config-digest', '--image-digest-probe': '--image-digest',
+             '--image-recheck-probe': '--image-recheck'}
+    if len(args) == 5 and args[0] in ('--inside', '--probe', *modes):
         private_namespace()
         role, first, second, uid, gid = args
         uid, gid = identity(uid, gid)
@@ -199,7 +217,6 @@ def main():
         os.setuid(uid)
         require(os.getuid() == os.geteuid() == uid and os.getgid() == os.getegid() == gid,
                 'probe failed to drop its root identity')
-        modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck', '--manifest-probe': '--manifest'}
         probe_args = [first, modes[role], second] if role in modes else [first, second]
         os.execve(first, probe_args, {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
     require(len(args) == 1 and os.geteuid() != 0, 'ordinary hosted fixture runner required')
