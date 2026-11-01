@@ -16,6 +16,8 @@ import time
 from check_linux_outer_terminal import OwnedPty
 
 
+from check_linux_terminal_owner import fresh_observed
+
 def environment():
     keys = ('GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'ASWP_CI_SOCKET_ACTIVATION',
             'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'ASWP_ACTIVATION_PREFIX',
@@ -62,12 +64,15 @@ def target_command(owned, command, response):
     owned.wait(lambda: response in owned.output[offset:])
 
 
-def direct(binary, scenario, env, owned_parent=False):
+def direct(binary, scenario, env, owned_parent=False, fresh=False):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-relay-') as path:
         root = Path(path)
-        owned = OwnedPty(binary, root, environment=env, arguments=('--owned-parent',) if owned_parent else ())
+        owned = OwnedPty(binary, root, environment=dict(env, ASWP_ENTRY_UNTRUSTED_CANARY='must-not-cross'),
+                         arguments=('--fresh-entry',) if fresh else ('--owned-parent',) if owned_parent else ())
         try:
             data = owned.ready(greeting=b'\x1b[0m\r\n')
+            if fresh:
+                fresh_observed(root, data)
             exec_observed(root, data, env)
             assert (root / 'relay-ready').is_file() and (root / 'intent').is_file()
             target_command(owned, b'size', b'SIZE:24:80\r\n')
@@ -134,21 +139,23 @@ def direct(binary, scenario, env, owned_parent=False):
             else:
                 raise AssertionError('unknown managed relay scenario')
             retired(owned, root)
-            print(f'{"exec-" if env.get("ASWP_CI_EXEC_GATE") == "1" else ""}managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass', flush=True)
+            print(f'{"fresh-" if fresh else ""}{"exec-" if env.get("ASWP_CI_EXEC_GATE") == "1" else ""}managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass', flush=True)
         finally:
             owned.close()
 
 
-def shell_job(binary, raw_stop, env, owned_parent=False):
+def shell_job(binary, raw_stop, env, owned_parent=False, fresh=False):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-relay-shell-') as path:
         root = Path(path)
         owned = OwnedPty(binary, root, shell=True, environment=env)
         try:
             prompt = b'__ASWP_OUTER_PROMPT__ '
             owned.wait(lambda: prompt in owned.output)
-            role = '--owned-parent ' if owned_parent else ''
+            role = '--fresh-entry ' if fresh else '--owned-parent ' if owned_parent else ''
             owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {role}{shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'\x1b[0m\r\n')
+            if fresh:
+                fresh_observed(root, data)
             exec_observed(root, data, env)
             offset = len(owned.output)
             owned.send(b'suspend\n' if raw_stop else b'\x1a')
@@ -379,7 +386,9 @@ def main():
         shell_job(binary, raw_stop, exec_env, True)
     for scenario in ('outer-hangup', 'client-kill', 'blocked-drain', 'stopped-parent-loss', 'unknown-exit'):
         failures(binary, scenario, exec_env, True)
-    print('::notice::managed two-terminal relay: thirty-two owned-PTY cases passed, including thirteen exec-gated surviving-owner cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
+    direct(binary, 'bytes-resize-tail', exec_env, True, fresh=True)
+    shell_job(binary, False, exec_env, True, fresh=True)
+    print('::notice::managed two-terminal relay: thirty-four owned-PTY cases passed, including thirteen exec-gated surviving-owner cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

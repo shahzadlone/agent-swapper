@@ -1,5 +1,7 @@
 //! A surviving parent restores an owned terminal after its fixed child dies.
 #![forbid(unsafe_code)]
+#[path = "../src/fresh_entry.rs"]
+mod fresh_entry;
 #[allow(
     dead_code,
     reason = "shared exclusive child waiter; this probe never signals a child group"
@@ -136,6 +138,12 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
 fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
+        [_, role, path] if role == "--fresh-entry" => fresh_entry::start(Path::new(path), false),
+        [_, role, path] if role == "--fresh-entry-fail" => {
+            fresh_entry::start(Path::new(path), true)
+        }
+        [_, role, path] if role == "--fresh-owner" => fresh_entry::restore(Path::new(path))
+            .and_then(|()| terminal_owner::run(Path::new(path), false)),
         [_, path] => terminal_owner::run(Path::new(path), false),
         [_, role, path, pid] if role == "--child" => pid
             .to_str()
