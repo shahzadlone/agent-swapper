@@ -11,7 +11,7 @@ mod outer_terminal;
 #[path = "../src/terminal_owner.rs"]
 mod terminal_owner;
 
-use aswp_linux_manager_evaluation::journal_client::{Bound, JobEvent, Running};
+use aswp_linux_manager_evaluation::journal_client::{Bound, JobEvent, Running, TargetExit};
 use outer_terminal::{Signals, Terminal, require};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -106,7 +106,7 @@ fn relay(
     let mut draining = None;
     let mut high_water = [0_usize; 2];
     let mut backpressured = false;
-    let until = Instant::now() + Duration::from_secs(25);
+    let until = Instant::now() + Duration::from_secs(55);
     loop {
         require(
             Instant::now() < until,
@@ -281,7 +281,7 @@ fn relay(
     Ok(None)
 }
 
-fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> {
+fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> {
     if let Some(parent) = owner {
         require(
             rustix::process::getppid() == Some(parent),
@@ -391,6 +391,7 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> 
             },
         )?;
     }
+    let target_exit = running.observed_exit();
     let retired = running.close().retire().map_err(|failure| failure.error)?;
     require(
         retired.identity == identity && retired.connection_close_error.is_none(),
@@ -405,13 +406,30 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> 
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.
     if disconnected && let Ok(Some(signal)) = &outcome {
-        return signals.finish(Some(*signal));
+        return signals.finish(Some(*signal)).map(|()| 0);
     }
     restored?;
-    signals.finish(outcome?)
+    signals.finish(outcome?)?;
+    if !exec_gate {
+        return Ok(0);
+    }
+    match target_exit {
+        Some(TargetExit::Code { code }) => Ok(code),
+        Some(TargetExit::Signal { signal, .. }) => Ok(128 + signal),
+        None => {
+            marker(
+                directory,
+                "target-outcome-unresolved",
+                "no authenticated target exit",
+            )?;
+            Err(io::Error::other(
+                "managed target outcome remains unresolved",
+            ))
+        }
+    }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
         [_, path] => run(Path::new(path), None),
@@ -426,13 +444,16 @@ fn main() {
             "requires the hosted owned-terminal harness",
         )),
     };
-    if let Err(error) = result {
-        // The original stderr description may be blocking and share a full
-        // outer PTY. A diagnostic must not hang after bounded cleanup. The
-        // admitted harness reads the private relay-error marker instead.
-        if !io::stderr().is_terminal() {
-            eprintln!("managed terminal relay: {error}");
+    match result {
+        Ok(code) => std::process::ExitCode::from(code),
+        Err(error) => {
+            // The original stderr description may be blocking and share a full
+            // outer PTY. A diagnostic must not hang after bounded cleanup. The
+            // admitted harness reads the private relay-error marker instead.
+            if !io::stderr().is_terminal() {
+                eprintln!("managed terminal relay: {error}");
+            }
+            std::process::ExitCode::from(125)
         }
-        std::process::exit(125);
     }
 }

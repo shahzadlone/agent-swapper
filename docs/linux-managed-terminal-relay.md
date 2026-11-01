@@ -114,3 +114,36 @@ the composed protocol. All 29 cases passed on Ubuntu 22.04 and 24.04 at `bde5303
 [run 41278328369](https://github.com/shahzadlone/agent-swapper/actions/runs/41278328369)
 also passed platform tests, candidate packaging and independent rebuilds. The real Store exec/exit suites remain separate
 from this relay's synced fixture records. Neither record completes a journal.
+
+A further lifetime regression separates the absolute startup budget from active
+observation budgets. The client previously reused its 12-second admission
+deadline for later stop/resume rechecks. Active sessions now get an eight-second
+manager-observation window per recheck while preserving the original binding.
+The admission deadline still covers prepared GO and the entire held-exec journal
+and release phase; no startup failure receives an active-session extension.
+
+The hosted long case stays active for 15 seconds, stops through the shell,
+remains in the background with the inner target stopped until at least 38
+seconds, then resumes and checks working input, authenticated final exit,
+complete terminal restoration and original-scope retirement. It deliberately
+crosses the former 25/30/35-second relay/target/guardian fixture lifetimes.
+Those component fixture limits are now 55 seconds, below the unchanged
+60-second root-manager lifetime; cleanup and external harness bounds remain.
+This fixed-duration regression awaits hosted results and does not claim an
+unbounded production session or qualify arbitrary provider runtimes.
+
+The exec-gated relay now returns an authenticated target code to its caller,
+using the existing native CLI convention `128 + signal` for target termination.
+The surviving owner preserves its child's complete eight-bit exit code instead
+of collapsing nonzero codes to 125. Explicit outer cancellation retains its
+original signal behavior. These results are returned only after terminal cleanup
+and independent scope retirement. Missing target status yields failure 125 and
+an unresolved-outcome marker, even if the terminal drained and scope retired.
+The legacy fixed relay keeps its earlier component-only exit convention.
+
+Three new hosted cases require exact exit 7, real-time signal status through the
+retained target pidfd, and failure after guardian loss without a target report.
+The exec-gated Ctrl-C cases now require 130, including the actual shell status
+after stop/background/foreground transitions. The total becomes 32 ordinary
+cases plus the separate long-session case. Hosted results for this extension
+are pending; all nine local surviving-owner cases pass with code preservation.

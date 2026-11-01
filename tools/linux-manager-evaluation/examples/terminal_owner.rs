@@ -132,7 +132,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
         [_, path] => terminal_owner::run(Path::new(path), false),
@@ -141,15 +141,19 @@ fn main() {
             .and_then(|text| text.parse::<i32>().ok())
             .and_then(Pid::from_raw)
             .ok_or_else(|| io::Error::other("invalid owner PID"))
-            .and_then(|pid| child(Path::new(path), pid)),
+            .and_then(|pid| child(Path::new(path), pid))
+            .map(|()| 0),
         _ => Err(io::Error::other(
             "requires the owned terminal-owner harness",
         )),
     };
-    if let Err(error) = result {
-        if !io::stderr().is_terminal() {
-            eprintln!("terminal owner fixture: {error}");
+    match result {
+        Ok(code) => std::process::ExitCode::from(code),
+        Err(error) => {
+            if !io::stderr().is_terminal() {
+                eprintln!("terminal owner fixture: {error}");
+            }
+            std::process::ExitCode::from(125)
         }
-        std::process::exit(125);
     }
 }

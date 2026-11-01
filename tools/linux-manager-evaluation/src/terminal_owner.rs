@@ -47,7 +47,7 @@ impl Drop for Owner {
     }
 }
 
-pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<()> {
+pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
     let signals = Signals::new()?;
     // Declared before child: cleanup attempts child retirement first. A bounded
     // child destructor is not proof of exit; this guard requires its retained
@@ -201,5 +201,8 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<()> {
     drop(child);
     drop(terminal);
     signals.finish(cancellation.or(result.1))?;
-    require(result.0 == Some(0), "fixed child did not exit successfully")
+    result
+        .0
+        .and_then(|code| u8::try_from(code).ok())
+        .ok_or_else(|| io::Error::other("owned child has no exit code"))
 }
