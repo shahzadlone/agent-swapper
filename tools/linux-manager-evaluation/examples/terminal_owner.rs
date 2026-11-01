@@ -33,7 +33,9 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
         rustix::process::getppid() == Some(parent),
         "terminal owner vanished before child admission",
     )?;
-    nix::sys::prctl::set_pdeathsig(Some(Signal::SIGTERM))?;
+    // A stopped child cannot handle SIGTERM. Parent loss must close its
+    // descriptors even under a same-session subreaper with no orphan SIGCONT.
+    nix::sys::prctl::set_pdeathsig(Some(Signal::SIGKILL))?;
     require(
         rustix::process::getppid() == Some(parent),
         "terminal owner vanished during child admission",

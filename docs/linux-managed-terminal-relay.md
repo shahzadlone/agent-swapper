@@ -82,6 +82,14 @@ retirement markers. Outer-terminal loss remains explicitly unrestorable.
 The fixed CI activation burst cap increases from 40 to 56 to cover the nine
 additional sequential activations; concurrency remains bounded at four.
 
+A nineteenth hosted case kills the owner while its relay, inner target and
+descendant are stopped. A same-session subreaper shell prevents an implicit
+orphan-group continuation. Parent-death SIGKILL must close the stopped relay's
+control descriptor, after which independent original process/cgroup handles
+must show full scope retirement. No client or owner exit-cleanup marker may
+exist. The shell keeps the modes restored before the loss. This case and the
+subreaper's negative control are described in the terminal-owner report.
+
 Open gates include external suspension requests while the inner target runs,
 qualification of the composed surviving owner, parent and whole-group loss,
 long sessions, already multithreaded CLI composition, arbitrary provider

@@ -271,7 +271,7 @@ jobs:
       - name: Evaluate surviving outer-terminal owner
         timeout-minutes: 1
         run: |
-          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example terminal_owner
+          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example terminal_owner --example terminal_owner_shell
           python3 tools/check_linux_terminal_owner.py tools/linux-manager-evaluation/target/debug/examples/terminal_owner
       - name: Qualify root-owned service cleanup
         env:

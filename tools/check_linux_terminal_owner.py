@@ -129,6 +129,40 @@ def shell_job(binary, forced, cancel=False):
             owned.close()
 
 
+def stopped_parent_loss(binary):
+    with tempfile.TemporaryDirectory(prefix='aswp-terminal-parent-loss-') as path:
+        root = Path(path)
+        owned = OwnedPty(binary, root, shell=True, subreaper_shell=binary.with_name('terminal_owner_shell'))
+        child = None
+        try:
+            prompt = b'__ASWP_OUTER_PROMPT__ '
+            owned.wait(lambda: prompt in owned.output)
+            assert (root / 'subreaper-shell').read_text() == str(owned.pid)
+            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'.encode())
+            data = owned.ready(greeting=b'OWNED-CHILD-READY\r\n')
+            child = child_handle(binary, data)
+            assert data['session'] == owned.pid and data['group'] != owned.pid
+            offset = len(owned.output)
+            owned.send(b'stop\n')
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'owner-restored-stop').exists())
+            for pid in (data['pid'], data['child']):
+                assert Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()[0] == 'T'
+            signal.pidfd_send_signal(owned.probe_fd, signal.SIGKILL)
+            # No SIGCONT is sent. Same-session adoption keeps the child group
+            # non-orphaned; parent-death behavior must work while stopped.
+            owned.wait(lambda: select.select([child], [], [], 0)[0])
+            assert select.select([owned.probe_fd], [], [], 0)[0]
+            assert not (root / 'owner-restored-exit').exists()
+            owned.send(b'/usr/bin/stty -g > after-parent-loss\n')
+            owned.wait(lambda: (root / 'after-parent-loss').exists())
+            assert (root / 'after-parent-loss').read_text() == (root / 'before').read_text()
+            assert os.tcgetpgrp(owned.master) == owned.pid
+            print('terminal-owner-stopped-parent-loss-under-subreaper: pass', flush=True)
+        finally:
+            cleanup_child(child)
+            owned.close()
+
+
 def main():
     assert sys.platform == 'linux' and len(sys.argv) == 2
     binary = Path(sys.argv[1]).resolve(strict=True)
@@ -138,7 +172,8 @@ def main():
     shell_job(binary, True)
     shell_job(binary, False, cancel=True)
     shell_job(binary, True, cancel=True)
-    print('::notice::surviving terminal owner: eight owned-PTY cases passed; error cleanup verifies child exit; background cancellation preserves subsequent shell mode changes; individual child death only; no whole-group loss guarantee', flush=True)
+    stopped_parent_loss(binary)
+    print('::notice::surviving terminal owner: nine owned-PTY cases passed; stopped parent loss works under a same-session subreaper; no active whole-group restoration guarantee', flush=True)
 
 
 if __name__ == '__main__':

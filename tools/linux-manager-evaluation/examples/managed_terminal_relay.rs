@@ -276,7 +276,9 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> 
             rustix::process::getppid() == Some(parent),
             "terminal owner vanished before managed child admission",
         )?;
-        nix::sys::prctl::set_pdeathsig(Some(nix::sys::signal::Signal::SIGTERM))?;
+        // This kills only the relay helper on owner loss. The root manager
+        // independently retires the provider-free inner scope after EOF.
+        nix::sys::prctl::set_pdeathsig(Some(nix::sys::signal::Signal::SIGKILL))?;
         require(
             rustix::process::getppid() == Some(parent),
             "terminal owner vanished during managed child admission",

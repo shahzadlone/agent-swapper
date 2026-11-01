@@ -68,3 +68,19 @@ Explicit normal stop restoration still follows the exclusive waiter's stop
 event. An eighth local case exercises refusal of an unsupported external stop:
 the owned child exits, and the error path restores every original attribute.
 Unknown child retirement never grants error-path restoration authority.
+
+A parent-loss regression additionally uses a fixed Rust bootstrap that makes
+its interactive bash a child subreaper. When the owner is killed while both
+owner and relay are stopped, the shell adopts the relay in the same session
+but a different group. This prevents orphan-group SIGCONT from masking a bug.
+Before the fix, the local negative control observed the relay still stopped,
+with parent-death SIGTERM pending and its pidfd unreadable after adoption.
+
+The fixed relay helpers now use parent-death SIGKILL, with parent checks around
+registration. This affects only the outer helper, never the inner guardian or
+target. Nine local owner cases pass; the new one kills the stopped owner and
+requires child exit without sending SIGCONT. Its modes were restored before
+the loss, and the shell's complete settings remain unchanged afterwards.
+The corresponding hosted case also retains the original scope and descendant
+handles and requires manager-owned removal without client cleanup. Active
+whole-group terminal restoration remains unqualified.
