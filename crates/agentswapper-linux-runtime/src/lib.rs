@@ -24,3 +24,8 @@ pub mod child_waiter;
 
 #[cfg(target_os = "linux")]
 pub mod installed_image;
+
+#[cfg(target_os = "linux")]
+pub mod installed_config;
+#[cfg(target_os = "linux")]
+mod protected_file;

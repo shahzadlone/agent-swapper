@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Image-policy controls using owned tmpfs mounts in disposable hosted CI only."""
+"""Installed-asset controls using owned tmpfs mounts in disposable hosted CI only."""
 import json
 import os
 from pathlib import Path
@@ -11,12 +11,15 @@ import tempfile
 
 CASES = {
     'protected': None,
+    'config-nosuid-noexec': None,
+    'config-executable': 'installed configuration is not mode 0644',
+    'config-oversize': 'installed configuration exceeds 16 KiB',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
     'symlink': '(os error 40)',
-    'writable': 'image is not a root-owned mode-0755 regular file',
-    'user-owned': 'image is not a root-owned mode-0755 regular file',
+    'writable': 'installed file is not a root-owned protected regular file',
+    'user-owned': 'installed file is not a root-owned protected regular file',
 }
 PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_IMAGE_MOUNTS'
 
@@ -57,13 +60,17 @@ def mounted_case(case, binary, uid, gid):
         options = 'rw,nodev,exec,suid,mode=0755,size=1m'
         if case in ('nosuid', 'noexec'):
             options += ',' + case
+        elif case == 'config-nosuid-noexec':
+            options += ',nosuid,noexec'
         subprocess.run(['/usr/bin/mount', '-t', 'tmpfs', '-o', options, 'aswp-image-fixture', str(base)],
                        stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=5)
         mounted = True
         image = base / 'image'
         # These inert bytes are never executed. The probe only opens metadata.
         image.write_bytes(b'owned image-policy fixture\n')
-        image.chmod(0o755)
+        image.chmod(0o644 if case.startswith('config-') and case != 'config-executable' else 0o755)
+        if case == 'config-oversize':
+            image.write_bytes(b'x' * (16 * 1024 + 1))
         if case == 'capability':
             # Linux VFS_CAP_REVISION_2, effective CAP_NET_BIND_SERVICE. The file
             # remains root-owned and is never executed, including by the probe.
@@ -76,12 +83,13 @@ def mounted_case(case, binary, uid, gid):
         elif case == 'user-owned':
             os.chown(image, uid, gid)
         script = str(Path(__file__).resolve())
-        result = subprocess.run(['/usr/bin/python3', '-I', '-S', script, '--probe', binary,
+        role = '--config-probe' if case.startswith('config-') else '--probe'
+        result = subprocess.run(['/usr/bin/python3', '-I', '-S', script, role, binary,
                                  str(image), str(uid), str(gid)], stdin=subprocess.DEVNULL,
                                 capture_output=True, timeout=5)
         expected = CASES[case]
         if expected is None:
-            require(result.returncode == 0 and result.stdout == b'protected-image: accepted\n'
+            require(result.returncode == 0 and result.stdout == b'installed-asset: accepted\n'
                     and not result.stderr, 'protected image control was refused: ' + result.stderr.decode(errors='replace'))
         else:
             require(result.returncode == 125 and not result.stdout
@@ -102,7 +110,7 @@ def mounted_case(case, binary, uid, gid):
 def main():
     gate()
     args = sys.argv[1:]
-    if len(args) == 5 and args[0] in ('--inside', '--probe'):
+    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe'):
         private_namespace()
         role, first, second, uid, gid = args
         uid, gid = identity(uid, gid)
@@ -114,7 +122,8 @@ def main():
         os.setuid(uid)
         require(os.getuid() == os.geteuid() == uid and os.getgid() == os.getegid() == gid,
                 'probe failed to drop its root identity')
-        os.execve(first, [first, second], {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+        probe_args = [first, '--config', second] if role == '--config-probe' else [first, second]
+        os.execve(first, probe_args, {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
     require(len(args) == 1 and os.geteuid() != 0, 'ordinary hosted fixture runner required')
     binary = Path(args[0])
     require(binary.is_absolute() and binary.is_file() and not binary.is_symlink(), 'invalid fixture probe')

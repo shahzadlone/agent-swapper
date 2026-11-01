@@ -325,3 +325,34 @@ activation and combined qualification remain pending.
 
 All 49 evaluation tests, strict core Clippy with the Store qualification feature
 and the dependency-boundary check also pass for the client image comparison.
+
+## Retained installed configuration
+
+`ProtectedConfig` and `ProtectedImage` now share the same descriptor-relative,
+no-symlink path walk. The private shared opener requires root-owned protected
+ancestry and a root-owned non-writable regular leaf. Each public constructor
+then requires its own exact mode: 0644 data or 0755 executable. Image mount and
+capability restrictions remain separate. Configuration data can live on nosuid
+and noexec filesystems, including the fixed `/run/systemd/system` template path.
+A trusted namespace and fixed installation location remain prerequisites;
+root UID/mode metadata is not a general filesystem-author identity guarantee.
+
+The fixed service-template consumer now opens and reads that retained config
+handle instead of checking pathname metadata alone. It requires nonempty UTF-8
+text without NUL bytes, bounded to 16 KiB. Manager properties and drop-in checks
+still establish the separate service policy. This does not parse arbitrary unit
+files, authenticate a production manifest or change the installed unit contents.
+
+Positional reads ignore shared file offsets and read one extra byte to detect
+oversized input. Tests cover an exact-limit file, a changed shared offset,
+one-byte overflow, empty data, and a real protected system configuration file;
+an executable is refused as configuration. Data is never executed or logged.
+The native asset matrix now has ten cases, adding configuration on nosuid/noexec
+mounts, executable-mode refusal and oversized data to the seven image controls.
+Privileged cases remain confined to disposable hosted CI.
+
+Local validation passes 35 runtime tests, five compile-fail doctests, 49 existing
+consumer tests, strict runtime/consumer/core-feature Clippy, the two harness
+refusal tests, 14 activation harness tests and the dependency-boundary check.
+One ignored runtime receiver role is invoked by its passing process test.
+Native template and asset qualification of this revision remain pending.

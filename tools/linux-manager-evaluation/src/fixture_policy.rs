@@ -1,6 +1,6 @@
 //! Opt-in fixture names, environment and protected-template checks.
 use crate::require;
-use std::{fs, io, os::unix::fs::MetadataExt};
+use std::{io, path::Path};
 
 pub(crate) fn valid_prefix(prefix: &str) -> bool {
     let Some(rest) = prefix.strip_prefix("aswp-activation-") else {
@@ -78,16 +78,11 @@ pub(crate) fn valid_scope_unit(unit: &str) -> bool {
 }
 
 pub(crate) fn protected_fragment(fragment: &str) -> io::Result<()> {
-    for directory in ["/", "/run", "/run/systemd", "/run/systemd/system"] {
-        let meta = fs::symlink_metadata(directory)?;
-        require(
-            meta.is_dir() && meta.uid() == 0 && meta.mode() & 0o022 == 0,
-            "activation template ancestor is not protected",
-        )?;
-    }
-    let meta = fs::symlink_metadata(fragment)?;
+    let config =
+        agentswapper_linux_runtime::installed_config::ProtectedConfig::open(Path::new(fragment))?;
+    let bytes = config.read()?;
     require(
-        meta.is_file() && meta.uid() == 0 && meta.mode() & 0o022 == 0,
-        "activation template is not root-owned and protected",
+        !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
+        "activation template is empty or invalid text",
     )
 }
