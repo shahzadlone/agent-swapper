@@ -204,9 +204,50 @@ marker, even if systemd subsequently removes the failed scope.
 
 Local validation passed 16 observer tests, six shared transport tests, 18 Python
 fixture tests, strict Clippy and the locked dependency audit. The guardian lease
-fixture passed parent descriptor closure and parent-group SIGKILL. Native CI for
-these changes and the independent replacement-decoder/kernel reviews remain
-pending. No production backend is enabled by these checks.
+fixture passed parent descriptor closure and parent-group SIGKILL. Both native
+manager jobs passed these changes at `8c46be6` in
+[run 41260763189](https://github.com/shahzadlone/agent-swapper/actions/runs/41260763189).
+The full pipeline is still being followed. The replacement-decoder review
+completed with no must-fix receive-path finding. Its hardening follow-up limits
+the control buffer to one credentials message, so extra control types cannot
+be silently discarded and accepted.
+
+That review also found that read-side shutdown alone still accepts an empty
+record queued before trailing data. The shared Rust EOF helper and Python
+fixture now temporarily enable `SO_PASSCRED` with zero control capacity: every
+record, including a late-credential empty record, produces `MSG_CTRUNC`, whereas
+EOF carries no credentials. No credential bytes are decoded. The original
+socket option is restored before returning; shutdown must also have no poll
+error. Seven shared transport tests now cover queued-empty and trailing-data
+cases, descriptor release, and restoration before later control messages.
+Native fault controls include shutdown after an empty record and after trailing
+data. The focused Opus follow-up found the stricter EOF discrimination correct
+for the single-reader Linux protocol. A double-error diagnostic now preserves
+both the read and socket-option restoration failures. The implementation relies
+on the kernel attaching credentials to every queued record but not to EOF;
+this was checked against the Linux 6.8
+[UNIX receive path](https://github.com/torvalds/linux/blob/v6.8/net/unix/af_unix.c)
+and [ancillary delivery](https://github.com/torvalds/linux/blob/v6.8/include/net/scm.h).
+
+Parallel execution of the new Rust fixture's tests exposed a test timing
+assumption: the lock-release regression passed 30/30 alone but failed 7/30
+with process-spawning tests. An in-flight fork can briefly share CLOEXEC open
+file descriptions until exec. Descriptor-release tests now use a bounded
+one-second wait for those independent holders too; a retained receiver
+descriptor still fails. Source inspection, rather than instantaneous lock
+reacquisition, establishes the receiver's destructor timing.
+
+The focused Opus kernel review completed with two low-severity and two
+informational findings, with no high/medium finding in its stated scope. The
+observer now restricts the authenticated service to `Type=exec`, no PID file,
+`NotifyAccess=none` and `RemainAfterExit=no`, rechecks migration controls on each
+live observation, and enforces the namespace precondition inside binding itself.
+These follow-up checks await their own native run. Directory device/inode facts
+identify only the retained directory: a failed invocation's directory may be
+reused by a later start. They never replace the manager invocation ID or prove
+freshness. Kernel retirement alone likewise never proves manager retirement.
+The reviewed model trusts the kernel/root and excludes hostile same-UID code;
+it is not production or arbitrary-service qualification.
 
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready

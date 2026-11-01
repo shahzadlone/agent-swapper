@@ -39,10 +39,28 @@ pub(crate) fn pair() -> io::Result<(OwnedFd, OwnedFd)> {
 /// from an open peer is a protocol error, not evidence of parent disconnect.
 #[allow(dead_code, reason = "some fixture binaries do not wait for disconnect")]
 pub(crate) fn eof(socket: impl AsFd) -> io::Result<bool> {
+    // This channel has one reader. Temporarily requesting credentials lets the
+    // kernel distinguish an empty record from EOF, even after peer shutdown.
+    // The zero-capacity control buffer discards ALL ancillary data in-kernel;
+    // we never decode rustix UCred (which cannot represent a kernel PID zero).
+    // Restore the option before later admission/control receives use the socket.
+    let previous = sockopt::socket_passcred(&socket)?;
+    sockopt::set_socket_passcred(&socket, true)?;
+    let result = read_eof(&socket);
+    let restored = sockopt::set_socket_passcred(&socket, previous);
+    match (result, restored) {
+        (Ok(closed), Ok(())) => Ok(closed),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Err(restore)) => Err(io::Error::other(format!(
+            "{error}; restoring guardian credential mode: {restore}"
+        ))),
+    }
+}
+
+fn read_eof(socket: impl AsFd) -> io::Result<bool> {
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     let mut bytes = [0_u8; 1];
-    // No control data is accepted here. A zero-sized control buffer makes the
-    // kernel close any transferred descriptors and report CTRUNC.
     let mut ancillary = RecvAncillaryBuffer::new(&mut []);
     let received = match net::recvmsg(
         &socket,
@@ -71,8 +89,11 @@ pub(crate) fn eof(socket: impl AsFd) -> io::Result<bool> {
         }),
     )?;
     require(
-        readiness[0].revents().intersects(closed),
-        "empty guardian packet is not read-side EOF",
+        readiness[0].revents().intersects(closed)
+            && !readiness[0]
+                .revents()
+                .intersects(PollFlags::ERR | PollFlags::NVAL),
+        "guardian channel lacks orderly read-side EOF",
     )?;
     Ok(true)
 }
@@ -290,6 +311,22 @@ pub(crate) fn receive_control(socket: impl AsFd, expected: &[u8]) -> io::Result<
 mod tests {
     use super::*;
 
+    fn reacquire_after_refusal(file: &std::fs::File) -> io::Result<()> {
+        // Parallel tests may fork while these CLOEXEC descriptors exist. That
+        // child briefly shares the open-file description until exec completes.
+        // A retained receiver descriptor still fails this bounded check.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(()),
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => return Err(io::Error::other(error)),
+            }
+        }
+    }
+
     #[test]
     fn eof_requires_read_side_shutdown_and_refuses_empty_open_peer_records() -> io::Result<()> {
         let (sender, receiver) = pair()?;
@@ -298,10 +335,7 @@ mod tests {
         let error = eof(&receiver)
             .err()
             .ok_or_else(|| io::Error::other("empty packet accepted"))?;
-        assert_eq!(
-            error.to_string(),
-            "empty guardian packet is not read-side EOF"
-        );
+        assert_eq!(error.to_string(), "unexpected guardian control message");
         for packet in [b"X".as_slice(), b"too long"] {
             send(&sender, packet, &[])?;
             assert!(eof(&receiver).is_err());
@@ -325,8 +359,50 @@ mod tests {
             drop(sender);
             assert!(!eof(&witness)?);
             assert!(eof(&receiver).is_err());
+            let mut ready = [rustix::event::PollFd::new(
+                &witness,
+                rustix::event::PollFlags::RDHUP,
+            )];
+            let timeout = rustix::event::Timespec::try_from(Duration::from_secs(1))
+                .map_err(io::Error::other)?;
+            assert_eq!(rustix::event::poll(&mut ready, Some(&timeout))?, 1);
             assert!(eof(&witness)?);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn eof_refuses_empty_queued_records_after_shutdown_and_restores_socket_policy() -> io::Result<()>
+    {
+        for original in [false, true] {
+            for following in [
+                None,
+                Some(b"".as_slice()),
+                Some(b"trailing data".as_slice()),
+            ] {
+                let (sender, receiver) = pair()?;
+                // Deliberately queue before enabling credentials: the kernel may
+                // synthesize PID zero, but no credential decoder runs here.
+                send(&sender, b"", &[])?;
+                if let Some(packet) = following {
+                    send(&sender, packet, &[])?;
+                }
+                net::shutdown(&sender, net::Shutdown::Write)?;
+                sockopt::set_socket_passcred(&receiver, original)?;
+                assert!(eof(&receiver).is_err());
+                assert_eq!(sockopt::socket_passcred(&receiver)?, original);
+                if following.is_some() {
+                    assert!(eof(&receiver).is_err());
+                }
+                assert!(eof(&receiver)?);
+                assert_eq!(sockopt::socket_passcred(&receiver)?, original);
+            }
+        }
+        let (sender, receiver) = pair()?;
+        assert!(!eof(&receiver)?);
+        assert!(!sockopt::socket_passcred(&receiver)?);
+        send(&sender, GO, &[])?;
+        receive_control(&receiver, GO)?;
         Ok(())
     }
 
@@ -373,12 +449,12 @@ mod tests {
             Err(std::fs::TryLockError::WouldBlock)
         ));
         assert!(receive_control(&receiver, b"READY").is_err());
-        observer.try_lock().map_err(io::Error::other)?;
+        reacquire_after_refusal(&observer)?;
         Ok(())
     }
 
     #[test]
-    fn truncated_admission_closes_every_transferred_lock_before_returning() -> io::Result<()> {
+    fn truncated_admission_releases_every_transferred_lock() -> io::Result<()> {
         // Sixteen descriptors exceed even the ABI padding in the one-FD
         // receive buffer. The second case instead truncates the payload.
         for (packet, count) in [(GO, 16), (b"ASWP-GO-1-extra".as_slice(), 1)] {
@@ -419,7 +495,7 @@ mod tests {
             // pinned rustix RecvAncillaryBuffer Drop must release every lock
             // that fit; the kernel closes the control data that did not fit.
             for observer in observers {
-                observer.try_lock().map_err(io::Error::other)?;
+                reacquire_after_refusal(&observer)?;
             }
         }
         Ok(())

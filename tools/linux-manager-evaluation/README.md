@@ -153,7 +153,9 @@ independent source review. The design review
 does not qualify this implementation. No production backend is enabled.
 A later focused Opus source review of `main.rs` and `watch.rs` at `4ccd252`
 completed. Its post-bind manager-state recheck and primary-error preservation
-are implemented; the separate kernel review is still pending. The activation
+are implemented. The separate kernel review also completed; its service-lifecycle
+restrictions and refreshed migration-control checks are implemented and await
+native validation. The activation
 review found a real PID-zero representation problem in the former credential
 decoder. Its replacement and disconnect follow-up are recorded in
 [the activation evidence](../../docs/linux-managed-launch.md#credential-and-disconnect-follow-up).
