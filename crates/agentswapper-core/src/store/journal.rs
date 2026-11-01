@@ -498,4 +498,6 @@ fn fingerprint(mut file: &File) -> Result<String> {
 }
 
 #[cfg(test)]
+mod historical_tests;
+#[cfg(test)]
 mod tests;

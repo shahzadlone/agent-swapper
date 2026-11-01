@@ -31,7 +31,6 @@ separately. These changes do not supply restart recovery or target-exit evidence
 
 | Area | Required follow-up |
 | --- | --- |
-| Migration fixtures | Supplement synthetic downgrade tests with databases produced by actual historical schema-5/6/7 revisions. |
 | Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
 | Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
 | systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
@@ -132,6 +131,22 @@ the existing stale-engine-plan assertion once; the isolated control and a later
 139-test core run passed. That assertion now includes the unexpected result for
 diagnosis if it recurs. No cause or runtime fix is claimed from a passing retry.
 Native qualification of the retirement retry remains pending.
+
+## Historical migration evidence
+
+Clean schema-5 (`da6b2d9`), schema-6 (`533c355`) and schema-7 (`63ac746`) executables
+each produced a real registry containing one completed stub run and one
+interrupted stub run. Every source database upgraded to schema 9, and each
+historical executable then refused the upgraded copy with exit 125. These were
+ordinary-user, provider-free processes in temporary homes.
+
+The checked-in databases retain their original journal, timestamps and schema;
+provenance sidecars and a generator document their origin. A regression test
+checks complete event preservation, pending-run fencing, completed-run reuse,
+verified backups and reopening. That test and strict workspace Clippy passed
+locally, and the checked-in generator reproduced a valid fixture. Cross-platform
+CI for this fixture revision is pending. See
+[the fixture notes](../crates/agentswapper-core/tests/fixtures/historical/README.md).
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
