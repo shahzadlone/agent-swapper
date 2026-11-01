@@ -506,3 +506,84 @@ including native Ubuntu 22.04/24.04 controls, the fifteen installed-asset cases,
 cross-platform checks and independent unsigned package rebuilds. Its reviewed
 binding corrections are integrated without enabling production managed execution.
 Subsequent credential and one-use retirement work requires separate evidence.
+
+## Ordinary guardian credentials and loaded-policy rechecks
+
+The activation policy now binds the primary GID as well as the UID. The original
+guardian's retained proc directory must report matching real/effective/saved/
+filesystem IDs, supplementary groups contained in the caller's existing group
+set, empty inheritable/permitted/effective/bounding/ambient capabilities, and
+`NoNewPrivs: 1`. Original pidfd liveness brackets this read. The fixture template
+explicitly clears the capability bounding and ambient sets and sets `Restart=no`.
+
+Supplementary groups cannot simply be assumed empty: systemd initializes them
+from the user's group database, and `SupplementaryGroups=` extends that list.
+The policy therefore permits a subset of the ordinary caller's groups, including
+its primary group, and refuses group expansion or root group membership. See
+[systemd's group semantics](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#SupplementaryGroups=)
+and the [kernel's process-status fields](https://docs.kernel.org/filesystems/proc.html).
+
+Admission and every active recheck now read the complete loaded-policy snapshot,
+including primary group, drop-ins, reload state, delegation and kill mode, plus
+direct lifecycle and `Restart=no`. The claimed unit must be a nonempty instance
+of the retained template's own stem. Existing connection/owner, invocation,
+configuration-stamp, executable, cgroup and original-process checks remain
+required. This does not add delegated-work custody or crash-recovery authority.
+
+Local checks pass 39 runtime tests, thirteen manager tests, nine combined
+doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-feature
+Clippy, dependency boundaries and 15 activation-harness checks. Native results
+for this new credential policy remain pending. The requested follow-up Opus
+review of predecessor `3ae40ee` could not run because the CLI reported its session
+quota exhausted; it supplies no additional review evidence.
+
+## One-use retirement value
+
+`BoundService::observe_retirement` now returns a private, non-cloneable
+`RetiredService` only after both original-kernel removal and authenticated
+original-invocation retirement agree on the exact retained manager connection.
+It uses the binding's existing paired observer. Success revokes further issuance
+before returning; errors, deadline expiry and cancellation retain the binding
+for retry. The mutable-borrow API avoids dropping the original witnesses when
+a caller cancels an owned asynchronous transition.
+
+An opaque `ServiceKey` identifies this particular binding in memory. Copies
+select an expected binding but prove nothing by themselves. Even an independent
+valid witness of the same invocation has another key, so it cannot replace a
+lost original witness after a crash. The receipt still says nothing about a
+Store run/profile, a target's exit status, or delegated work. It is not yet used
+to authorize profile reuse.
+
+The real BIND fixture now checks an expired deadline while live, successful
+retirement against the original key, rejection against a fresh witness's key,
+and rejection of a second issuance. Its binding and substitution work share the
+existing admission deadline. Local manager tests, positive/negative doctests,
+49 consumer tests and strict manager/consumer Clippy pass; native qualification
+and a real Store consumer are the next gates.
+
+The terminal-session consumer now carries the opaque value out of `Closed::retire`.
+It checks the original target pidfd before receipt issuance and shares one
+twenty-second deadline across observation and issuance; failures retain the
+closed session's witnesses. Diagnostic connection-close errors remain separate.
+The relay supplies the journal with its original `ServiceKey` before target
+preparation, then transfers the receipt by value after cleanup. Keys retain
+admission identity and original directory device/inode alongside their private
+in-memory association.
+
+The real `FixtureJournal` requires that original key to match before auditing
+retirement. This checkpoint deliberately retains its previous conservative
+Store policy: scope retirement does not yet finish the durable run. The next
+change must atomically record scope completion separately from an unknown target
+exit, and reject wrong-run, duplicate and reconstructed-witness substitutions.
+The manager dependency is optional behind `linux-journal-qualification`; default
+application graphs remain isolated. Local manager/doctests, 49 evaluation tests,
+strict evaluation/core-feature Clippy and the dependency boundary pass. Native
+qualification of this consumer is pending.
+
+Qualified integration: credential-policy revision `cb8ba94`, one-use receipt
+revision `6d183f4`, and consumer revision `49948c8` each passed their complete
+pipelines: [41296222108](https://github.com/shahzadlone/agent-swapper/actions/runs/41296222108),
+[41296385424](https://github.com/shahzadlone/agent-swapper/actions/runs/41296385424),
+and [41296785541](https://github.com/shahzadlone/agent-swapper/actions/runs/41296785541).
+This integrates the consumer without enabling production managed execution.
+Durable scope completion and installation policy remain separate checkpoints.

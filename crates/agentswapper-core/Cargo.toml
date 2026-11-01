@@ -8,7 +8,7 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-linux-journal-qualification = []
+linux-journal-qualification = ["dep:agentswapper-linux-manager"]
 
 [dependencies]
 serde.workspace = true
@@ -29,6 +29,7 @@ wait-timeout = "0.2"
 rustix = { version = "1", features = ["process", "fs", "termios"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+agentswapper-linux-manager = { path = "../agentswapper-linux-manager", version = "=0.1.0-dev", optional = true }
 agentswapper-linux-runtime = { path = "../agentswapper-linux-runtime", version = "=0.1.0-dev" }
 rustix = { version = "1", features = ["event", "net"] }
 fuxix = "=0.8.0"

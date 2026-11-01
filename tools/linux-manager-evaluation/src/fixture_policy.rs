@@ -85,6 +85,13 @@ pub(crate) fn activated_policy(
     agentswapper_linux_manager::ServicePolicy::open(
         Path::new(&format!("/run/systemd/system/{prefix}@.service")),
         Path::new(&format!("/usr/lib/{prefix}.guardian")),
-        rustix::process::getuid().as_raw(),
+        agentswapper_linux_runtime::process_policy::OrdinaryCredentials::new(
+            rustix::process::getuid().as_raw(),
+            rustix::process::getgid().as_raw(),
+            &rustix::process::getgroups()?
+                .iter()
+                .map(|id| id.as_raw())
+                .collect::<Vec<_>>(),
+        )?,
     )
 }

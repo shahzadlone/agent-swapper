@@ -155,6 +155,7 @@ Description=AgentSwapper disposable fixed-user guardian
 CollectMode=inactive-or-failed
 [Service]
 Type=exec
+Restart=no
 User={uid}
 Group={gid}
 ExecStart={guardian_image(prefix)} --activation-guardian {prefix} {uid} {gid} {directory} %n
@@ -170,6 +171,8 @@ TimeoutStartSec=10s
 TimeoutStopSec=2s
 RuntimeMaxSec=60s
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
 UMask=0077
 '''
     return {prefix + '.socket': socket_unit, prefix + '@.service': service_unit}

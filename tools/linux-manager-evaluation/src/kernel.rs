@@ -34,6 +34,11 @@ pub(crate) struct Retirement {
 }
 impl From<observed::Retirement> for Retirement {
     fn from(value: observed::Retirement) -> Self {
+        Self::from(&value)
+    }
+}
+impl From<&observed::Retirement> for Retirement {
+    fn from(value: &observed::Retirement) -> Self {
         Self {
             device: value.device,
             inode: value.inode,
@@ -48,6 +53,26 @@ enum Backend {
     Activated(Box<agentswapper_linux_manager::BoundService>),
 }
 impl Binding {
+    pub(crate) fn key(&self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
+        match &self.0 {
+            Backend::Activated(binding) => Ok(binding.key()),
+            Backend::Transient(_) => Err(io::Error::other(
+                "transient measurement has no activated binding key",
+            )),
+        }
+    }
+    pub(crate) async fn observe_retirement(
+        &mut self,
+        manager: &agentswapper_linux_manager::Manager,
+        deadline: tokio::time::Instant,
+    ) -> io::Result<agentswapper_linux_manager::RetiredService> {
+        match &mut self.0 {
+            Backend::Activated(binding) => binding.observe_retirement(manager, deadline).await,
+            Backend::Transient(_) => Err(io::Error::other(
+                "transient measurement cannot issue activated retirement",
+            )),
+        }
+    }
     pub(crate) fn activated(binding: agentswapper_linux_manager::BoundService) -> io::Result<Self> {
         require(
             crate::fixture_policy::valid_scope_unit(&binding.identity().unit),

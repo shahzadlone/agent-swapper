@@ -8,6 +8,7 @@ struct Lifecycle {
     notify: String,
     remain: bool,
     pam: String,
+    restart: String,
 }
 impl Lifecycle {
     fn require_direct(&self) -> io::Result<()> {
@@ -16,14 +17,16 @@ impl Lifecycle {
                 && self.pid_file.is_empty()
                 && self.notify == "none"
                 && !self.remain
-                && self.pam.is_empty(),
+                && self.pam.is_empty()
+                && self.restart == "no",
             "service lifecycle differs from direct manager-owned execution",
         )
     }
 }
 
 /// Require Type=exec with no PIDFile, notification ownership, retained-active
-/// state or PAM session. PAM can move descendants into a separate session scope.
+/// state, automatic restart or PAM session. PAM can move descendants into a
+/// separate session scope; automatic restart creates another invocation.
 /// Use an already bound invocation path and a caller-owned operation deadline.
 /// This read does not establish installation, UID, cgroup policy or retirement.
 pub async fn require_direct_lifecycle(
@@ -52,6 +55,7 @@ pub async fn require_direct_lifecycle(
         )
         .map_err(io::Error::other)?,
         pam: text("PAMName").await?,
+        restart: text("Restart").await?,
     }
     .require_direct()
 }
@@ -67,9 +71,10 @@ mod tests {
             notify: "none".into(),
             remain: false,
             pam: String::new(),
+            restart: "no".into(),
         };
         direct().require_direct()?;
-        for mutation in 0..7 {
+        for mutation in 0..9 {
             let mut observed = direct();
             match mutation {
                 0 => observed.service_type = "forking".into(),
@@ -78,7 +83,9 @@ mod tests {
                 3 => observed.notify = "all".into(),
                 4 => observed.remain = true,
                 5 => observed.pam = "login".into(),
-                _ => observed.pam = " ".into(),
+                6 => observed.pam = " ".into(),
+                7 => observed.restart = "always".into(),
+                _ => observed.restart = "on-failure".into(),
             }
             assert!(observed.require_direct().is_err());
         }

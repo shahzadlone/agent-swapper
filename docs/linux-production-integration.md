@@ -6,7 +6,10 @@ passed native qualification. Shared retained kernel observations, read-only mana
 image corroboration, direct-child waiting, protected configuration retention and
 opaque service binding passed the complete pipeline at `3ae40ee` in
 [41295768975](https://github.com/shahzadlone/agent-swapper/actions/runs/41295768975).
-Later guardian-credential and retirement-consumer work remains on qualification
+Guardian credentials, complete loaded-policy rechecks and the one-use retirement
+consumer also passed the full pipeline at `49948c8` in
+[41296785541](https://github.com/shahzadlone/agent-swapper/actions/runs/41296785541).
+Durable scope completion and installation metadata remain on qualification
 branches. Normal Linux execution is
 still the explicit uncontained preview. The fixed qualification crate must not
 be enabled as a production launcher by removing its CI checks.

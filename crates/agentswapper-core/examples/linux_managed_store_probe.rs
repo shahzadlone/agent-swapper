@@ -15,6 +15,9 @@ fn main() -> std::process::ExitCode {
         fn lease(&self) -> io::Result<BorrowedFd<'_>> {
             self.0.lease().map_err(io::Error::other)
         }
+        fn bind_scope(&mut self, key: agentswapper_linux_manager::ServiceKey) -> io::Result<()> {
+            self.0.bind_scope(key).map_err(io::Error::other)
+        }
         fn confirm_intent(&mut self, pid: u32) -> io::Result<()> {
             self.0.confirm_intent(pid).map_err(io::Error::other)
         }
@@ -24,8 +27,11 @@ fn main() -> std::process::ExitCode {
         fn release_lease(&mut self) {
             self.0.release_lease();
         }
-        fn audit_retired(&mut self) -> io::Result<()> {
-            self.0.audit_retired().map_err(io::Error::other)
+        fn audit_retired(
+            &mut self,
+            retired: agentswapper_linux_manager::RetiredService,
+        ) -> io::Result<()> {
+            self.0.audit_retired(retired).map_err(io::Error::other)
         }
     }
     managed_terminal_relay::entry::<Journal>()
