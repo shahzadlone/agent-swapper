@@ -225,6 +225,37 @@ jobs:
       - name: Audit isolated manager observer dependencies
         run: cargo +1.98.0 deny --manifest-path tools/linux-manager-evaluation/Cargo.toml --config deny.toml --locked check
 
+  linux-origin-evidence:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            pidfd: unsupported
+          - os: ubuntu-24.04
+            pidfd: available
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build and check namespace observation candidate
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component clippy
+          python3 tools/platform_evidence.py
+          cargo +1.98.0 clippy --locked -p agentswapper-linux-origin --all-targets --all-features -- -D warnings
+          cargo +1.98.0 test --locked -p agentswapper-linux-origin
+          cargo +1.98.0 build --locked -p agentswapper-linux-origin --features qualification --example origin_probe
+          python3 -m unittest discover -s tools -p test_linux_origin.py -v
+      - name: Compare leader and nonleader observations
+        run: python3 tools/check_linux_origin.py --positive "${{ github.workspace }}/target/debug/examples/origin_probe" "${{ matrix.pidfd }}"
+      - name: Refuse hostile namespace and process metadata views
+        timeout-minutes: 2
+        env:
+          ASWP_CI_ORIGIN: '1'
+        run: python3 tools/check_linux_origin.py "${{ github.workspace }}/target/debug/examples/origin_probe" "${{ matrix.pidfd }}"
+
   linux-manager-evidence:
     strategy:
       fail-fast: false
