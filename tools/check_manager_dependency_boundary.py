@@ -14,7 +14,7 @@ def check():
                                 cwd=root, capture_output=True, text=True, check=True, timeout=120)
         locks.append(json.loads(result.stdout)['packages'])
     # The audited Linux transport/runtime must resolve identically in both locks.
-    names = {'zbus', 'zbus_macros', 'zruntime', 'tokio', 'rustix', 'nix', 'unix-ancillary', 'fuxix', 'zeroize'}
+    names = {'zbus', 'zbus_macros', 'zruntime', 'tokio', 'rustix', 'nix', 'unix-ancillary', 'fuxix', 'zeroize', 'serde', 'serde_json'}
     versions = [{p['name']: p['version'] for p in packages if p['name'] in names} for packages in locks]
     if versions[0] != versions[1] or versions[0].keys() != names:
         raise RuntimeError('root and isolated manager dependency pins differ')

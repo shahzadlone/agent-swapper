@@ -129,6 +129,8 @@ version = "0.1.0-dev"
 dependencies = [
  "nix",
  "rustix",
+ "serde",
+ "serde_json",
  "tempfile",
  "wait-timeout",
  "zeroize",

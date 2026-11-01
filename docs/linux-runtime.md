@@ -580,3 +580,8 @@ and records scope retirement separately from target status. Schema 8 preserves
 unknown exit codes and migrates existing intent conservatively. This API remains
 feature-gated; the production managed launcher is still disabled. See that
 document for migration, substitution, retry controls and remaining limits.
+
+The [installation metadata checkpoint](linux-installation.md) adds a bounded,
+protected manifest with fixed derived paths and compatible identity/version
+checks. Expected artifact hashes remain metadata until separately verified;
+the selector, installer and production launch integration remain unfinished.

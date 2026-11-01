@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 use agentswapper_linux_runtime::{
     installed_config::ProtectedConfig, installed_image::ProtectedImage,
+    installed_manifest::InstalledManifest,
 };
 use std::{
     io::{self, Read, Write},
@@ -17,11 +18,27 @@ fn run() -> io::Result<()> {
     }
     let args: Vec<_> = std::env::args_os().collect();
     match args.as_slice() {
+        [_, mode] if mode == "--manifest-version" => {
+            println!(
+                "{}",
+                agentswapper_linux_runtime::installed_manifest::VERSION
+            );
+            return Ok(());
+        }
         [_, path] => {
             let _image = ProtectedImage::open(Path::new(path))?;
         }
         [_, mode, path] if mode == "--config" => {
             ProtectedConfig::open(Path::new(path))?.read()?;
+        }
+        [_, mode, path] if mode == "--manifest" => {
+            let manifest = InstalledManifest::open_for_qualification(
+                Path::new(path),
+                rustix::process::getuid().as_raw(),
+                rustix::process::getgid().as_raw(),
+                "00112233445566778899aabbccddeeff",
+            )?;
+            manifest.require_current()?;
         }
         [_, mode, path] if mode == "--config-recheck" => {
             let config = ProtectedConfig::open(Path::new(path))?;

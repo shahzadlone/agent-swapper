@@ -19,6 +19,12 @@ CASES = {
     'config-replaced': 'installed configuration changed since admission began',
     'config-modified': 'installed configuration changed since admission began',
     'config-mode-changed': 'installed configuration changed since admission began',
+    'manifest-protected': None,
+    'manifest-protocol': 'installed manifest is invalid or incompatible',
+    'manifest-user': 'installed manifest is invalid or incompatible',
+    'manifest-unknown': 'installed manifest is invalid or incompatible',
+    'manifest-duplicate': 'installed manifest is invalid or incompatible',
+    'manifest-symlink': '(os error 40)',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
@@ -27,7 +33,7 @@ CASES = {
     'writable': 'installed file is not a root-owned protected regular file',
     'user-owned': 'installed file is not a root-owned protected regular file',
 }
-PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_IMAGE_MOUNTS'
+PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_IMAGE_MOUNTS,ASWP_CI_IMAGE_PACKAGE_VERSION'
 
 
 def require(ok, message):
@@ -96,6 +102,9 @@ def retained_config_control(command, image, case):
 def mounted_case(case, binary, uid, gid):
     private_namespace()
     require(case in CASES, 'unknown image fixture case')
+    version = os.environ.get('ASWP_CI_IMAGE_PACKAGE_VERSION', '')
+    if case.startswith('manifest-'):
+        require(re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', version), 'invalid fixture package version')
     base = Path(tempfile.mkdtemp(prefix='aswp-image-mount-', dir='/run'))
     original = base.stat(follow_symlinks=False)
     mounted = False
@@ -111,14 +120,28 @@ def mounted_case(case, binary, uid, gid):
         image = base / 'image'
         # These inert bytes are never executed. The probe only opens metadata.
         image.write_bytes(b'owned image-policy fixture\n')
-        image.chmod(0o644 if case.startswith('config-') and case != 'config-executable' else 0o755)
+        image.chmod(0o644 if case.startswith(('config-', 'manifest-')) and case != 'config-executable' else 0o755)
+        if case.startswith('manifest-'):
+            document = dict(schema=1, protocol=1, version=version, generation='00112233445566778899aabbccddeeff',
+                            user=uid, group=gid, guardian_sha256='a'*64, session_helper_sha256='b'*64,
+                            exec_shim_sha256='c'*64, service_template_sha256='d'*64, socket_unit_sha256='e'*64)
+            if case == 'manifest-protocol':
+                document['protocol'] = 2
+            elif case == 'manifest-user':
+                document['user'] = uid + 1
+            elif case == 'manifest-unknown':
+                document['unexpected'] = 'manifest-private-canary'
+            contents = json.dumps(document)
+            if case == 'manifest-duplicate':
+                contents = '{"schema":1,' + contents[1:]
+            image.write_text(contents)
         if case == 'config-oversize':
             image.write_bytes(b'x' * (16 * 1024 + 1))
         if case == 'capability':
             # Linux VFS_CAP_REVISION_2, effective CAP_NET_BIND_SERVICE. The file
             # remains root-owned and is never executed, including by the probe.
             os.setxattr(image, 'security.capability', struct.pack('<5I', 0x02000001, 1 << 10, 0, 0, 0))
-        elif case == 'symlink':
+        elif case in ('symlink', 'manifest-symlink'):
             image.rename(base / 'target')
             image.symlink_to('target')
         elif case == 'fifo':
@@ -130,6 +153,8 @@ def mounted_case(case, binary, uid, gid):
             os.chown(image, uid, gid)
         script = str(Path(__file__).resolve())
         role = '--config-probe' if case.startswith('config-') else '--probe'
+        if case.startswith('manifest-'):
+            role = '--manifest-probe'
         retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed')
         if retained:
             role = '--config-recheck-probe'
@@ -144,6 +169,9 @@ def mounted_case(case, binary, uid, gid):
             require(result.returncode == 125 and not result.stdout
                     and expected.encode() in result.stderr,
                     f'{case}: image did not refuse at intended check: ' + result.stderr.decode(errors='replace'))
+            if expected == 'installed manifest is invalid or incompatible':
+                require(result.stderr == b'installed-asset: installed manifest is invalid or incompatible\n',
+                        'manifest refusal echoed untrusted content')
         print(f'::notice title=Linux image policy::{case}: pass; probe ran as ordinary user and never executed the image', flush=True)
     finally:
         if mounted:
@@ -159,7 +187,7 @@ def mounted_case(case, binary, uid, gid):
 def main():
     gate()
     args = sys.argv[1:]
-    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe', '--config-recheck-probe'):
+    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe', '--config-recheck-probe', '--manifest-probe'):
         private_namespace()
         role, first, second, uid, gid = args
         uid, gid = identity(uid, gid)
@@ -171,18 +199,23 @@ def main():
         os.setuid(uid)
         require(os.getuid() == os.geteuid() == uid and os.getgid() == os.getegid() == gid,
                 'probe failed to drop its root identity')
-        modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck'}
+        modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck', '--manifest-probe': '--manifest'}
         probe_args = [first, modes[role], second] if role in modes else [first, second]
         os.execve(first, probe_args, {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
     require(len(args) == 1 and os.geteuid() != 0, 'ordinary hosted fixture runner required')
     binary = Path(args[0])
     require(binary.is_absolute() and binary.is_file() and not binary.is_symlink(), 'invalid fixture probe')
+    version = subprocess.run([str(binary), '--manifest-version'], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=5, check=True)
+    require(not version.stderr and re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}\n', version.stdout),
+            'fixture probe returned an invalid package version')
+    environment = dict(os.environ, ASWP_CI_IMAGE_PACKAGE_VERSION=version.stdout.strip())
     for case in CASES:
         subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE, '/usr/bin/timeout', '--kill-after=3s',
                         '20s', '/usr/bin/unshare', '--mount', '--propagation', 'private', '--fork',
                         '--kill-child', '/usr/bin/python3', '-I', '-S', str(Path(__file__).resolve()),
                         '--inside', case, str(binary), str(os.getuid()), str(os.getgid())],
-                       stdin=subprocess.DEVNULL, check=True, timeout=25)
+                       stdin=subprocess.DEVNULL, env=environment, check=True, timeout=25)
 
 
 if __name__ == '__main__':
