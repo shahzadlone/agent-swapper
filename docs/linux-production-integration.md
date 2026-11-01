@@ -3,7 +3,9 @@
 Status: shared [transport, signal and terminal ownership](linux-runtime.md)
 and fresh process entry are qualified. A fixed [real-Store terminal consumer](linux-store-terminal.md)
 passed native qualification. Shared retained kernel observations, read-only manager transport, installed
-image corroboration and direct-child waiting have also passed native qualification. Normal Linux execution is
+image corroboration and direct-child waiting passed native qualification at
+`7ca3650`. Subsequent shared file-opening and retained-exit changes require their
+own native evidence. Normal Linux execution is
 still the explicit uncontained preview. The fixed qualification crate must not
 be enabled as a production launcher by removing its CI checks.
 

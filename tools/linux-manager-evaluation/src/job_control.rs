@@ -87,16 +87,29 @@ impl OwnedChild {
     }
     pub(crate) fn next(&mut self, until: Instant) -> io::Result<WaitStatus> {
         let raw = self.waiter.next(until)?;
-        WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(io::Error::from)
+        self.decode(raw)
     }
     pub(crate) fn poll(&mut self) -> io::Result<WaitStatus> {
         match self.poll_raw()? {
-            Some(raw) => WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(io::Error::from),
+            Some(raw) => self.decode(raw),
             None => Ok(WaitStatus::StillAlive),
         }
     }
     pub(crate) fn poll_raw(&mut self) -> io::Result<Option<rustix::process::WaitStatus>> {
         self.waiter.poll()
+    }
+    fn decode(&self, raw: rustix::process::WaitStatus) -> io::Result<WaitStatus> {
+        WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(|error| {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(status) = self.waiter.final_status()
+                && let Some(signal) = std::process::ExitStatus::from_raw(status.as_raw()).signal()
+            {
+                return io::Error::other(format!(
+                    "owned child terminated by signal {signal} during admission"
+                ));
+            }
+            io::Error::from(error)
+        })
     }
     pub(crate) fn resume(&self) -> io::Result<()> {
         require(
@@ -201,7 +214,13 @@ mod tests {
             .next(deadline())
             .err()
             .ok_or_else(|| io::Error::other("realtime termination unexpectedly decoded"))?;
-        assert_eq!(error.raw_os_error(), Some(nix::libc::EINVAL));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "owned child terminated by signal {} during admission",
+                nix::libc::SIGRTMIN()
+            )
+        );
         let revoked = child.waiter.is_reaped();
         assert!(revoked, "decoder failure left a reaped numeric PID owned");
         let raw = child

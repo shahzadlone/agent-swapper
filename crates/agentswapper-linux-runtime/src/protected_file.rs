@@ -13,6 +13,7 @@ const DIRECTORY: OFlags = OFlags::RDONLY
 const FILE: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC)
     .union(OFlags::NOFOLLOW)
+    .union(OFlags::NOCTTY)
     .union(OFlags::NONBLOCK);
 fn require(ok: bool, message: &str) -> io::Result<()> {
     if ok {
@@ -58,7 +59,8 @@ pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
         protected_directory(&directory)?;
     }
     // Resolve each component from an already validated directory handle.
-    // NONBLOCK prevents a substituted FIFO from blocking before fstat.
+    // NONBLOCK prevents a FIFO from blocking before fstat. NOCTTY prevents
+    // opening a terminal device from acquiring process-wide terminal ownership.
     let file = openat(&directory, leaf.as_os_str(), FILE, Mode::empty())?;
     let stat = fstat(&file)?;
     require(
@@ -68,4 +70,83 @@ pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
         "installed file is not a root-owned protected regular file",
     )?;
     Ok(file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        os::unix::ffi::OsStrExt,
+        process::{Command, Stdio},
+        time::Duration,
+    };
+    use wait_timeout::ChildExt;
+
+    fn no_controlling_terminal() -> io::Result<()> {
+        let stat = std::fs::read_to_string("/proc/self/stat")?;
+        let tty = stat
+            .rsplit_once(") ")
+            .and_then(|(_, rest)| rest.split_whitespace().nth(4));
+        require(
+            tty == Some("0"),
+            "installed-file refusal acquired a controlling terminal",
+        )
+    }
+
+    #[test]
+    #[ignore = "fresh session role invoked by refuses_device_without_acquiring_terminal"]
+    fn terminal_refusal_process() -> io::Result<()> {
+        require(
+            std::env::var("ASWP_TEST_INSTALLED_FILE_SESSION").as_deref() == Ok("1"),
+            "missing isolated test role",
+        )?;
+        rustix::process::setsid()?;
+        no_controlling_terminal()?;
+        let master = rustix::pty::openpt(
+            rustix::pty::OpenptFlags::RDWR
+                | rustix::pty::OpenptFlags::NOCTTY
+                | rustix::pty::OpenptFlags::CLOEXEC,
+        )?;
+        rustix::pty::grantpt(&master)?;
+        rustix::pty::unlockpt(&master)?;
+        let name = rustix::pty::ptsname(&master, Vec::new())?;
+        let path = Path::new(std::ffi::OsStr::from_bytes(name.as_bytes()));
+        let error = crate::installed_config::ProtectedConfig::open(path)
+            .err()
+            .ok_or_else(|| io::Error::other("terminal was accepted as installed data"))?;
+        require(
+            error.to_string() == "installed file is not a root-owned protected regular file",
+            "terminal test did not reach the leaf type refusal",
+        )?;
+        // Keep the master alive while checking: closing it would obscure the
+        // unwanted acquisition by hanging up the newly acquired terminal.
+        no_controlling_terminal()
+    }
+
+    #[test]
+    fn refuses_device_without_acquiring_terminal() -> io::Result<()> {
+        let role = format!(
+            "{}::terminal_refusal_process",
+            module_path!()
+                .split_once("::")
+                .map_or(module_path!(), |(_, path)| path)
+        );
+        let mut child = Command::new(std::env::current_exe()?)
+            .args(["--exact", &role, "--ignored"])
+            .env_clear()
+            .env("ASWP_TEST_INSTALLED_FILE_SESSION", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let status = child.wait_timeout(Duration::from_secs(5))?;
+        if status.is_none() {
+            child.kill()?;
+            child.wait()?;
+        }
+        require(
+            status.is_some_and(|status| status.success()),
+            "isolated terminal refusal failed",
+        )
+    }
 }
