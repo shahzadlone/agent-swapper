@@ -248,9 +248,11 @@ No new advisory or licensing exception was added.
 The separate `tools/linux-manager-evaluation` workspace pins `nix = 0.31.3`
 (MIT, only `socket` enabled) for `SO_PEERCRED`, and `unix-ancillary = 0.6.1`
 (MIT, default features disabled) for credential-bearing packet receive. Root
-workspace dependencies are unchanged. These add three locked packages to the
-evaluation graph: nix, unix-ancillary and nix's build-time cfg_aliases; their
-other dependencies were already locked.
+workspace runtime dependencies are unchanged; the later journal integration
+adds this client only as a Linux development dependency. The original isolated
+checkpoint added three locked packages to its evaluation graph: nix,
+unix-ancillary and nix's build-time cfg_aliases; their other dependencies were
+already locked.
 
 This avoids the credential PID representation in rustix 1.1.6, which embeds a
 nonzero integer even though the kernel can supply PID zero. See
