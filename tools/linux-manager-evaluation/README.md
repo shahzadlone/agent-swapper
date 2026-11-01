@@ -189,3 +189,7 @@ suspend/resume and production provider execution remain separate gates.
 The independent `exec_event` example evaluates kernel final-exec observation
 using only its own fixed child. It neither activates a service nor changes the
 PTY protocol. See [the experiment and limits](../../docs/linux-exec-confirmation.md).
+
+The companion `exec_identity` example measures a read-only procfs alternative,
+including fast exits that cannot be positively observed. Both remain isolated
+experiments; neither selects a production execution mechanism.

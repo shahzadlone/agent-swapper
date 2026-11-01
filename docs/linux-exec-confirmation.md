@@ -71,10 +71,34 @@ exec stop, where their narrower assertions can be tested.
 The review also proposes comparing a read-only executable-identity check after
 status-pipe EOF. A changed image can offer positive evidence without tracing,
 but a fast exit, an inaccessible image or re-exec of the same image leaves it
-unresolved, and the process is not held before target instructions. That
-comparison has not been implemented or selected. Further choices include
+unresolved, and the process is not held before target instructions. The
+comparison below is implemented as a separate experiment. Further choices include
 whether to journal exec observation before detach and whether a later guardian
 uses TRACEME or SEIZE. The present example is not a generic launch API.
+
+## Read-only comparison
+
+The separate [exec_identity example](../tools/linux-manager-evaluation/examples/exec_identity.rs)
+waits for the fixed shim's private descriptor to close, then opens the owned,
+unreaped child's executable through procfs with `O_PATH`. It compares device
+and inode with the gated shim's original image. Closure alone is never a
+positive result. Unchanged identity and expected unavailable/inaccessible-image
+errors remain unresolved; other errors fail the experiment.
+
+One live target uses a private copy of the same fixed executable, giving it a
+different inode; another re-execs the original file. The live targets wait at
+a bounded fixture barrier until the observer finishes. Separate controls exit
+before exec, receive SIGKILL before GO, or attempt a missing image. No arbitrary
+provider program, external PID or account data is accepted.
+
+Locally, the distinct live image was observed; same-image exec and all three
+negative controls remained unresolved. All 25 fast-target trials also remained
+unresolved. Fast results are reported as counts rather than asserting a timing-
+dependent success rate. They characterize this observer's availability in the
+controlled fixture, not its general soundness under adversarial scheduling.
+Native Ubuntu comparison results remain pending. This pathname-based observer
+is not the production retained-procfs binding and supplies no custody receipt,
+journal transition, readiness guarantee or fallback policy.
 
 Run the fixed local experiment with:
 
