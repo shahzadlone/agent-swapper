@@ -378,3 +378,26 @@ Local checks pass ten manager tests and 49 consumer tests with strict Clippy.
 The new refusal tests cover invalid identity bounds and every observed identity
 component, including a consistent replacement invocation. The complete native
 terminal/admission matrix must qualify the changed query path; that run is pending.
+
+## Loaded service lifecycle policy
+
+The shared manager crate now checks the loaded service lifecycle through the
+already bound invocation path. The snapshot consumer requires Type=exec, an
+empty PIDFile, NotifyAccess=none, RemainAfterExit=false and an empty PAMName.
+The first four checks preserve the existing policy; the explicit PAM read closes
+a gap between the fixed template's intended policy and the observer's checks.
+UID, cgroup, delegation, kill mode, installed assets and original kernel handles
+remain separately required by the surrounding snapshot.
+
+PAM sessions can move child processes into another session scope, as documented
+by [systemd.exec](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#PAMName=).
+The property is present in the older qualified manager generation too; see
+[systemd v249's property declaration](https://github.com/systemd/systemd/blob/v249/src/core/dbus-execute.c#L1079).
+The test rejects indirect PID ownership, notification ownership, retained-active
+state and PAM sessions, including a nonempty whitespace value. No PAM service
+is installed or activated for these local controls.
+
+Local validation passes eleven manager tests and 49 evaluation tests, strict
+manager/consumer Clippy and the dependency-boundary check. Native qualification
+of the new property read remains pending. The shared check grants no production
+launch or Store completion authority.

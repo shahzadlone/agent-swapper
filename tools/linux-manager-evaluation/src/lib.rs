@@ -205,31 +205,7 @@ async fn snapshot(
     let kill_mode =
         String::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "KillMode").await?)
             .map_err(io::Error::other)?;
-    let service_type =
-        String::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "Type").await?)
-            .map_err(io::Error::other)?;
-    let pid_file =
-        String::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "PIDFile").await?)
-            .map_err(io::Error::other)?;
-    let notify = String::try_from(
-        property(connection, owner, &path, SERVICE_INTERFACE, "NotifyAccess").await?,
-    )
-    .map_err(io::Error::other)?;
-    let remain = bool::try_from(
-        property(
-            connection,
-            owner,
-            &path,
-            SERVICE_INTERFACE,
-            "RemainAfterExit",
-        )
-        .await?,
-    )
-    .map_err(io::Error::other)?;
-    require(
-        service_type == "exec" && pid_file.is_empty() && notify == "none" && !remain,
-        "fixture service lifecycle differs from direct manager-owned execution",
-    )?;
+    manager::require_direct_lifecycle(connection, owner, &path).await?;
     let last = Vec::<u8>::try_from(
         property(connection, owner, &path, UNIT_INTERFACE, "InvocationID").await?,
     )
