@@ -24,6 +24,29 @@ impl Drop for Control {
     }
 }
 
+struct RuntimeGuard(Option<tokio::runtime::Runtime>);
+impl RuntimeGuard {
+    fn new() -> io::Result<Self> {
+        Ok(Self(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
+        )))
+    }
+    fn get(&self) -> io::Result<&tokio::runtime::Runtime> {
+        self.0
+            .as_ref()
+            .ok_or_else(|| io::Error::other("fixture runtime is closed"))
+    }
+}
+impl Drop for RuntimeGuard {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 struct Session {
     control: Control,
     connection: Option<Connection>,
@@ -32,18 +55,15 @@ struct Session {
     binding: kernel::Binding,
     child: Option<kernel::Child>,
     deadline: Instant,
-    runtime: Option<tokio::runtime::Runtime>,
+    runtime: RuntimeGuard,
     _same_thread: PhantomData<Rc<()>>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
         drop(std::mem::replace(&mut self.control, Control(None)));
-        if let Some(runtime) = self.runtime.take() {
-            {
-                let _entered = runtime.enter();
-                drop(self.connection.take());
-            }
-            runtime.shutdown_background();
+        if let Some(runtime) = self.runtime.0.as_ref() {
+            let _entered = runtime.enter();
+            drop(self.connection.take());
         } else {
             drop(self.connection.take());
         }
@@ -66,9 +86,7 @@ impl Session {
     }
     fn runtime(&self) -> io::Result<&tokio::runtime::Runtime> {
         outside_runtime()?;
-        self.runtime
-            .as_ref()
-            .ok_or_else(|| io::Error::other("fixture runtime is closed"))
+        self.runtime.get()
     }
     fn connection(&self) -> io::Result<&Connection> {
         self.connection
@@ -154,6 +172,8 @@ pub struct Prepared {
 }
 pub struct Running(Session);
 pub struct Closed(Session);
+/// Independent read-only witness; it never owns a copy of the activation socket.
+pub struct Witness(Session);
 
 /// A failed transition retains the original witnesses for explicit retirement.
 pub struct TransitionFailure {
@@ -268,10 +288,8 @@ impl Bound {
                 fragment: format!("/run/systemd/system/{prefix}@.service"),
             },
         };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let (connection, owner, report, binding) = runtime.block_on(async {
+        let runtime = RuntimeGuard::new()?;
+        let (connection, owner, report, binding) = runtime.get()?.block_on(async {
             tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
                 crate::admit(paths, Some(expected)),
@@ -282,10 +300,9 @@ impl Bound {
         let (unit, binding) = match (report.unit, binding) {
             (Some(unit), Some(binding)) => (unit, binding),
             _ => {
-                runtime.block_on(async {
+                runtime.get()?.block_on(async {
                     let _ = tokio::time::timeout(Duration::from_secs(2), connection.close()).await;
                 });
-                runtime.shutdown_background();
                 return Err(io::Error::other(
                     "fixture admission lacks unit or kernel binding",
                 ));
@@ -299,7 +316,7 @@ impl Bound {
             binding,
             child: None,
             deadline,
-            runtime: Some(runtime),
+            runtime,
             _same_thread: PhantomData,
         }))
     }
@@ -338,6 +355,83 @@ impl Bound {
     }
 }
 
+impl Witness {
+    /// Claims select an observation only. Manager and kernel facts must match
+    /// before this instance can observe retirement of the original invocation.
+    pub fn bind(prefix: &str, claimed: &Identity, child_pid: u32) -> io::Result<Self> {
+        outside_runtime()?;
+        fixture_policy::gate(prefix)?;
+        require(
+            std::env::var("ASWP_CI_ACTIVATED_JOURNAL").as_deref() == Ok("1"),
+            "independent witness requires the activated journal fixture",
+        )?;
+        require(
+            fixture_policy::valid_scope_unit(&claimed.unit)
+                && claimed.unit.starts_with(&format!("{prefix}@"))
+                && crate::valid_invocation(&claimed.invocation)
+                && claimed.guardian_pid > 1,
+            "invalid independent witness claims",
+        )?;
+        let paths = crate::prerequisites()?;
+        let expected = Expected {
+            unit: claimed.unit.clone(),
+            user: rustix::process::getuid().as_raw(),
+            pid: claimed.guardian_pid,
+            invocation: Some(claimed.invocation.clone()),
+            kind: UnitKind::Activated {
+                fragment: format!("/run/systemd/system/{prefix}@.service"),
+            },
+        };
+        let runtime = RuntimeGuard::new()?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let (connection, owner, report, binding) = runtime.get()?.block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                crate::admit(paths, Some(expected)),
+            )
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "independent witness binding expired",
+                )
+            })?
+        })?;
+        let (unit, binding) = match (report.unit, binding) {
+            (Some(unit), Some(binding)) => (unit, binding),
+            _ => {
+                runtime.get()?.block_on(async {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), connection.close()).await;
+                });
+                return Err(io::Error::other(
+                    "independent admission lacks unit or kernel binding",
+                ));
+            }
+        };
+        let mut session = Session {
+            control: Control(None),
+            connection: Some(connection),
+            owner,
+            unit,
+            binding,
+            child: None,
+            deadline,
+            runtime,
+            _same_thread: PhantomData,
+        };
+        session.child = Some(session.binding.child(child_pid, claimed.guardian_pid)?);
+        require(
+            identity(&session) == *claimed,
+            "independent manager/kernel facts differ from claims",
+        )?;
+        session.recheck()?;
+        Ok(Self(session))
+    }
+    pub fn retire(self) -> Result<Retired, RetireFailure> {
+        self.0.close().retire()
+    }
+}
+
 impl Prepared {
     pub fn pid(&self) -> u32 {
         self.pid
@@ -363,6 +457,16 @@ impl Prepared {
         if let Err(error) = self.session.recheck() {
             return Err(StartFailure {
                 cause: StartCause::Transport(error),
+                live_at_refusal: None,
+                closed: Box::new(self.session.close()),
+            });
+        }
+        if Instant::now() >= self.session.deadline {
+            return Err(StartFailure {
+                cause: StartCause::Transport(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "journal callback deadline expired",
+                )),
                 live_at_refusal: None,
                 closed: Box::new(self.session.close()),
             });
@@ -402,6 +506,25 @@ impl Running {
     pub fn close(self) -> Closed {
         self.0.close()
     }
+
+    /// Hosted fixture fault injection using only the original retained pidfd.
+    pub fn crash_guardian(self) -> Result<Closed, TransitionFailure> {
+        let result = (|| {
+            require(
+                std::env::var("ASWP_CI_ACTIVATED_JOURNAL").as_deref() == Ok("1"),
+                "guardian fault injection requires the activated journal fixture",
+            )?;
+            self.0.recheck()?;
+            self.0.binding.kill_guardian_for_fixture()
+        })();
+        match result {
+            Ok(()) => Ok(self.0.close()),
+            Err(error) => Err(TransitionFailure {
+                error,
+                closed: Box::new(self.0.close()),
+            }),
+        }
+    }
 }
 impl Closed {
     /// Observation failure retains the witnesses for retry. Connection-close
@@ -429,12 +552,14 @@ impl Closed {
             });
         }
         let closed = (|| -> io::Result<()> {
+            outside_runtime()?;
+            let runtime = self.0.runtime.get()?;
             let connection = self
                 .0
                 .connection
                 .take()
                 .ok_or_else(|| io::Error::other("manager connection is closed"))?;
-            self.0.runtime()?.block_on(async {
+            runtime.block_on(async {
                 tokio::time::timeout(Duration::from_secs(2), connection.close())
                     .await
                     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "manager close expired"))?
@@ -452,6 +577,29 @@ impl Closed {
 mod tests {
     use super::*;
     use std::os::fd::AsFd;
+
+    #[test]
+    fn runtime_guard_drops_inside_another_runtime_without_waiting_for_blocking_work()
+    -> io::Result<()> {
+        let runtime = RuntimeGuard::new()?;
+        let (ready, started) = std::sync::mpsc::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let worker = runtime.get()?.spawn_blocking(move || {
+            let _ = ready.send(());
+            held.recv_timeout(Duration::from_secs(3))
+        });
+        started
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(io::Error::other)?;
+        let outer = tokio::runtime::Builder::new_current_thread().build()?;
+        outer.block_on(async {
+            drop(runtime);
+        });
+        // A blocking destructor could not get here until the receive expired.
+        release.send(()).map_err(io::Error::other)?;
+        drop(worker);
+        Ok(())
+    }
 
     #[test]
     fn prepared_packets_bind_version_sender_invocation_and_child() -> io::Result<()> {
@@ -510,6 +658,24 @@ mod tests {
         drop(Control(Some(client)));
         assert!(transport::eof(&guardian)?);
         assert!(rustix::net::send(&duplicate, b"x", rustix::net::SendFlags::NOSIGNAL).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_control_drop_wakes_the_start_gate_as_withdrawal() -> io::Result<()> {
+        let (client, guardian) = transport::pair()?;
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(Control(Some(client)));
+        });
+        let error =
+            journal_protocol::receive_start(&guardian, Instant::now() + Duration::from_secs(1))
+                .err()
+                .ok_or_else(|| io::Error::other("dropped control unexpectedly started writer"))?;
+        closer
+            .join()
+            .map_err(|_| io::Error::other("control closer panicked"))?;
+        assert!(journal_protocol::is_withdrawal(&error));
         Ok(())
     }
 

@@ -451,3 +451,77 @@ fixed-writer control; journal-order claims apply to ADMIT only.
 
 This follow-up passes local protocol tests and strict Clippy. Its revised
 native tests and focused withdrawal/ordering follow-up review remain pending.
+
+### Abrupt-loss checkpoint under qualification
+
+The next hosted trials kill the original guardian through its retained pidfd,
+and kill an independently spawned client with SIGKILL. The latter controller
+never receives a copy of the activation socket. It authenticates its own
+read-only manager/cgroup/process witnesses before the fault, rejecting wrong
+invocation, directory identity and child claims. Each trial verifies a live
+writer before the fault, original-scope retirement and lease release afterwards,
+and continued journal refusal after reopening. Guardian-loss must lack a clean
+EOF marker; client-loss requires guardian EOF handling without any client
+cleanup. Both native manager jobs passed all four journal tests at `45cd72b` in
+[run 41264264431](https://github.com/shahzadlone/agent-swapper/actions/runs/41264264431).
+The coordinator requires exactly one passed test for each requested case.
+Focused review and the remaining platform/packaging checks are pending. No production custody receipt is added.
+
+### Abrupt-loss review follow-up
+
+The focused Opus review of `45cd72b` confirmed retained-pidfd signalling, owned
+unreaped-child signalling and independent witnesses without a socket copy.
+The follow-up checks lock release in the original open store, requires the EOF
+marker to be absent immediately before client SIGKILL, matches specific
+identity-refusal errors and adds the guardian-as-writer case to isolate the
+PPid check. Reports now live beside the store, and failed fault injection
+explicitly attempts retirement before reporting the original failure.
+
+A runtime owner now uses nonblocking shutdown from construction onward;
+post-admission claim validation runs only after the Session owns the connection
+and witnesses. A local test drops it from inside another runtime while blocking
+work is held. This covers failed independent binding as well as normal teardown.
+
+The test harness starts a new session for each fixed cargo/test/client group.
+A ninety-second outer timeout kills that owned group and preserves partial
+output; manager-owned workers remain separately bounded and are stopped by
+fixture teardown. A local grandchild/pidfd regression verifies the timeout's
+process and diagnostic behavior. This is fixture orchestration, not a general
+process-containment claim.
+
+Exit attribution remains deliberately limited. The template already collects
+failed instances, and retirement requires disappearance of the original scope
+plus pidfd exit and authenticated manager retirement. A collected service does
+not retain an authoritative `ExecMainStatus` for later observation. The test
+therefore reports a SIGKILL request through the retained pidfd followed by
+observed retirement; it does not claim a recovered manager exit status or prove
+that no concurrent error could have preceded the signal. The EOF marker means
+the guardian reached that protocol path, not that systemd recorded exit zero.
+The fixed writer sets no parent-death signal. No `SuccessExitStatus=KILL` or
+weaker retirement policy is introduced to make the tests pass.
+
+Local verification passes 33 client tests, 22 binary tests, 12 Python guards and
+strict Clippy. Native validation of these later changes remains pending.
+
+### Scoped withdrawal review and wake-up checks
+
+Opus's follow-up review of `2f87dc8` returned no must-fix finding for the supplied
+withdrawal peek, callback ordering and retryable-retirement mechanisms. The
+runtime entry check and admission deadline already run through `recheck`;
+the follow-up also checks the deadline immediately before the journal callback
+and obtains the runtime before taking the connection for final close.
+
+New local tests cover delayed full closure, the actual Control destructor
+waking the GO wait, GO queued immediately before full close, and timeout/socket
+policy restoration on refusal paths. They pass with the existing framing,
+empty-record and transferred-capability tests: 35 client tests and 23 binary
+tests, plus strict Clippy. Retirement still never resolves the journal, and a
+send-stage error remains possibly delivered because socket-option restoration
+can fail after the packet was queued.
+
+Both Ubuntu manager jobs passed the reviewed journal follow-up at `2f87dc8`
+([run 41265192617](https://github.com/shahzadlone/agent-swapper/actions/runs/41265192617))
+and the subsequent crash/harness follow-up at `60d67bb`
+([run 41265660485](https://github.com/shahzadlone/agent-swapper/actions/runs/41265660485)).
+Their remaining platform/packaging results, and the latest small wake-up
+follow-up, are tracked separately before integration.
