@@ -97,3 +97,35 @@ service template or manifest. All artifacts are inert and never executed.
 Local runtime tests, positive and negative API doctests, strict runtime/evaluator
 Clippy, dependency boundaries and harness refusal tests pass. Native results for
 the full-set controls are pending.
+
+## Protected generation selection
+
+`SelectedInstallation::open` reads
+`/etc/agentswapper/installations/<current-uid>/active.json`. It accepts no path,
+UID or generation override and requires matching real/effective ordinary UID
+and primary GID. The bounded, mode-0644 protected selector has exactly two
+fields: `schema: 1` and a nonzero 32-character lowercase hexadecimal `generation`.
+Unknown or duplicate fields, path-like strings and incompatible schemas refuse
+without echoing their contents.
+
+The selected generation determines the manifest and all five artifacts. The
+selector is retained and rechecked around artifact validation. Missing or
+incompatible generations fail; the reader does not try another generation or
+fall back to uncontained execution. A selector update during admission refuses,
+including replacement with identical contents. This is metadata admission under
+a trusted namespace, not permission to launch a process.
+
+After admission, `into_artifacts` performs a final recheck and transfers the
+admitted generation to its active-run owner. That owner must retain those
+artifacts instead of selecting a newer generation during a live run. An eventual
+installer must keep old assets while admitted runs still need them. No installer,
+upgrade transaction, active-run transition or managed production launcher is
+implemented by this reader.
+
+The hosted matrix adds ten selection controls: valid selection, path-like
+generation, unknown/duplicate fields, absent generation, incompatible manifest
+version, replaced selector, replaced manifest, changed guardian and a switch
+to a second complete valid generation while the first observation is held.
+Custom fixture layouts remain qualification-only. Local runtime tests and
+thirteen API doctests, strict runtime/evaluator Clippy, dependency boundaries
+and harness refusal tests pass; native selection qualification is pending.

@@ -3,6 +3,7 @@
 use agentswapper_linux_runtime::{
     installed_artifacts::InstalledArtifacts, installed_config::ProtectedConfig,
     installed_image::ProtectedImage, installed_manifest::InstalledManifest,
+    installed_selection::SelectedInstallation,
 };
 use std::{
     io::{self, Read, Write},
@@ -83,6 +84,17 @@ fn run() -> io::Result<()> {
                 hold()?;
             }
             artifacts.require_current()?;
+        }
+        [_, mode, path] if mode == "--selection" || mode == "--selection-recheck" => {
+            let directory = Path::new(path)
+                .parent()
+                .ok_or_else(|| io::Error::other("missing fixture directory"))?;
+            let selection = SelectedInstallation::open_for_qualification(directory)?;
+            if mode == "--selection-recheck" {
+                hold()?;
+            }
+            selection.require_current()?;
+            selection.into_artifacts()?.require_current()?;
         }
         [_, mode, path] if mode == "--config-recheck" => {
             let config = ProtectedConfig::open(Path::new(path))?;

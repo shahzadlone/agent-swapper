@@ -45,6 +45,9 @@ fn hex(value: &str, length: usize) -> bool {
 fn ordinary(user: u32, group: u32) -> bool {
     user != 0 && group != 0 && user <= i32::MAX as u32 && group <= i32::MAX as u32
 }
+pub(crate) fn valid_generation(value: &str) -> bool {
+    hex(value, 32)
+}
 impl Document {
     fn parse(bytes: &[u8], user: u32, group: u32, generation: &str) -> io::Result<Self> {
         if bytes.len() > 16 * 1024 || !ordinary(user, group) || !hex(generation, 32) {

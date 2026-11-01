@@ -44,6 +44,16 @@ CASES = {
     'bundle-guardian-replaced': 'installed image changed since admission began',
     'bundle-template-replaced': 'installed configuration changed since admission began',
     'bundle-manifest-replaced': 'installed configuration changed since admission began',
+    'selection-protected': None,
+    'selection-path': 'installed generation selector is invalid',
+    'selection-unknown': 'installed generation selector is invalid',
+    'selection-duplicate': 'installed generation selector is invalid',
+    'selection-missing-generation': '(os error 2)',
+    'selection-version': 'installed manifest is invalid or incompatible',
+    'selection-selector-replaced': 'installed configuration changed since admission began',
+    'selection-manifest-replaced': 'installed configuration changed since admission began',
+    'selection-guardian-modified': 'installed image changed since admission began',
+    'selection-generation-switch': 'installed configuration changed since admission began',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
@@ -60,6 +70,25 @@ BUNDLE_FILES = {
     'template': ('fixture@.service', 'service_template_sha256', 0o644),
     'socket': ('fixture.socket', 'socket_unit_sha256', 0o644),
 }
+
+
+GENERATION = '00112233445566778899aabbccddeeff'
+NEXT_GENERATION = '112233445566778899aabbccddeeff00'
+
+
+def write_generation(base, generation, version, uid, gid):
+    directory = base / generation
+    directory.mkdir(mode=0o755)
+    document = dict(schema=1, protocol=1, version=version, generation=generation, user=uid, group=gid)
+    for name, (filename, field, mode) in BUNDLE_FILES.items():
+        payload = ('owned inert ' + name + '\n').encode()
+        document[field] = hashlib.sha256(payload).hexdigest()
+        asset = directory / filename
+        asset.write_bytes(payload)
+        asset.chmod(mode)
+    manifest = base / (generation + '.json')
+    manifest.write_text(json.dumps(document))
+    manifest.chmod(0o644)
 
 
 def require(ok, message):
@@ -111,6 +140,12 @@ def retained_asset_control(command, image, case):
                             'bundle-template-replaced': 'fixture@.service',
                             'bundle-manifest-replaced': 'image'}[case]
                 image = image.with_name(selected)
+            elif case.startswith('selection-'):
+                selected = {'selection-selector-replaced': 'active.json',
+                            'selection-manifest-replaced': GENERATION + '.json',
+                            'selection-guardian-modified': GENERATION + '/guardian',
+                            'selection-generation-switch': 'active.json'}[case]
+                image = image.parent / selected
             if case.endswith('-replaced'):
                 replacement = image.with_name('replacement')
                 replacement.write_bytes(image.read_bytes())
@@ -118,8 +153,10 @@ def retained_asset_control(command, image, case):
                 require(replacement.stat().st_ino != image.stat().st_ino,
                         'replacement control needs a distinct inode')
                 replacement.replace(image)
-            elif case in ('config-modified', 'image-modified'):
+            elif case in ('config-modified', 'image-modified', 'selection-guardian-modified'):
                 image.write_bytes(b'changed owned configuration\n')
+            elif case == 'selection-generation-switch':
+                image.write_text(json.dumps(dict(schema=1, generation=NEXT_GENERATION)))
             elif case in ('config-mode-changed', 'image-mode-changed'):
                 image.chmod(0o664)
             stdout, stderr = child.communicate(b'R', timeout=5)
@@ -134,7 +171,7 @@ def mounted_case(case, binary, uid, gid):
     private_namespace()
     require(case in CASES, 'unknown image fixture case')
     version = os.environ.get('ASWP_CI_IMAGE_PACKAGE_VERSION', '')
-    if case.startswith(('manifest-', 'bundle-')):
+    if case.startswith(('manifest-', 'bundle-', 'selection-')):
         require(re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', version), 'invalid fixture package version')
     base = Path(tempfile.mkdtemp(prefix='aswp-image-mount-', dir='/run'))
     original = base.stat(follow_symlinks=False)
@@ -152,6 +189,23 @@ def mounted_case(case, binary, uid, gid):
         # These inert bytes are never executed. The probe checks metadata/content.
         image.write_bytes(b'owned image-policy fixture\n')
         image.chmod(0o644 if case.startswith(('config-', 'manifest-', 'bundle-')) and case != 'config-executable' else 0o755)
+        if case.startswith('selection-'):
+            write_generation(base, GENERATION, 'incompatible' if case == 'selection-version' else version, uid, gid)
+            document = dict(schema=1, generation=GENERATION)
+            if case == 'selection-path':
+                document['generation'] = '../outside'
+            elif case == 'selection-unknown':
+                document['unexpected'] = 'selector-private-canary'
+            elif case == 'selection-missing-generation':
+                document['generation'] = NEXT_GENERATION
+            elif case == 'selection-generation-switch':
+                write_generation(base, NEXT_GENERATION, version, uid, gid)
+            contents = json.dumps(document)
+            if case == 'selection-duplicate':
+                contents = '{"schema":1,' + contents[1:]
+            selector = base / 'active.json'
+            selector.write_text(contents)
+            selector.chmod(0o644)
         if case.startswith(('manifest-', 'bundle-')):
             document = dict(schema=1, protocol=1, version=version, generation='00112233445566778899aabbccddeeff',
                             user=uid, group=gid, guardian_sha256='a'*64, session_helper_sha256='b'*64,
@@ -201,11 +255,16 @@ def mounted_case(case, binary, uid, gid):
             role = '--manifest-probe'
         if case.startswith('bundle-'):
             role = '--bundle-probe'
+        if case.startswith('selection-'):
+            role = '--selection-probe'
         retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed',
                            'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed',
-                           'bundle-guardian-replaced', 'bundle-template-replaced', 'bundle-manifest-replaced')
+                           'bundle-guardian-replaced', 'bundle-template-replaced', 'bundle-manifest-replaced',
+                           'selection-selector-replaced', 'selection-manifest-replaced',
+                           'selection-guardian-modified', 'selection-generation-switch')
         if retained:
-            role = ('--bundle-recheck-probe' if case.startswith('bundle-') else
+            role = ('--selection-recheck-probe' if case.startswith('selection-') else
+                    '--bundle-recheck-probe' if case.startswith('bundle-') else
                     '--config-recheck-probe' if case.startswith('config-') else '--image-recheck-probe')
         elif case.startswith('config-digest'):
             role = '--config-digest-probe'
@@ -222,9 +281,9 @@ def mounted_case(case, binary, uid, gid):
             require(result.returncode == 125 and not result.stdout
                     and expected.encode() in result.stderr,
                     f'{case}: image did not refuse at intended check: ' + result.stderr.decode(errors='replace'))
-            if expected == 'installed manifest is invalid or incompatible':
-                require(result.stderr == b'installed-asset: installed manifest is invalid or incompatible\n',
-                        'manifest refusal echoed untrusted content')
+            if expected in ('installed manifest is invalid or incompatible', 'installed generation selector is invalid'):
+                require(result.stderr == ('installed-asset: ' + expected + '\n').encode(),
+                        'installed data refusal echoed untrusted content')
         print(f'::notice title=Linux image policy::{case}: pass; probe ran as ordinary user and never executed the image', flush=True)
     finally:
         if mounted:
@@ -243,7 +302,8 @@ def main():
     modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck', '--manifest-probe': '--manifest',
              '--config-digest-probe': '--config-digest', '--image-digest-probe': '--image-digest',
              '--image-recheck-probe': '--image-recheck', '--bundle-probe': '--bundle',
-             '--bundle-recheck-probe': '--bundle-recheck'}
+             '--bundle-recheck-probe': '--bundle-recheck', '--selection-probe': '--selection',
+             '--selection-recheck-probe': '--selection-recheck'}
     if len(args) == 5 and args[0] in ('--inside', '--probe', *modes):
         private_namespace()
         role, first, second, uid, gid = args

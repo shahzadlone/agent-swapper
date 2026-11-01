@@ -10,7 +10,7 @@ class RefusalTests(unittest.TestCase):
     def test_manifest_without_a_version_never_creates_or_mounts(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(probe, 'private_namespace'), \
                 patch.object(probe.subprocess, 'run') as run, patch.object(probe.tempfile, 'mkdtemp') as create:
-            for case in ('manifest-protected', 'bundle-protected'):
+            for case in ('manifest-protected', 'bundle-protected', 'selection-protected'):
                 with self.subTest(case=case), self.assertRaisesRegex(RuntimeError, 'invalid fixture package version'):
                     probe.mounted_case(case, '/usr/bin/true', 1001, 1001)
             run.assert_not_called()
