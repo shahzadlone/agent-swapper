@@ -564,6 +564,14 @@ def suite():
                 print('::notice title=Linux activated journal qualification::'
                       + '; '.join(passed)
                       + ': each passed exactly once with real Store and retained witnesses', flush=True)
+                relay = Path(__file__).resolve().parent / 'linux-manager-evaluation/target/debug/examples/managed_terminal_relay'
+                result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
+                                        str(relay)], environment=test_env)
+                print(result.stdout[-16000:], end='', flush=True)
+                print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
+                require(result.returncode == 0 and result.stdout.count(': pass') == 9,
+                        'managed relay did not pass all nine owned-PTY cases: '
+                        + (result.stdout + result.stderr)[-4000:])
 
         finally:
             for connection in connections:

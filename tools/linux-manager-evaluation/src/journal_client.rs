@@ -181,6 +181,36 @@ pub struct Prepared {
     pid: u32,
 }
 pub struct Running(Session);
+/// Fixed-fixture control observations. Closed is transport loss, not a target
+/// exit receipt, successful exec observation, or permission to reuse a profile.
+#[derive(Debug, PartialEq, Eq)]
+pub enum JobEvent {
+    Pending,
+    Stopped(i32),
+    Closed,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum ControlReadiness {
+    Pending,
+    Packet,
+    Closed,
+}
+fn control_readiness(socket: impl AsFd) -> io::Result<ControlReadiness> {
+    let mut byte = [0_u8];
+    match rustix::net::recv(
+        &socket,
+        &mut byte,
+        rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT,
+    ) {
+        Ok((0, _)) => {
+            require(transport::eof(&socket)?, "empty job control record")?;
+            Ok(ControlReadiness::Closed)
+        }
+        Ok(_) => Ok(ControlReadiness::Packet),
+        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(ControlReadiness::Pending),
+        Err(error) => Err(error.into()),
+    }
+}
 pub struct Closed(Session);
 /// Independent read-only witness; it never owns a copy of the activation socket.
 pub struct Witness(Session);
@@ -600,6 +630,16 @@ impl Prepared {
     }
 }
 impl Running {
+    /// Nonblocking control readiness for the terminal relay. Stop packets still
+    /// pass the complete credential, invocation, sequence and live-child checks.
+    pub fn poll_job(&mut self) -> io::Result<JobEvent> {
+        require(self.0.job.is_some(), "session has no job-control protocol")?;
+        match control_readiness(self.0.socket()?)? {
+            ControlReadiness::Closed => Ok(JobEvent::Closed),
+            ControlReadiness::Packet => self.wait_stopped().map(JobEvent::Stopped),
+            ControlReadiness::Pending => Ok(JobEvent::Pending),
+        }
+    }
     /// Hosted hangup fault; the caller must also release any cloned master.
     /// The control connection remains open to distinguish terminal loss.
     pub fn close_terminal_for_fixture(&mut self) -> io::Result<()> {
@@ -753,6 +793,32 @@ impl Closed {
 mod tests {
     use super::*;
     use std::os::fd::AsFd;
+
+    #[test]
+    fn relay_readiness_preserves_the_packet_before_reporting_shutdown() -> io::Result<()> {
+        let (sender, receiver) = transport::pair()?;
+        assert_eq!(control_readiness(&receiver)?, ControlReadiness::Pending);
+        transport::send(&sender, transport::GO, &[])?;
+        rustix::net::shutdown(&sender, rustix::net::Shutdown::Both)?;
+        assert_eq!(control_readiness(&receiver)?, ControlReadiness::Packet);
+        transport::receive_control(&receiver, transport::GO)?;
+        assert_eq!(control_readiness(&receiver)?, ControlReadiness::Closed);
+        Ok(())
+    }
+
+    #[test]
+    fn relay_readiness_refuses_empty_records_even_after_peer_shutdown() -> io::Result<()> {
+        for closed in [false, true] {
+            let (sender, receiver) = transport::pair()?;
+            rustix::net::send(&sender, b"", rustix::net::SendFlags::empty())?;
+            if closed {
+                rustix::net::shutdown(&sender, rustix::net::Shutdown::Both)?;
+            }
+            assert!(control_readiness(&receiver).is_err());
+            assert!(!rustix::net::sockopt::socket_passcred(&receiver)?);
+        }
+        Ok(())
+    }
 
     #[test]
     fn stop_notices_bind_sender_job_nonce_and_monotonic_sequence() -> io::Result<()> {

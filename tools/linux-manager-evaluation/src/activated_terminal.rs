@@ -222,6 +222,17 @@ pub(crate) fn target(
     let mut descendant = None;
     loop {
         match line(io::stdin().as_fd(), deadline)?.as_slice() {
+            b"finish" if guardian_session => {
+                output.write_all("FINAL:\u{1b}[34m→\u{1b}[0m\n".as_bytes())?;
+                output.flush()?;
+                return Ok(());
+            }
+            b"flood" if guardian_session => {
+                fs::write(directory.join("flood-started"), "fixed 1 MiB")?;
+                for _ in 0..256 {
+                    output.write_all(&[b'x'; 4096])?;
+                }
+            }
             b"nested" if guardian_session => {
                 crate::activated_nested_terminal::run(prefix, directory, &mut output)?;
             }

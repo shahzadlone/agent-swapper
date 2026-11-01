@@ -36,9 +36,10 @@ direct cases compare every termios field and control character.
 
 This is a fixed command probe, not a transparent byte relay. It intentionally
 requires matching terminal streams and a fresh signal state. General redirected
-streams, composition with an already multithreaded CLI, master-close behavior,
-restoration after uncatchable process death, and the combined inner/outer
-protocol remain unqualified. Both Ubuntu manager jobs and the complete
+streams and composition with an already multithreaded CLI remain unqualified.
+The [combined managed relay](linux-managed-terminal-relay.md) records its own
+qualified terminal-loss behavior and the direct client's SIGKILL restoration
+limit. Both Ubuntu manager jobs and the complete
 platform/package pipeline passed at `7ea68c4` in
 [run 41273387293](https://github.com/shahzadlone/agent-swapper/actions/runs/41273387293).
 Independent source review remains pending; this checkpoint qualifies the

@@ -211,3 +211,9 @@ raw-mode restoration, shell stop/bg/fg, orphaned-stop fallback and cancellation
 with a nonwritable output queue. See the
 [outer-terminal experiment](../../docs/linux-outer-terminal.md); it is not yet
 connected to an inner terminal or provider.
+
+The `managed_terminal_relay` example composes that terminal component with the
+fixed hosted guardian. It adds bounded byte relay, resize, authenticated inner
+stops and foreground-only resume. See the
+[combined relay experiment](../../docs/linux-managed-terminal-relay.md) for
+qualification results and the remaining production integration gates.

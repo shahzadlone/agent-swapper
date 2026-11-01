@@ -17,7 +17,7 @@ import time
 
 
 class OwnedPty:
-    def __init__(self, binary, root, shell=False, redirect=False):
+    def __init__(self, binary, root, shell=False, redirect=False, environment=None):
         self.root, self.binary, self.shell = root, binary, shell
         self.master, slave = pty.openpty()
         stat = os.fstat(slave)
@@ -45,6 +45,8 @@ class OwnedPty:
                 env = {'HOME': str(root), 'PATH': '/usr/bin:/bin', 'TERM': 'xterm-256color',
                        'LANG': 'C.UTF-8', 'ASWP_OWNED_OUTER_PTY': '1',
                        'HISTFILE': '/dev/null', 'PS1': '__ASWP_OUTER_PROMPT__ '}
+                if environment is not None:
+                    env.update(environment)
                 if shell:
                     os.execve('/bin/bash', ['bash', '--noprofile', '--norc', '-i'], env)
                 os.execve(binary, [str(binary), str(root)], env)
@@ -80,8 +82,8 @@ class OwnedPty:
                 self.status = status
         return self.status
 
-    def ready(self):
-        self.wait(lambda: b'OUTER-READY\r\n' in self.output and (self.root / 'ready').exists())
+    def ready(self, greeting=b'OUTER-READY\r\n'):
+        self.wait(lambda: greeting in self.output and (self.root / 'ready').exists())
         data = json.loads((self.root / 'ready').read_text())
         if self.shell:
             self.probe_fd = os.pidfd_open(data['pid'])
@@ -108,7 +110,8 @@ class OwnedPty:
             # Only the original unreaped child; no PID from a marker is killed.
             os.kill(self.pid, signal.SIGKILL)
             os.waitpid(self.pid, 0)
-        os.close(self.master)
+        if self.master is not None:
+            os.close(self.master)
 
 
 def direct(binary, scenario):
