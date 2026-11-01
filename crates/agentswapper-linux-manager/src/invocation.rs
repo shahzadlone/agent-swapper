@@ -1,7 +1,8 @@
 //! Authenticated invocation-retirement reads, separate from kernel custody.
+use crate::linux::Manager;
 use crate::linux::{MANAGER_PATH, UNIT_INTERFACE, checked_reply, property, require};
 use std::io;
-use zbus::{Connection, Message, OwnedObjectPath};
+use zbus::{Message, OwnedObjectPath};
 
 fn decode_invocation(value: &str) -> io::Result<Vec<u8>> {
     require(
@@ -41,12 +42,13 @@ fn lookup_result(
 }
 
 async fn lookup(
-    connection: &Connection,
+    connection: &Manager,
     sender: &str,
     invocation: &[u8],
 ) -> io::Result<Option<OwnedObjectPath>> {
     lookup_result(
         connection
+            .connection
             .call_method(
                 Some(sender),
                 MANAGER_PATH,
@@ -59,16 +61,16 @@ async fn lookup(
     )
 }
 
-/// Observe only the manager half of retirement. Callers must authenticate the
-/// connection/unique owner and bound the enclosing operation. A true result is
+/// Observe only the manager half of retirement. The handle retains its original
+/// authenticated unique owner; callers must bound the enclosing operation. A true result is
 /// not original-scope removal, target exit, or authority to finish a Store run.
 pub async fn retired(
-    connection: &Connection,
+    connection: &Manager,
     sender: &str,
     unit: &str,
     invocation: &str,
 ) -> io::Result<bool> {
-    zbus::names::UniqueName::try_from(sender).map_err(io::Error::other)?;
+    connection.require_sender(sender)?;
     require(
         !unit.is_empty() && unit.len() <= 255,
         "retirement unit exceeds query bounds",

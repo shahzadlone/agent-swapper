@@ -230,3 +230,21 @@ check pass locally. Native composition evidence remains pending.
 
 All 51 remaining evaluation tests and strict core Clippy with the Store
 qualification feature also pass after moving the retirement-query tests.
+
+## Bound manager handle
+
+The authenticated transport now returns a `Manager` handle that keeps the raw
+D-Bus connection paired with its original unique owner. Its fields are private
+outside the library, and it exposes neither a raw connection nor arbitrary
+method calls. Read helpers reject a different sender before issuing a query;
+observing a replacement well-known-name owner does not silently retarget the
+handle. Explicit close preserves the existing bounded consumer cleanup path.
+
+The snapshot, journal recheck and retirement consumers now use this handle.
+Construction still requires the same protected bus path, root peer, root PID 1
+manager credentials and stable owner. This narrows the reusable API; it is not
+installation authorization or a Store completion receipt. No dependencies or
+wire behavior change. Native qualification of this API boundary remains pending.
+
+The bound-handle change passes five manager tests, all 51 existing consumer tests,
+strict manager/consumer/core Clippy and the dependency-boundary check locally.

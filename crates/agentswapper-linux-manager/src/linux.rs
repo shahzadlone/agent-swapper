@@ -121,7 +121,33 @@ async fn driver_call<T: serde::Serialize + zbus::DynamicType>(
     checked_reply(reply, DRIVER)
 }
 
-pub async fn owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniqueName> {
+/// An authenticated connection paired with its original unique manager owner.
+/// Fields stay private outside this crate; callers cannot substitute a raw
+/// connection or issue manager mutations through this handle. Read observations
+/// still need installation policy, original kernel witnesses and phase deadlines.
+pub struct Manager {
+    pub(crate) connection: Connection,
+    bound_owner: zbus::names::OwnedUniqueName,
+}
+impl Manager {
+    pub(crate) fn require_sender(&self, sender: &str) -> io::Result<()> {
+        require(
+            sender == self.bound_owner.as_str(),
+            "query differs from bound manager owner",
+        )
+    }
+    pub async fn close(self) -> zbus::Result<()> {
+        self.connection.close().await
+    }
+}
+
+/// Observe the current well-known-name owner for comparison with the bound one.
+/// A changed owner never retargets this handle's queries to the replacement.
+pub async fn owner(manager: &Manager) -> io::Result<zbus::names::OwnedUniqueName> {
+    driver_owner(&manager.connection).await
+}
+
+async fn driver_owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniqueName> {
     driver_call(connection, "GetNameOwner", &(MANAGER,))
         .await?
         .body()
@@ -130,16 +156,18 @@ pub async fn owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniq
 }
 
 pub async fn property(
-    connection: &Connection,
+    connection: &Manager,
     owner: &str,
     path: &str,
     interface: &str,
     name: &str,
 ) -> io::Result<OwnedVariant> {
+    connection.require_sender(owner)?;
     let unique = zbus::names::UniqueName::try_from(owner).map_err(io::Error::other)?;
     // Only the authenticated unique name is a destination. Unique names cannot
     // be auto-activated; no interactive-authorization flag or proxy is used.
     let reply = connection
+        .connection
         .call_method(
             Some(unique.as_str()),
             path,
@@ -156,13 +184,15 @@ pub async fn property(
 }
 
 async fn manager_call<T: serde::Serialize + zbus::DynamicType>(
-    connection: &Connection,
+    connection: &Manager,
     owner: &str,
     method: &str,
     body: &T,
 ) -> io::Result<OwnedObjectPath> {
+    connection.require_sender(owner)?;
     let unique = zbus::names::UniqueName::try_from(owner).map_err(io::Error::other)?;
     let reply = connection
+        .connection
         .call_method(
             Some(unique.as_str()),
             MANAGER_PATH,
@@ -180,7 +210,7 @@ async fn manager_call<T: serde::Serialize + zbus::DynamicType>(
 
 /// Resolve an already policy-validated unit through the bound unique manager.
 pub async fn get_unit(
-    connection: &Connection,
+    connection: &Manager,
     owner: &str,
     unit: &str,
 ) -> io::Result<OwnedObjectPath> {
@@ -192,7 +222,7 @@ pub async fn get_unit(
 }
 /// Resolve an invocation through the same unique manager. No unit is started.
 pub async fn get_invocation(
-    connection: &Connection,
+    connection: &Manager,
     owner: &str,
     invocation: &[u8],
 ) -> io::Result<OwnedObjectPath> {
@@ -215,7 +245,7 @@ pub struct TransportFact {
 }
 /// Connect through the fixed protected path and authenticate root PID 1.
 /// Bounds its own admission; the caller must also bound its entire unit-binding phase.
-pub async fn connect() -> io::Result<(Connection, zbus::names::OwnedUniqueName, TransportFact)> {
+pub async fn connect() -> io::Result<(Manager, zbus::names::OwnedUniqueName, TransportFact)> {
     tokio::time::timeout(Duration::from_secs(8), connect_inner())
         .await
         .map_err(|_| {
@@ -225,7 +255,7 @@ pub async fn connect() -> io::Result<(Connection, zbus::names::OwnedUniqueName, 
             )
         })?
 }
-async fn connect_inner() -> io::Result<(Connection, zbus::names::OwnedUniqueName, TransportFact)> {
+async fn connect_inner() -> io::Result<(Manager, zbus::names::OwnedUniqueName, TransportFact)> {
     prerequisites()?;
     let before = fs::symlink_metadata(SOCKET)?;
     let stream = tokio::net::UnixStream::connect(SOCKET).await?.into_std()?;
@@ -247,7 +277,7 @@ async fn connect_inner() -> io::Result<(Connection, zbus::names::OwnedUniqueName
         .await
         .map_err(io::Error::other)?;
     let result = async {
-        let owner_before = owner(&connection).await?;
+        let owner_before = driver_owner(&connection).await?;
         let credentials: zbus::fdo::ConnectionCredentials =
             driver_call(&connection, "GetConnectionCredentials", &(&owner_before,))
                 .await?
@@ -272,7 +302,7 @@ async fn connect_inner() -> io::Result<(Connection, zbus::names::OwnedUniqueName
             )?;
         }
         require(
-            owner(&connection).await? == owner_before,
+            driver_owner(&connection).await? == owner_before,
             "manager bus owner changed",
         )?;
         let facts = TransportFact {
@@ -287,7 +317,14 @@ async fn connect_inner() -> io::Result<(Connection, zbus::names::OwnedUniqueName
     }
     .await;
     match result {
-        Ok((owner, facts)) => Ok((connection, owner, facts)),
+        Ok((owner, facts)) => Ok((
+            Manager {
+                connection,
+                bound_owner: owner.clone(),
+            },
+            owner,
+            facts,
+        )),
         Err(error) => {
             let _ = connection.close().await;
             Err(error)

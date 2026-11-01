@@ -19,12 +19,12 @@ mod terminal;
 mod watch;
 use common::{require, valid_invocation};
 
+use agentswapper_linux_manager::Manager as Connection;
 use serde::Serialize;
 use std::{
     io::{self, Write},
     time::Duration,
 };
-use zbus::Connection;
 
 use agentswapper_linux_manager::{
     self as manager, PathFact, SERVICE_INTERFACE, UNIT_INTERFACE, owner, prerequisites, property,
