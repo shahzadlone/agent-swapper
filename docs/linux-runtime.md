@@ -180,3 +180,25 @@ now accepts either specific eight-second timeout, while still requiring code
 125, empty stdout, a real authentication byte, EOF from the observer and the
 existing twelve-second process bound. This does not broaden successful manager
 admission. Native rerun evidence remains pending.
+
+## Protected installed image
+
+`installed_image::ProtectedImage` retains an open executable below root-owned,
+non-writable ancestry. Each path component is opened relative to its already
+checked parent with no symlink following; the leaf must be a root-owned regular
+file with exact mode 0755 on an executable mount. Nonblocking open prevents a
+FIFO substitution from hanging before the file-type check. The handle is private,
+read-only and CLOEXEC, with no Debug or serialization implementation. Its current
+process check compares the retained image's device/inode with an open
+`/proc/self/exe`; the caller must establish a trusted procfs/namespace separately.
+
+The fixed guardian now consumes this check while preserving its exact installed
+path and protected-unit checks. Root remains trusted. This is not a manifest,
+version check, installer, general launch permission or immutability claim against
+root; production installation remains a separate gate. No new dependency is added.
+
+Local validation passes 29 runtime tests and three compile-fail doctests, plus
+strict runtime and existing-consumer Clippy. Tests open the system's protected
+coreutils image read-only, reject a different running image, malformed/staging
+paths, special files and directories. They neither execute that image nor install
+files. Hosted guardian qualification of this change remains pending.
