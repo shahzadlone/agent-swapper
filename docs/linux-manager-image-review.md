@@ -32,11 +32,14 @@ never triggers recursive deletion. Local tests verify refusal before privilege
 or fixture creation on an ordinary host and before mounting in the original
 mount namespace. No privileged image fixture was run on the user's host.
 
-The transport's own eight-second deadline is also tested independently with
+The transport deadline helper is tested independently with
 paused Tokio time and a pending future. An outer nine-second test guard makes a
 missing transport deadline fail instead of hanging. The actual negative control
 removed that inner deadline and failed with the expected assertion; the corrected
-wrapper passes. Tokio's test clock is enabled only as a Linux dev feature of the
+wrapper passes. This negative control exercises the helper, not the `connect`
+wiring; the latter is checked by source review and the hosted stalled-socket
+case. The timeout cannot preempt synchronous prerequisite filesystem reads.
+Tokio's test clock is enabled only as a Linux dev feature of the
 already pinned dependency, with no new registry package.
 
 The concrete consumer still checks the current manager owner around scope
@@ -51,20 +54,25 @@ writer roles call `activated_guardian::writer_check`, and that the service calls
 journal binding paths call the shared `admit` transport. These checks resolve
 excerpt uncertainty, not provider isolation or production installation.
 
-Guardian-image corroboration through the retained proc directory is now
-implemented. Remaining recommendations include replacing path-only template
-metadata with protected file handles and explicitly deciding production behavior
-during manager reload or re-exec. Current uncertainty continues to refuse completion; it never grants
-profile reuse. Combined native and cross-platform evidence passed at `4fb4abf` in
-[41290326745](https://github.com/shahzadlone/agent-swapper/actions/runs/41290326745).
-The guardian-image comparison passed the complete pipeline at `7ca3650` in
-[41290629942](https://github.com/shahzadlone/agent-swapper/actions/runs/41290629942).
+Combined source `4fb4abf` passed the complete pipeline in
+[run 41290326745](https://github.com/shahzadlone/agent-swapper/actions/runs/41290326745).
+The seven original image/mount/capability controls passed on both Ubuntu 22.04
+and 24.04. The client-side guardian comparison through the retained proc
+directory and original pidfd (`7ca3650`) subsequently passed the complete pipeline
+in [run 41290629942](https://github.com/shahzadlone/agent-swapper/actions/runs/41290629942).
+These results include the shared manager and child-waiter changes, native scope
+and terminal controls, cross-platform checks and unsigned package rebuilds.
 
-Local combined validation passes 32 runtime tests, five compile-fail doctests,
-seven manager tests and 49 evaluation tests, with strict runtime/manager/consumer
-Clippy. The ignored runtime receiver role is invoked by a passing process test.
-The two image-harness refusal tests, 14 activation-harness tests and production
-dependency-boundary check also pass. All seven native mount controls passed on Ubuntu 22.04 and 24.04.
+Protected configuration handles were added after those reviewed snapshots.
+Image admission also now uses the extracted file opener; that image path and
+the new FIFO control require this revision's native evidence too. Config handles
+retain the opened root-owned regular file, require mode 0644 and read at
+most 16 KiB without changing the shared file offset. They do not establish
+configuration semantics, an atomic administrative update or production manifest
+provenance. The retained-file, FIFO and subsequent change-detection controls passed both
+native Linux suites and the complete pipeline at `3ae40ee` in
+[41295768975](https://github.com/shahzadlone/agent-swapper/actions/runs/41295768975).
+The earlier seven-case pass alone did not qualify these extensions.
 
 The isolated retirement-query branch `064d3b9` passed Ubuntu 22.04 but failed
 a background-admission case on Ubuntu 24.04 after the relay disappeared. That
@@ -77,3 +85,73 @@ exit fails with useful evidence instead of only a missing `/proc` file.
 The combined local terminal checks pass all nine outer-terminal and 13 owner
 cases, eleven advisory/termination exec cases, three cleanup-signal cases and
 the duplicate-stop regression. Both locked license/advisory policies pass.
+
+## Follow-up review of `7ca3650`
+
+Opus 5.5 xhigh performed a second source-only review on 2026-11-01. It found no
+high-severity defect reachable through the supplied fixed callers. It identified
+stale qualification statements above and a terminal status that could be lost
+when an admission consumer used nix's finite signal decoder. It also identified
+a numeric-PID window in a cleanup test and gaps in the retirement-race test and
+deadline evidence descriptions.
+
+The follow-up changes retain the terminal raw wait status after revoking wait
+ownership; ECHILD records no outcome. The real-time decoder regression now proves
+that the observed signal remains available after EINVAL. The active guardian's
+exit-report path already uses raw events before decoding and was not affected.
+The pre-extraction destructor was checked: it killed only its direct child,
+so the shared waiter did not remove process-group cleanup. Descendant retirement
+remains the manager's separate responsibility.
+
+The cleanup test now uses its original pidfd for the final ECHILD assertion.
+The retirement test exercises fresh absence, continued presence, recheck failure,
+non-race refusal and a mismatched sender; the last two must not invoke a recheck.
+All invocation lookups also apply the explicit unique-destination check. The
+activation caller supplies both fragment and guardian-image locations from its
+validated prefix. The image harness independently refuses shared mount propagation
+before creating or mounting any fixture. The namespace prerequisite's API docs
+explicitly distinguish identity-map/init.scope checks from host namespace proof.
+
+Local follow-up validation passes 35 runtime tests, five compile-fail doctests,
+eight manager tests, 49 evaluation tests, strict runtime/manager/consumer/core
+Clippy, three mount-harness refusal controls, 14 activation-harness tests and
+the dependency-boundary check. Native qualification remains pending.
+Exact image mode 0755 remains the fixed fixture installation contract; supporting
+read-only vendor layouts requires an explicit packaging decision. A hard-killed
+hosted fixture may leave an empty temporary directory on its disposable runner;
+cleanup never recursively deletes a mounted path. Production manager reload and
+re-exec policy, versioned installation and removal, and an opaque Store completion
+receipt remain open. No qualification result enables managed production launch,
+automatic profile reuse or completion from a diagnostic boolean.
+
+## Protected-file follow-up at `e8cc4e8`
+
+Opus 5.5 xhigh reviewed the retained-config consumer and prior corrections using
+source only. It found no high-severity defect reachable through fixed callers.
+It identified that the shared leaf open needed O_NOCTTY: a session leader opening
+a terminal device could acquire it before fstat refused the non-regular file.
+The opener now prevents that process-wide side effect. A fresh-session subprocess
+allocates its own PTY, reaches the exact leaf refusal and checks that it still
+has no controlling terminal. Removing O_NOCTTY made that test fail; restoring it
+passes. No user's terminal or privileged fixture is involved.
+
+The executable-as-config control now asserts its exact mode refusal, and the
+bounded-reader test proves the shared offset remains at seven. Admission decoder
+failures now use the retained raw outcome to report the actual terminating signal;
+the active exit-report protocol remains unchanged. The native-qualified status
+is explicitly scoped to `7ca3650`, rather than implying these subsequent changes
+were already covered by that earlier run.
+
+Local checks pass 36 runtime tests, five compile-fail doctests, eight manager
+tests, 49 evaluation tests and strict runtime/manager/consumer Clippy. Two ignored
+helper roles are invoked by their passing subprocess tests. The current changes
+still require native qualification. The review recommends an opaque activated
+service binding as the next extraction, consumed by the existing qualification
+client and witness before installation or Store receipt work.
+
+The retained-config/FIFO checkpoint `6d2f727` subsequently passed the complete
+pipeline [41291656552](https://github.com/shahzadlone/agent-swapper/actions/runs/41291656552),
+and the first review follow-up `e8cc4e8` passed
+[41292133837](https://github.com/shahzadlone/agent-swapper/actions/runs/41292133837).
+The later NOCTTY correction has its own evidence requirement; the two earlier
+passes are not substituted for it.

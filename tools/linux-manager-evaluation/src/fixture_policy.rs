@@ -1,6 +1,6 @@
 //! Opt-in fixture names, environment and protected-template checks.
 use crate::require;
-use std::{fs, io, os::unix::fs::MetadataExt};
+use std::{io, path::Path};
 
 pub(crate) fn valid_prefix(prefix: &str) -> bool {
     let Some(rest) = prefix.strip_prefix("aswp-activation-") else {
@@ -77,17 +77,14 @@ pub(crate) fn valid_scope_unit(unit: &str) -> bool {
         .is_some_and(|(prefix, _)| valid_prefix(prefix) && valid_instance(unit, prefix))
 }
 
-pub(crate) fn protected_fragment(fragment: &str) -> io::Result<()> {
-    for directory in ["/", "/run", "/run/systemd", "/run/systemd/system"] {
-        let meta = fs::symlink_metadata(directory)?;
-        require(
-            meta.is_dir() && meta.uid() == 0 && meta.mode() & 0o022 == 0,
-            "activation template ancestor is not protected",
-        )?;
-    }
-    let meta = fs::symlink_metadata(fragment)?;
-    require(
-        meta.is_file() && meta.uid() == 0 && meta.mode() & 0o022 == 0,
-        "activation template is not root-owned and protected",
+#[allow(dead_code, reason = "only clients construct the shared binding policy")]
+pub(crate) fn activated_policy(
+    prefix: &str,
+) -> io::Result<agentswapper_linux_manager::ServicePolicy> {
+    gate(prefix)?;
+    agentswapper_linux_manager::ServicePolicy::open(
+        Path::new(&format!("/run/systemd/system/{prefix}@.service")),
+        Path::new(&format!("/usr/lib/{prefix}.guardian")),
+        rustix::process::getuid().as_raw(),
     )
 }

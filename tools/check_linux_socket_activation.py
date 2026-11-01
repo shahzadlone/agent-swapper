@@ -224,9 +224,47 @@ def rollback_created(created):
         path.unlink()
 
 
+def template_refusal(template, contents, prefix, uid, gid):
+    """Caller has authenticated the owned marker, image and every unit file."""
+    before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+    require(before['NConnections'] == '0' and re.fullmatch(r'[0-9]{1,20}', before['NAccepted']),
+            'template control requires an idle activation socket')
+    descriptor = os.open(template, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
+                and stat.S_IMODE(metadata.st_mode) == 0o644,
+                'template control requires the original protected file')
+        observer = os.environ.get('ASWP_MANAGED_OBSERVER', '')
+        require(Path(observer).is_absolute() and Path(observer).is_file(),
+                'template control requires the fixed Rust observer')
+        environment = {name: os.environ[name] for name in PRESERVE.split(',') if name in os.environ}
+        environment.update(PATH='/usr/bin:/bin', LC_ALL='C')
+        try:
+            os.fchmod(descriptor, 0o664)
+            result = subprocess.run(['/usr/bin/setpriv', '--reuid', str(uid), '--regid', str(gid),
+                '--clear-groups', '--inh-caps=-all', '--bounding-set=-all', '--no-new-privs',
+                observer, '--activation-probe', prefix], env=environment, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=12, check=False)
+            require(result.returncode == 125 and not result.stdout
+                    and 'installed file is not a root-owned protected regular file' in result.stderr,
+                    'mutable template did not refuse at the installed-file check: ' + result.stderr[-2000:])
+            after = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+            require(after == before, 'mutable-template observer connected before refusing')
+        finally:
+            os.fchmod(descriptor, 0o644)
+            require(stat.S_IMODE(os.fstat(descriptor).st_mode) == 0o644,
+                    'owned template mode was not restored')
+        require(template.read_text() == contents, 'owned template contents changed during control')
+        effective_unit(f'{prefix}@0-1-{uid}.service', template)
+    finally:
+        os.close(descriptor)
+    print('::notice title=Linux activation template::ordinary observer refused the owned mode-0664 template; accepted connection count unchanged; original mode restored', flush=True)
+
+
 def admin(verb, directory, uid, gid):
     prefix = fixture_prefix()
-    require(os.geteuid() == 0 and verb in ('install', 'cleanup'), 'invalid fixture administrator role')
+    require(os.geteuid() == 0 and verb in ('install', 'cleanup', 'template-refusal'), 'invalid fixture administrator role')
     uid, gid = ordinary_ids(uid, gid)
     private_directory(directory, uid)
     files = unit_files(prefix, directory, uid, gid)
@@ -266,6 +304,7 @@ def admin(verb, directory, uid, gid):
         effective_unit(prefix + '.socket', parent / (prefix + '.socket'))
         return
     if not os.path.lexists(marker):
+        require(verb == 'cleanup', 'template control lacks its ownership marker')
         # Installation refused before reserving anything. Never stop or remove
         # a pre-existing unit merely because its name matches this fixture.
         return
@@ -287,11 +326,16 @@ def admin(verb, directory, uid, gid):
         verify_image(guardian_image(prefix), ownership['guardian_sha256'])
     for name, contents in files.items():
         path = parent / name
+        if verb == 'template-refusal':
+            require(os.path.lexists(path), 'template control lacks an installed fixture unit')
         if os.path.lexists(path):
             metadata = path.lstat()
             require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
                     and metadata.st_mode & 0o022 == 0 and path.read_text() == contents,
                     'fixture unit changed; refusing service control')
+    if verb == 'template-refusal':
+        template_refusal(parent / (prefix + '@.service'), files[prefix + '@.service'], prefix, uid, gid)
+        return
     # All names are reserved to this run. Stop activation before collecting its
     # service instances; no wildcard includes any unrelated unit prefix.
     loaded = unit_properties(prefix + '.socket', ('LoadState',))['LoadState']
@@ -457,6 +501,7 @@ def suite():
                     and records[0]['activation']['sender_pid'] == records[0]['unit']['pid']
                     and records[0]['activation']['sender_uid'] == os.getuid()
                     and records[0]['activation']['launch_data_sent'] is False
+                    and records[0]['activation']['manager_connection_substitution_refused'] is True
                     and records[1]['retirement']['original_directory_removed'] is True
                     and records[1]['retirement']['main_pidfd_exited'] is True,
                     'Rust activation binding or retirement evidence differs')
@@ -465,6 +510,8 @@ def suite():
             require(set(directory.iterdir()) == {bind_marker} and bind_marker.read_text() == invocation,
                     'bind-only guardian did not record clean EOF or created unexpected files')
             bind_marker.unlink()
+            subprocess.run(admin_args + ['template-refusal'] + identity_args, check=True, timeout=50)
+            require(not any(directory.iterdir()), 'mutable-template refusal created an activation worker or marker')
             print('::notice title=Linux activation binding::kernel message sender matched manager MainPID and invocation; guardian recorded clean EOF and original scope retired; no launch data or worker', flush=True)
             for packets, shutdown in [((b'X',), False), ((b'',), False),
                                       ((b'',), True), ((b'', b'X'), True)]:

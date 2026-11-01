@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Image-policy controls using owned tmpfs mounts in disposable hosted CI only."""
+"""Installed-asset controls using owned tmpfs mounts in disposable hosted CI only."""
 import json
 import os
 from pathlib import Path
 import re
+import select
 import struct
 import subprocess
 import sys
@@ -11,12 +12,20 @@ import tempfile
 
 CASES = {
     'protected': None,
+    'config-nosuid-noexec': None,
+    'config-executable': 'installed configuration is not mode 0644',
+    'config-oversize': 'installed configuration exceeds 16 KiB',
+    'config-retained': None,
+    'config-replaced': 'installed configuration changed since admission began',
+    'config-modified': 'installed configuration changed since admission began',
+    'config-mode-changed': 'installed configuration changed since admission began',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
     'symlink': '(os error 40)',
-    'writable': 'image is not a root-owned mode-0755 regular file',
-    'user-owned': 'image is not a root-owned mode-0755 regular file',
+    'fifo': 'installed file is not a root-owned protected regular file',
+    'writable': 'installed file is not a root-owned protected regular file',
+    'user-owned': 'installed file is not a root-owned protected regular file',
 }
 PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_IMAGE_MOUNTS'
 
@@ -39,12 +48,49 @@ def private_namespace():
     require(os.geteuid() == 0
             and os.readlink('/proc/self/ns/mnt') != os.readlink('/proc/1/ns/mnt'),
             'fixture requires its own root mount namespace')
+    # A separate namespace may still propagate mounts to a shared peer. The
+    # outer command requests recursive private propagation; verify that fact
+    # independently before creating a fixture, including direct --inside use.
+    mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    require(bool(mounts) and all(' - ' in line for line in mounts),
+            'mount propagation metadata unavailable')
+    require(not any(field.startswith('shared:') for line in mounts
+                    for field in line.split(' - ', 1)[0].split()[6:]),
+            'fixture mount namespace still has shared propagation')
 
 
 def identity(uid, gid):
     uid, gid = int(uid), int(gid)
     require(0 < uid < 2**31 and 0 < gid < 2**31, 'ordinary fixture identity required')
     return uid, gid
+
+
+def retained_config_control(command, image, case):
+    # The child drops root before exec. Mutate only this namespace's owned tmpfs
+    # file after the ordinary observer has retained its original descriptor.
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE) as child:
+        try:
+            ready, _, _ = select.select([child.stdout], [], [], 5)
+            require(bool(ready) and child.stdout.readline(128) == b'installed-asset: retained\n',
+                    'retained configuration observer did not reach its hold')
+            if case == 'config-replaced':
+                replacement = image.with_name('replacement')
+                replacement.write_bytes(image.read_bytes())
+                replacement.chmod(0o644)
+                require(replacement.stat().st_ino != image.stat().st_ino,
+                        'replacement control needs a distinct inode')
+                replacement.replace(image)
+            elif case == 'config-modified':
+                image.write_bytes(b'changed owned configuration\n')
+            elif case == 'config-mode-changed':
+                image.chmod(0o664)
+            stdout, stderr = child.communicate(b'R', timeout=5)
+            return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
 
 
 def mounted_case(case, binary, uid, gid):
@@ -57,13 +103,17 @@ def mounted_case(case, binary, uid, gid):
         options = 'rw,nodev,exec,suid,mode=0755,size=1m'
         if case in ('nosuid', 'noexec'):
             options += ',' + case
+        elif case == 'config-nosuid-noexec':
+            options += ',nosuid,noexec'
         subprocess.run(['/usr/bin/mount', '-t', 'tmpfs', '-o', options, 'aswp-image-fixture', str(base)],
                        stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=5)
         mounted = True
         image = base / 'image'
         # These inert bytes are never executed. The probe only opens metadata.
         image.write_bytes(b'owned image-policy fixture\n')
-        image.chmod(0o755)
+        image.chmod(0o644 if case.startswith('config-') and case != 'config-executable' else 0o755)
+        if case == 'config-oversize':
+            image.write_bytes(b'x' * (16 * 1024 + 1))
         if case == 'capability':
             # Linux VFS_CAP_REVISION_2, effective CAP_NET_BIND_SERVICE. The file
             # remains root-owned and is never executed, including by the probe.
@@ -71,17 +121,24 @@ def mounted_case(case, binary, uid, gid):
         elif case == 'symlink':
             image.rename(base / 'target')
             image.symlink_to('target')
+        elif case == 'fifo':
+            image.unlink()
+            os.mkfifo(image, 0o755)
         elif case == 'writable':
             image.chmod(0o775)
         elif case == 'user-owned':
             os.chown(image, uid, gid)
         script = str(Path(__file__).resolve())
-        result = subprocess.run(['/usr/bin/python3', '-I', '-S', script, '--probe', binary,
-                                 str(image), str(uid), str(gid)], stdin=subprocess.DEVNULL,
-                                capture_output=True, timeout=5)
+        role = '--config-probe' if case.startswith('config-') else '--probe'
+        retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed')
+        if retained:
+            role = '--config-recheck-probe'
+        command = ['/usr/bin/python3', '-I', '-S', script, role, binary, str(image), str(uid), str(gid)]
+        result = (retained_config_control(command, image, case) if retained else
+                  subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=5))
         expected = CASES[case]
         if expected is None:
-            require(result.returncode == 0 and result.stdout == b'protected-image: accepted\n'
+            require(result.returncode == 0 and result.stdout == b'installed-asset: accepted\n'
                     and not result.stderr, 'protected image control was refused: ' + result.stderr.decode(errors='replace'))
         else:
             require(result.returncode == 125 and not result.stdout
@@ -102,7 +159,7 @@ def mounted_case(case, binary, uid, gid):
 def main():
     gate()
     args = sys.argv[1:]
-    if len(args) == 5 and args[0] in ('--inside', '--probe'):
+    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe', '--config-recheck-probe'):
         private_namespace()
         role, first, second, uid, gid = args
         uid, gid = identity(uid, gid)
@@ -114,7 +171,9 @@ def main():
         os.setuid(uid)
         require(os.getuid() == os.geteuid() == uid and os.getgid() == os.getegid() == gid,
                 'probe failed to drop its root identity')
-        os.execve(first, [first, second], {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+        modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck'}
+        probe_args = [first, modes[role], second] if role in modes else [first, second]
+        os.execve(first, probe_args, {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
     require(len(args) == 1 and os.geteuid() != 0, 'ordinary hosted fixture runner required')
     binary = Path(args[0])
     require(binary.is_absolute() and binary.is_file() and not binary.is_symlink(), 'invalid fixture probe')

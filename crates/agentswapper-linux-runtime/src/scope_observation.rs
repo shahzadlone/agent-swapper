@@ -14,7 +14,7 @@ use rustix::{
 use std::{
     fs::File,
     io::{self, Read},
-    os::fd::{AsFd, BorrowedFd, OwnedFd},
+    os::fd::OwnedFd,
 };
 
 fn require(ok: bool, message: &str) -> io::Result<()> {
@@ -113,6 +113,8 @@ fn own_process(root: &OwnedFd) -> io::Result<OwnedFd> {
     Ok(own)
 }
 
+/// Check identity maps and the visible PID 1's init.scope. This is an admission
+/// prerequisite, not proof of membership in the host's initial namespaces.
 pub fn initial_namespace() -> io::Result<()> {
     let root = proc_root()?;
     let own = own_process(&root)?;
@@ -370,9 +372,10 @@ impl Binding {
         self.main.require_image(image)
     }
 
-    /// Borrow the original guardian pidfd. This is not a numeric-PID lookup or
-    /// manager authorization; the caller remains responsible for its policy.
-    pub fn guardian_pidfd(&self) -> BorrowedFd<'_> {
+    /// Qualification-only signal capability for a caller's owned fault fixture.
+    #[cfg(feature = "qualification")]
+    pub fn guardian_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
         self.main.pidfd.as_fd()
     }
 

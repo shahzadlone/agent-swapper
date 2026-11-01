@@ -1,5 +1,6 @@
 """Guard and fixed-user unit-rendering checks; no privileged operations."""
 from pathlib import Path
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -18,6 +19,41 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_template_control_restores_mode_on_timeout_and_unexpected_success(self):
+        refused = SimpleNamespace(returncode=125, stdout='', stderr='installed file is not a root-owned protected regular file')
+        for failure in ('timeout', 'success', 'connected', 'none'):
+            with self.subTest(failure=failure), ExitStack() as stack:
+                stack.enter_context(patch.dict(os.environ, ASWP_MANAGED_OBSERVER='/tmp/fixed-observer'))
+                stack.enter_context(patch.object(Path, 'is_file', return_value=True))
+                stack.enter_context(patch.object(Path, 'read_text', return_value='owned template'))
+                stack.enter_context(patch.object(probe.os, 'open', return_value=77))
+                stack.enter_context(patch.object(probe.os, 'fstat', return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=0)))
+                chmod = stack.enter_context(patch.object(probe.os, 'fchmod'))
+                close = stack.enter_context(patch.object(probe.os, 'close'))
+                effective = stack.enter_context(patch.object(probe, 'effective_unit'))
+                before = {'NAccepted': '3', 'NConnections': '0'}
+                after = {'NAccepted': '4' if failure == 'connected' else '3', 'NConnections': '0'}
+                stack.enter_context(patch.object(probe, 'unit_properties', side_effect=[before, after]))
+                run = stack.enter_context(patch.object(probe.subprocess, 'run', return_value=refused))
+                if failure == 'timeout':
+                    run.side_effect = probe.subprocess.TimeoutExpired('observer', 12)
+                    expected = self.assertRaises(probe.subprocess.TimeoutExpired)
+                elif failure == 'success':
+                    run.return_value = SimpleNamespace(returncode=0, stdout='', stderr='')
+                    expected = self.assertRaisesRegex(RuntimeError, 'did not refuse')
+                elif failure == 'connected':
+                    expected = self.assertRaisesRegex(RuntimeError, 'connected before refusing')
+                else:
+                    expected = ExitStack()
+                with expected:
+                    probe.template_refusal(Path('/run/systemd/system/aswp@.service'), 'owned template', 'aswp', 1000, 1000)
+                self.assertEqual([call.args for call in chmod.call_args_list], [(77, 0o664), (77, 0o644)])
+                close.assert_called_once_with(77)
+                if failure == 'none':
+                    effective.assert_called_once()
+                else:
+                    effective.assert_not_called()
+
     def test_owned_fixture_timeout_stops_grandchild_and_keeps_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             pid_path = Path(temporary) / 'child.pid'
@@ -243,7 +279,7 @@ time.sleep(20)
                 unlink.assert_not_called()
 
     def test_local_invocation_never_reaches_administrator_commands(self):
-        for role in ('install', 'cleanup'):
+        for role in ('install', 'cleanup', 'template-refusal'):
             with patch.dict(probe.os.environ, {}, clear=True), \
                  patch.object(probe.os, 'geteuid', return_value=0), \
                  patch.object(probe.subprocess, 'run') as command, \

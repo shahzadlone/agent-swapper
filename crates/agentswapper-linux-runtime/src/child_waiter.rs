@@ -37,6 +37,7 @@ pub struct ChildWaiter {
     child: Child,
     pid: Pid,
     reaped: bool,
+    final_status: Option<WaitStatus>,
     _thread: PhantomData<Rc<()>>,
 }
 impl ChildWaiter {
@@ -48,6 +49,7 @@ impl ChildWaiter {
             child,
             pid,
             reaped: false,
+            final_status: None,
             _thread: PhantomData,
         })
     }
@@ -58,6 +60,12 @@ impl ChildWaiter {
     }
     pub fn is_reaped(&self) -> bool {
         self.reaped
+    }
+    /// The terminal event actually reaped by this waiter, even if a consumer's
+    /// decoder later failed. Missing wait ownership (ECHILD) records no outcome.
+    /// This observation does not prove retirement of descendants or their scope.
+    pub fn final_status(&self) -> Option<WaitStatus> {
+        self.final_status
     }
 
     /// Poll one raw event, revoking ownership before any fallible higher-level
@@ -80,6 +88,9 @@ impl ChildWaiter {
             self.reaped = true;
         }
         require(observed == self.pid, "wait returned another child")?;
+        if self.reaped {
+            self.final_status = Some(raw);
+        }
         Ok(Some(raw))
     }
     pub fn next(&mut self, until: Instant) -> io::Result<WaitStatus> {
@@ -144,6 +155,7 @@ mod tests {
         let status = std::process::ExitStatus::from_raw(raw.as_raw());
         assert_eq!(status.signal(), Some(signal));
         assert!(!status.core_dumped());
+        assert_eq!(child.final_status().map(|s| s.as_raw()), Some(raw.as_raw()));
         assert!(child.poll().is_err());
         Ok(())
     }
@@ -162,6 +174,7 @@ mod tests {
         rustix::process::waitpid(Some(child.pid()), WaitOptions::empty())?;
         assert!(child.poll().is_err());
         assert!(child.is_reaped());
+        assert!(child.final_status().is_none());
         assert!(child.next(Instant::now() + Duration::from_secs(1)).is_err());
         Ok(())
     }
@@ -194,7 +207,10 @@ mod tests {
             1
         );
         assert!(matches!(
-            rustix::process::waitpid(Some(pid), WaitOptions::NOHANG),
+            rustix::process::waitid(
+                rustix::process::WaitId::PidFd(std::os::fd::AsFd::as_fd(&original)),
+                rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
+            ),
             Err(rustix::io::Errno::CHILD)
         ));
         Ok(())

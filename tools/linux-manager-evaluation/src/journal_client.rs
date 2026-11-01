@@ -131,47 +131,15 @@ impl Session {
                     crate::owner(connection).await? == self.owner,
                     "manager owner changed",
                 )?;
-                let path = crate::unit_path(&self.unit.unit);
-                let invocation = Vec::<u8>::try_from(
-                    crate::property(
+                self.binding
+                    .recheck_manager(
                         connection,
                         self.owner.as_str(),
-                        &path,
-                        crate::UNIT_INTERFACE,
-                        "InvocationID",
+                        &self.unit.unit,
+                        &self.unit.invocation,
+                        self.unit.pid,
                     )
-                    .await?,
-                )
-                .map_err(io::Error::other)?;
-                let invocation: String = invocation.iter().map(|b| format!("{b:02x}")).collect();
-                let pid = u32::try_from(
-                    crate::property(
-                        connection,
-                        self.owner.as_str(),
-                        &path,
-                        crate::SERVICE_INTERFACE,
-                        "MainPID",
-                    )
-                    .await?,
-                )
-                .map_err(io::Error::other)?;
-                let active = String::try_from(
-                    crate::property(
-                        connection,
-                        self.owner.as_str(),
-                        &path,
-                        crate::UNIT_INTERFACE,
-                        "ActiveState",
-                    )
-                    .await?,
-                )
-                .map_err(io::Error::other)?;
-                require(
-                    invocation == self.unit.invocation
-                        && pid == self.unit.pid
-                        && active == "active",
-                    "bound guardian invocation changed",
-                )?;
+                    .await?;
                 self.binding.observe()?;
                 if let Some(child) = &self.child {
                     child.check()?;
@@ -465,7 +433,7 @@ impl Bound {
         fixture_policy::gate(prefix)?;
         let paths = crate::prerequisites()?;
         let deadline = Instant::now() + Duration::from_secs(12);
-        let (socket, _, offer) = activation::connect(
+        let (socket, _, offer, policy) = activation::connect(
             prefix,
             match mode {
                 Mode::Writer => b"ADMIT\n",
@@ -481,7 +449,7 @@ impl Bound {
             pid: offer.pid,
             invocation: Some(offer.invocation),
             kind: UnitKind::Activated {
-                fragment: format!("/run/systemd/system/{prefix}@.service"),
+                policy: Box::new(policy),
             },
         };
         let runtime = RuntimeGuard::new()?;
@@ -598,7 +566,7 @@ impl Witness {
             pid: claimed.guardian_pid,
             invocation: Some(claimed.invocation.clone()),
             kind: UnitKind::Activated {
-                fragment: format!("/run/systemd/system/{prefix}@.service"),
+                policy: Box::new(fixture_policy::activated_policy(prefix)?),
             },
         };
         let runtime = RuntimeGuard::new()?;

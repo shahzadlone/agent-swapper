@@ -28,8 +28,18 @@ pub(crate) fn private_directory(path: &Path) -> io::Result<()> {
     )
 }
 
+fn protected_fragment(fragment: &str) -> io::Result<()> {
+    let config =
+        agentswapper_linux_runtime::installed_config::ProtectedConfig::open(Path::new(fragment))?;
+    let bytes = config.read()?;
+    require(
+        !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
+        "activation template is empty or invalid text",
+    )
+}
+
 pub(crate) fn protected_executable(prefix: &str) -> io::Result<()> {
-    activation::protected_fragment(&format!("/run/systemd/system/{prefix}@.service"))?;
+    protected_fragment(&format!("/run/systemd/system/{prefix}@.service"))?;
     let path = format!("/usr/lib/{prefix}.guardian");
     require(
         std::env::current_exe()? == Path::new(&path),

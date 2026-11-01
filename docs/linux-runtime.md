@@ -325,3 +325,184 @@ activation and the complete pipeline passed at `7ca3650` in
 
 All 49 evaluation tests, strict core Clippy with the Store qualification feature
 and the dependency-boundary check also pass for the client image comparison.
+
+## Retained installed configuration
+
+`ProtectedConfig` and `ProtectedImage` now share the same descriptor-relative,
+no-symlink path walk. The private shared opener requires root-owned protected
+ancestry and a root-owned non-writable regular leaf. Each public constructor
+then requires its own exact mode: 0644 data or 0755 executable. Image mount and
+capability restrictions remain separate. Configuration data can live on nosuid
+and noexec filesystems, including the fixed `/run/systemd/system` template path.
+A trusted namespace and fixed installation location remain prerequisites;
+root UID/mode metadata is not a general filesystem-author identity guarantee.
+
+The fixed service-template consumer now opens and reads that retained config
+handle instead of checking pathname metadata alone. It requires nonempty UTF-8
+text without NUL bytes, bounded to 16 KiB. Manager properties and drop-in checks
+still establish the separate service policy. This does not parse arbitrary unit
+files, authenticate a production manifest or change the installed unit contents.
+
+Positional reads ignore shared file offsets and read one extra byte to detect
+oversized input. Tests cover an exact-limit file, a changed shared offset,
+one-byte overflow, empty data, and a real protected system configuration file;
+an executable is refused as configuration. Data is never executed or logged.
+The native asset matrix now has eleven cases, adding configuration on nosuid/noexec
+mounts, executable-mode refusal, oversized data and a nonblocking FIFO refusal
+to the seven image controls. The FIFO has protected ancestry, so the actual leaf
+open must refuse promptly rather than stopping at an earlier directory check.
+Privileged cases remain confined to disposable hosted CI.
+
+Local validation passes 35 runtime tests, five compile-fail doctests, 49 existing
+consumer tests, strict runtime/consumer/core-feature Clippy, the two harness
+refusal tests, 14 activation harness tests and the dependency-boundary check.
+One ignored runtime receiver role is invoked by its passing process test.
+Native template and asset qualification of this revision remain pending.
+
+## Active invocation rechecks
+
+The real journal/terminal client's live recheck now uses the shared manager
+crate's `require_active_invocation`. It validates bounded identity inputs, looks
+up the original invocation through the bound unique manager, and checks unit ID,
+invocation before and after the read, MainPID and active state. It no longer
+addresses a reusable unit-name object during a live recheck. Missing or collected
+invocations refuse admission/resume; they do not silently bind a replacement.
+
+The caller retains its absolute admission deadline or bounded active-observation
+window, original kernel handles, and current-owner checks around the whole
+observation. A successful manager recheck remains separate from installation
+policy, kernel custody, exec confirmation and Store completion. There is no
+new dependency or production launch permission.
+
+Local checks pass ten manager tests and 49 consumer tests with strict Clippy.
+The new refusal tests cover invalid identity bounds and every observed identity
+component, including a consistent replacement invocation. The complete native
+terminal/admission matrix must qualify the changed query path; that run is pending.
+
+## Loaded service lifecycle policy
+
+The shared manager crate now checks the loaded service lifecycle through the
+already bound invocation path. The snapshot consumer requires Type=exec, an
+empty PIDFile, NotifyAccess=none, RemainAfterExit=false and an empty PAMName.
+The first four checks preserve the existing policy; the explicit PAM read closes
+a gap between the fixed template's intended policy and the observer's checks.
+UID, cgroup, delegation, kill mode, installed assets and original kernel handles
+remain separately required by the surrounding snapshot.
+
+PAM sessions can move child processes into another session scope, as documented
+by [systemd.exec](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#PAMName=).
+The property is present in the older qualified manager generation too; see
+[systemd v249's property declaration](https://github.com/systemd/systemd/blob/v249/src/core/dbus-execute.c#L1079).
+The test rejects indirect PID ownership, notification ownership, retained-active
+state and PAM sessions, including a nonempty whitespace value. No PAM service
+is installed or activated for these local controls.
+
+Local validation passes eleven manager tests and 49 evaluation tests, strict
+manager/consumer Clippy and the dependency-boundary check. Native qualification
+of the new property read remains pending. The shared check grants no production
+launch or Store completion authority.
+
+## Opaque activated-service binding
+
+`agentswapper-linux-manager::BoundService` now owns the original invocation path,
+retained process/cgroup binding and protected configuration/image handles. It is
+neither cloneable nor serializable. A private connection identity ties it to the
+exact authenticated `Manager` instance; equal unique-name text on another
+connection is insufficient. Identity copies and kernel observations remain
+non-authoritative diagnostics.
+
+The caller supplies fixed trusted installation paths and an ordinary UID through
+`ServicePolicy`. The activation client opens and retains that policy **before
+connecting**, and carries the same handles into binding. The independent witness
+uses the same paired-path constructor. The normal library contains no fixture
+prefix, environment bypass, fault command or root installation procedure.
+
+Binding reads the original invocation object, validates unit/UID/PID/cgroup,
+non-transient status, exact template path, absent drop-ins, direct lifecycle,
+delegation and kill mode, and rejects `NeedDaemonReload`. That last check refuses
+manager-reported stale configuration; it is not proof of byte-identical loaded
+content or an atomic snapshot against root. Kernel binding and guardian-image
+comparison precede a final active recheck. Subsequent rechecks retain the
+invocation path, check the same connection and owner, and corroborate the original
+process/image again. Existing caller deadlines and child checks remain in place.
+
+The qualification client and witness consume this shared binding. The transient
+measurement observer remains in the evaluation crate. Retirement still requires
+original kernel removal plus the authenticated original invocation's retirement;
+the watch checks the exact connection before starting. No Store receipt or
+production managed launcher is introduced.
+
+Local checks pass twelve manager tests, a non-cloneability compile-fail doctest,
+49 evaluation tests and strict manager/consumer Clippy. A policy refusal matrix
+covers fourteen mismatches. Native CI additionally checks that a second valid
+manager connection with the same owner cannot substitute, and temporarily changes
+only its owned template to mode 0664 to require the shared policy's precise
+refusal before connecting. That control drops root before executing the observer,
+restores mode 0644 in `finally`, and requires no worker or marker. Existing
+qualification suites cover the new composition; native results remain pending.
+
+Completed predecessor pipelines: retained-config/FIFO revision `6d2f727` in
+[41291656552](https://github.com/shahzadlone/agent-swapper/actions/runs/41291656552),
+review corrections `e8cc4e8` in
+[41292133837](https://github.com/shahzadlone/agent-swapper/actions/runs/41292133837),
+and active invocation rechecks `279cc96` in
+[41292389909](https://github.com/shahzadlone/agent-swapper/actions/runs/41292389909).
+These do not qualify the subsequent lifecycle, NOCTTY or bound-service revisions.
+
+The first bound-service native run
+[41293930402](https://github.com/shahzadlone/agent-swapper/actions/runs/41293930402)
+passed connection substitution, the mutable-template refusal, ordinary
+activation and initial journal cases on both Ubuntu versions. Both stopped at
+a stale assertion in the forged-invocation witness control: direct invocation
+lookup now refused absence before the former unit-name comparison. Binding now
+uses the existing authenticated absence decoder and exposes a stable NotFound
+error; the test requires both that kind and the precise absence message. It does
+not accept arbitrary manager errors. The rest of the composition requires a rerun.
+
+The source-only Opus 5.5 review of `86f6c72` found no authority bypass and
+identified evidence, policy-retention and API-surface gaps. The first corrections
+make both subprocess-role tests require one executed passing test; an actual
+misspelled-role negative control fails, and restoring the name passes. The
+mutable-template control now checks the socket's accepted-connection count and
+idle state before and after refusal, verifies mode restoration, and rechecks the
+loaded unit. Mocked timeout, unexpected success and unexpected connection cases
+all fail while restoring mode 0644. Admission and connection substitution share
+one ten-second deadline, including the bounded offer read. Local runtime and
+evaluation tests, strict evaluation Clippy and 15 activation-harness tests pass.
+Native qualification of these corrections remains pending.
+
+The second review correction records configuration device/inode, link count,
+size, modification/change timestamps, mode and ownership at open. Reads check
+the retained stamp before and after reading; binding and later active rechecks
+also reopen the protected path and require the original stamp. Identical-content
+replacement, in-place edits and mode changes refuse. These are change detectors
+under a trusted root, not proof of an atomic manager load or protection against
+root. Independent witnesses cover only their own observation window.
+
+The hosted private-mount harness now holds an ordinary observer after retaining
+the file, then tests an unchanged file, identical-byte replacement, content
+change and mode change. Local tests cover every stamp field and real owned-file
+replacement/edit/chmod. Native results for the added controls remain pending.
+
+`BoundService` no longer exposes its inner kernel binding. Child observations
+require its original guardian parent; retirement observations pair both halves
+using its private identity and exact manager connection. Returned observations
+remain diagnostics, not Store completion authority. The guardian signal handle
+requires an explicit `qualification` feature in both shared crates, enabled only
+by the evaluation consumer. Dependency checks assert that ordinary application,
+runtime and manager graphs leave that feature disabled. Positive and negative
+doctests check type availability, non-cloneability, hidden inner binding and the
+disabled signal method. Owner/transport replacement leaves retirement unresolved.
+
+Local validation: 38 runtime tests plus five doctests, twelve manager tests plus
+four doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-feature
+Clippy, the dependency boundary, and the Python fixture checks pass. This still
+does not enable a production managed launcher, install local services or consume
+real provider accounts.
+
+Qualified integration: source revision `3ae40ee` passed the complete pipeline in
+[41295768975](https://github.com/shahzadlone/agent-swapper/actions/runs/41295768975),
+including native Ubuntu 22.04/24.04 controls, the fifteen installed-asset cases,
+cross-platform checks and independent unsigned package rebuilds. Its reviewed
+binding corrections are integrated without enabling production managed execution.
+Subsequent credential and one-use retirement work requires separate evidence.

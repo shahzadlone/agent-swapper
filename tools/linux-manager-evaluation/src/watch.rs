@@ -9,18 +9,14 @@ pub(crate) async fn retire(
     binding: &kernel::Binding,
 ) -> io::Result<kernel::Retirement> {
     tokio::time::timeout(Duration::from_secs(20), async {
+        binding.require_manager(connection)?;
         loop {
             require(
                 owner(connection).await?.as_str() == sender,
                 "manager owner changed while observing retirement",
             )?;
-            if let Some(retirement) = binding.retirement()?
-                && agentswapper_linux_manager::invocation_retired(
-                    connection,
-                    sender,
-                    &unit.unit,
-                    &unit.invocation,
-                )
+            if let Some(retirement) = binding
+                .retirement(connection, sender, &unit.unit, &unit.invocation)
                 .await?
             {
                 require(

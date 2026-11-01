@@ -1,21 +1,12 @@
 //! Retain an executable image below protected root-owned ancestry.
 //! This checks filesystem protection, not installation authorization, version,
 //! protocol compatibility or permission to launch a target.
-use rustix::fs::{FileType, Mode, OFlags, StatVfsMountFlags, fstat, fstatvfs, open, openat};
+use rustix::fs::{Mode, OFlags, StatVfsMountFlags, fstat, fstatvfs, open};
 use std::{
     io,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
-    path::{Component, Path},
+    path::Path,
 };
-
-const DIRECTORY: OFlags = OFlags::RDONLY
-    .union(OFlags::DIRECTORY)
-    .union(OFlags::CLOEXEC)
-    .union(OFlags::NOFOLLOW);
-const IMAGE: OFlags = OFlags::RDONLY
-    .union(OFlags::CLOEXEC)
-    .union(OFlags::NOFOLLOW)
-    .union(OFlags::NONBLOCK);
 
 fn require(ok: bool, message: &str) -> io::Result<()> {
     if ok {
@@ -24,16 +15,6 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
         Err(io::Error::other(message))
     }
 }
-fn protected_directory(fd: impl AsFd) -> io::Result<()> {
-    let stat = fstat(fd)?;
-    require(
-        FileType::from_raw_mode(stat.st_mode) == FileType::Directory
-            && stat.st_uid == 0
-            && stat.st_mode & 0o022 == 0,
-        "image ancestor is not root-owned and protected",
-    )
-}
-
 /// An open, read-only image descriptor. Its fields cannot be fabricated from
 /// pathname metadata. Root is trusted; no immutability against root is claimed.
 #[must_use = "keep the validated image handle through the operation it protects"]
@@ -44,40 +25,10 @@ impl ProtectedImage {
     /// or who authored a mounted filesystem. Refusing nosuid mounts narrows
     /// common user-mount exposure; it is not a complete provenance proof.
     pub fn open(path: &Path) -> io::Result<Self> {
-        require(
-            path.is_absolute() && path.as_os_str().len() <= 4096,
-            "image path must be bounded and absolute",
-        )?;
-        let mut components = path.components();
-        require(
-            components.next() == Some(Component::RootDir),
-            "image path lacks a root",
-        )?;
-        let components = components.collect::<Vec<_>>();
-        require(
-            !components.is_empty()
-                && components
-                    .iter()
-                    .all(|part| matches!(part, Component::Normal(_))),
-            "image path must contain only normal components",
-        )?;
-        let (leaf, parents) = components
-            .split_last()
-            .ok_or_else(|| io::Error::other("image path lacks a filename"))?;
-        let mut directory = open("/", DIRECTORY, Mode::empty())?;
-        protected_directory(&directory)?;
-        for part in parents {
-            directory = openat(&directory, part.as_os_str(), DIRECTORY, Mode::empty())?;
-            protected_directory(&directory)?;
-        }
-        // Resolve each component from an already validated directory handle.
-        // NONBLOCK prevents a substituted FIFO from blocking before fstat.
-        let image = openat(&directory, leaf.as_os_str(), IMAGE, Mode::empty())?;
+        let image = crate::protected_file::open(path)?;
         let stat = fstat(&image)?;
         require(
-            FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
-                && stat.st_uid == 0
-                && stat.st_mode & 0o7777 == 0o755,
+            stat.st_mode & 0o7777 == 0o755,
             "image is not a root-owned mode-0755 regular file",
         )?;
         require(
@@ -164,7 +115,7 @@ mod tests {
             .ok_or_else(|| io::Error::other("mutable image ancestry accepted"))?;
         assert_eq!(
             error.to_string(),
-            "image ancestor is not root-owned and protected"
+            "installed file ancestor is not root-owned and protected"
         );
         // Reach a leaf symlink beneath protected ancestry; /tmp's earlier
         // refusal must not masquerade as coverage of leaf O_NOFOLLOW.
