@@ -1,0 +1,19 @@
+[package]
+name = "agentswapper-linux-runtime"
+description = "Private Linux launch transport for AgentSwapper helpers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "=1.1.6", features = ["net", "fs", "event"] }
+zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile.workspace = true
+wait-timeout = "0.2"
+
+[lints]
+workspace = true

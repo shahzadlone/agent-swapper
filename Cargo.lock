@@ -82,6 +82,7 @@ name = "agentswapper-core"
 version = "0.1.0-dev"
 dependencies = [
  "age",
+ "agentswapper-linux-runtime",
  "agentswapper-windows-security",
  "aswp-linux-manager-evaluation",
  "ctrlc",
@@ -106,6 +107,16 @@ dependencies = [
  "windows 0.62.2",
  "windows-sys",
  "winsafe",
+ "zeroize",
+]
+
+[[package]]
+name = "agentswapper-linux-runtime"
+version = "0.1.0-dev"
+dependencies = [
+ "rustix",
+ "tempfile",
+ "wait-timeout",
  "zeroize",
 ]
 
@@ -226,6 +237,7 @@ dependencies = [
 name = "aswp-linux-manager-evaluation"
 version = "0.0.0"
 dependencies = [
+ "agentswapper-linux-runtime",
  "fuxix",
  "nix",
  "rustix",

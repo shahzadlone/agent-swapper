@@ -11,12 +11,7 @@ mod activated_terminal;
     reason = "service uses only the shared peer credential decoder"
 )]
 mod activation_packet;
-#[allow(
-    dead_code,
-    reason = "service uses selected shared transport operations"
-)]
-#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
-mod admission_transport;
+use agentswapper_linux_runtime::admission_transport;
 mod common;
 mod fixture_policy;
 mod job_control;

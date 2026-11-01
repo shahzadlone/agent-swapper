@@ -3,12 +3,7 @@
 
 mod activation;
 mod activation_packet;
-#[allow(
-    dead_code,
-    reason = "qualification service shares the reviewed core transport"
-)]
-#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
-mod admission_transport;
+use agentswapper_linux_runtime::admission_transport;
 mod common;
 mod fixture_policy;
 pub mod journal_client;

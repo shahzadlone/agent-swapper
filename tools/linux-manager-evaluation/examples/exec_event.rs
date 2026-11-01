@@ -1,12 +1,7 @@
 //! Provider-free exec-event spike. Only this executable's fixed child is traced.
 //! No installed service, external PID, arbitrary target or custody receipt.
 #![forbid(unsafe_code)]
-#[allow(
-    dead_code,
-    reason = "isolated spike uses selected existing gate operations"
-)]
-#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
-mod transport;
+use agentswapper_linux_runtime::admission_transport as transport;
 
 use nix::{
     sys::{

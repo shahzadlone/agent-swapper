@@ -14,7 +14,7 @@ def check():
                                 cwd=root, capture_output=True, text=True, check=True, timeout=120)
         locks.append(json.loads(result.stdout)['packages'])
     # The audited Linux transport/runtime must resolve identically in both locks.
-    names = {'zbus', 'zbus_macros', 'zruntime', 'tokio', 'rustix', 'nix', 'unix-ancillary', 'fuxix'}
+    names = {'zbus', 'zbus_macros', 'zruntime', 'tokio', 'rustix', 'nix', 'unix-ancillary', 'fuxix', 'zeroize'}
     versions = [{p['name']: p['version'] for p in packages if p['name'] in names} for packages in locks]
     if versions[0] != versions[1] or versions[0].keys() != names:
         raise RuntimeError('root and isolated manager dependency pins differ')
@@ -26,6 +26,12 @@ def check():
         present = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
         if forbidden & present:
             raise RuntimeError(f'{package} acquired qualification-only production dependencies')
+    result = subprocess.run(['cargo', '+1.98.0', 'tree', '--locked', '-p', 'agentswapper-linux-runtime',
+                             '--edges', 'normal,build', '--prefix', 'none', '--format', '{p}'],
+                            cwd=root, capture_output=True, text=True, check=True, timeout=60)
+    present = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
+    if (forbidden | {'agentswapper-core', 'agentswapper-cli', 'rusqlite', 'age'}) & present:
+        raise RuntimeError('Linux helper transport acquired application or manager dependencies')
     print('Manager qualification dependency pins match; production graphs remain isolated.')
 
 
