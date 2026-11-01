@@ -27,10 +27,12 @@ fn historical_cli_databases_preserve_history_pending_work_and_backups() {
         assert_eq!(provenance["schema"], schema);
         assert_eq!(provenance["sha256"], format!("{:x}", Sha256::digest(bytes)));
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("state");
         // Initialize a private destination using the platform's normal path and
-        // ACL policy; all handles close before copying the historical database.
-        drop(Store::open(&root).unwrap());
+        // ACL policy, retaining its canonical spelling (macOS /var may be a
+        // symlink). All handles close before copying the historical database.
+        let initial = Store::open(&temp.path().join("state")).unwrap();
+        let root = initial.root().to_owned();
+        drop(initial);
         let path = root.join("registry.sqlite3");
         std::fs::write(&path, bytes).unwrap();
         let original = super::super::open_registry_read_only(&path).unwrap();
