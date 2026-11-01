@@ -583,8 +583,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 58,
-                        'managed relay did not pass all fifty-eight owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 60,
+                        'managed relay did not pass all sixty owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
                 result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
                                         str(relay), '--long-session'], environment=test_env)
@@ -599,9 +599,18 @@ def suite():
                                         str(store_relay), '--store'], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 22,
-                        'real Store terminal composition did not pass all 22 cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 24,
+                        'real Store terminal composition did not pass all 24 cases: '
                         + (result.stdout + result.stderr)[-4000:])
+
+                for stopped_relay in (relay, store_relay):
+                    result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
+                                            str(stopped_relay), '--admission-stop-timeout'], environment=test_env, seconds=40)
+                    print(result.stdout[-8000:], end='', flush=True)
+                    print(result.stderr[-4000:], end='', file=sys.stderr, flush=True)
+                    require(result.returncode == 0 and result.stdout.count(': pass') == 1,
+                            'stopped admission did not expire without client cleanup: '
+                            + (result.stdout + result.stderr)[-4000:])
 
         finally:
             for connection in connections:

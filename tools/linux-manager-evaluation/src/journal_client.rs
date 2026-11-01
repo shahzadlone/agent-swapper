@@ -685,8 +685,10 @@ impl Prepared {
     }
 
     /// Check withdrawal again after manager observation, immediately before GO.
-    /// The synchronous check must be bounded; a later signal/send race still
-    /// leaves delivery uncertain and cannot authorize a no-exec inference.
+    /// The check must bound its active work. An explicit user suspension may
+    /// outlast admission; send_until still checks the original deadline after
+    /// the callback returns. A later signal/send race leaves delivery uncertain
+    /// and cannot authorize a no-exec inference.
     pub fn start_after_checked<E>(
         mut self,
         nonce: [u8; 16],

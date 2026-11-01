@@ -432,10 +432,13 @@ fn cancellation(
     if cancelled.get().is_none() {
         cancelled.set(notices.terminate);
     }
-    require(
-        !notices.stop,
-        "external admission suspension is not yet qualified",
-    )?;
+    if notices.stop && cancelled.get().is_none() {
+        // Admission is still cooked and provider execution remains gated. The
+        // guardian's absolute deadline keeps running while this job is stopped;
+        // after foreground return, expired admission must fail without release.
+        let resumed = signals.suspend()?;
+        cancelled.set(resumed.terminate);
+    }
     if cancelled.get().is_some() {
         Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -650,7 +653,7 @@ fn run<J: AdmissionJournal>(
             let retired = retire_closed(directory, *failure.closed, &identity)
                 .and_then(|()| journal.audit_retired());
             drop(terminal);
-            signals.finish(cancelled.get())?;
+            signals.finish_after_cleanup(cancelled.get())?;
             return Err(match retired {
                 Ok(()) => failure.error,
                 Err(error) => error,
@@ -709,12 +712,18 @@ fn run<J: AdmissionJournal>(
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.
+    let termination = outcome.as_ref().ok().copied().flatten();
+    let restoration = match disconnected {
+        Ok(true) if termination.is_some() => Ok(()),
+        Ok(_) => restored,
+        Err(error) => Err(error),
+    };
+    // Final signal policy runs even when a cleanup observation failed. Its
+    // return never completes the unresolved journal or supplies a scope receipt.
+    signals.finish_after_cleanup(termination)?;
     retired?;
-    if disconnected? && let Ok(Some(signal)) = &outcome {
-        return signals.finish(Some(*signal)).map(|()| 0);
-    }
-    restored?;
-    signals.finish(outcome?)?;
+    restoration?;
+    outcome?;
     if !exec_gate {
         return Ok(0);
     }
