@@ -14,7 +14,7 @@ use rustix::{
 use std::{
     fs::File,
     io::{self, Read},
-    os::fd::{AsFd, BorrowedFd, OwnedFd},
+    os::fd::OwnedFd,
 };
 
 fn require(ok: bool, message: &str) -> io::Result<()> {
@@ -365,6 +365,16 @@ pub struct Retirement {
 }
 
 impl Binding {
+    /// Observe credentials through the original proc directory while requiring
+    /// the original guardian pidfd to remain live on both sides of the read.
+    pub fn require_main_credentials(
+        &self,
+        policy: &crate::process_policy::OrdinaryCredentials,
+    ) -> io::Result<()> {
+        self.main.check()?;
+        policy.require_status(&read_at(&self.main.proc_dir, "status", 65536)?)?;
+        self.main.live()
+    }
     /// Corroborate the original guardian's executable through its retained proc
     /// directory and pidfd. The caller supplies a policy-approved installed image;
     /// this observation is not exec confirmation or a whole-scope receipt.
@@ -372,9 +382,10 @@ impl Binding {
         self.main.require_image(image)
     }
 
-    /// Borrow the original guardian pidfd. This is not a numeric-PID lookup or
-    /// manager authorization; the caller remains responsible for its policy.
-    pub fn guardian_pidfd(&self) -> BorrowedFd<'_> {
+    /// Qualification-only signal capability for a caller's owned fault fixture.
+    #[cfg(feature = "qualification")]
+    pub fn guardian_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
         self.main.pidfd.as_fd()
     }
 

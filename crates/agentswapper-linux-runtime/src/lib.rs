@@ -28,4 +28,6 @@ pub mod installed_image;
 #[cfg(target_os = "linux")]
 pub mod installed_config;
 #[cfg(target_os = "linux")]
+pub mod process_policy;
+#[cfg(target_os = "linux")]
 mod protected_file;

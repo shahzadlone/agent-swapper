@@ -387,7 +387,7 @@ mod tests {
         let mut child = Command::new(std::env::current_exe()?)
             .args(["--exact", &receiver_role(), "--ignored"])
             .stdin(Stdio::from(receiver))
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
         let arg_secret = b"aswp-argv-canary-\xff";
@@ -427,8 +427,16 @@ mod tests {
             child.kill()?;
             child.wait()?;
         }
+        let mut report = String::new();
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("receiver role output absent"))?
+            .take(8192)
+            .read_to_string(&mut report)?;
         send_result?;
         assert!(status.is_some_and(|status| status.success()));
+        assert!(report.contains("test result: ok. 1 passed; 0 failed;"));
         Ok(())
     }
 

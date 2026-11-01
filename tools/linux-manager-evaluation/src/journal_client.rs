@@ -448,7 +448,9 @@ impl Bound {
             user: offer.uid,
             pid: offer.pid,
             invocation: Some(offer.invocation),
-            kind: UnitKind::Activated { policy },
+            kind: UnitKind::Activated {
+                policy: Box::new(policy),
+            },
         };
         let runtime = RuntimeGuard::new()?;
         let (connection, owner, report, binding) = runtime.get()?.block_on(async {
@@ -564,7 +566,7 @@ impl Witness {
             pid: claimed.guardian_pid,
             invocation: Some(claimed.invocation.clone()),
             kind: UnitKind::Activated {
-                policy: fixture_policy::activated_policy(prefix)?,
+                policy: Box::new(fixture_policy::activated_policy(prefix)?),
             },
         };
         let runtime = RuntimeGuard::new()?;

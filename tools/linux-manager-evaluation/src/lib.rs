@@ -41,7 +41,7 @@ struct Expected {
 
 enum UnitKind {
     Transient,
-    Activated { policy: manager::ServicePolicy },
+    Activated { policy: Box<manager::ServicePolicy> },
 }
 
 impl Expected {
@@ -144,7 +144,7 @@ async fn snapshot(
         let bound = manager::BoundService::bind(
             connection,
             owner,
-            policy,
+            *policy,
             manager::ServiceClaim {
                 unit: &expected.unit,
                 invocation,

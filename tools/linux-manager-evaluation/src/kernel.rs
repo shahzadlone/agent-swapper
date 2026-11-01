@@ -50,7 +50,7 @@ impl From<&observed::Retirement> for Retirement {
 pub(crate) struct Binding(Backend);
 enum Backend {
     Transient(observed::Binding),
-    Activated(agentswapper_linux_manager::BoundService),
+    Activated(Box<agentswapper_linux_manager::BoundService>),
 }
 impl Binding {
     pub(crate) fn key(&self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
@@ -73,18 +73,12 @@ impl Binding {
             )),
         }
     }
-    fn original(&self) -> &observed::Binding {
-        match &self.0 {
-            Backend::Transient(binding) => binding,
-            Backend::Activated(binding) => binding.kernel(),
-        }
-    }
     pub(crate) fn activated(binding: agentswapper_linux_manager::BoundService) -> io::Result<Self> {
         require(
             crate::fixture_policy::valid_scope_unit(&binding.identity().unit),
             "invalid activated fixture scope",
         )?;
-        Ok(Self(Backend::Activated(binding)))
+        Ok(Self(Backend::Activated(Box::new(binding))))
     }
     pub(crate) fn require_manager(
         &self,
@@ -124,25 +118,62 @@ impl Binding {
         observed::Binding::bind(unit, user, pid).map(|binding| Self(Backend::Transient(binding)))
     }
     pub(crate) fn observe(&self) -> io::Result<Fact> {
-        self.original().observe().map(Into::into)
+        match &self.0 {
+            Backend::Transient(binding) => binding.observe(),
+            Backend::Activated(binding) => binding.observe(),
+        }
+        .map(Into::into)
     }
     pub(crate) fn child(&self, pid: u32, parent: u32) -> io::Result<Child> {
-        self.original().child(pid, parent)
+        match &self.0 {
+            Backend::Transient(binding) => binding.child(pid, parent),
+            Backend::Activated(binding) => {
+                require(
+                    parent == binding.identity().main_pid,
+                    "child parent differs from admitted guardian",
+                )?;
+                binding.child(pid)
+            }
+        }
     }
     pub(crate) fn directory(&self) -> &OwnedFd {
-        self.original().directory()
+        match &self.0 {
+            Backend::Transient(binding) => binding.directory(),
+            Backend::Activated(binding) => binding.directory(),
+        }
     }
-    pub(crate) fn retirement(&self) -> io::Result<Option<Retirement>> {
-        self.original()
-            .retirement()
-            .map(|value| value.map(Into::into))
+    pub(crate) async fn retirement(
+        &self,
+        manager: &agentswapper_linux_manager::Manager,
+        sender: &str,
+        unit: &str,
+        invocation: &str,
+    ) -> io::Result<Option<Retirement>> {
+        let observed = match &self.0 {
+            Backend::Activated(binding) => binding.observe_retired(manager).await?,
+            Backend::Transient(binding) => {
+                let observed = binding.retirement()?;
+                if observed.is_some()
+                    && agentswapper_linux_manager::invocation_retired(
+                        manager, sender, unit, invocation,
+                    )
+                    .await?
+                {
+                    observed
+                } else {
+                    None
+                }
+            }
+        };
+        Ok(observed.map(Into::into))
     }
     pub(crate) fn kill_guardian_for_fixture(&self) -> io::Result<()> {
         self.observe()?;
-        rustix::process::pidfd_send_signal(
-            self.original().guardian_pidfd(),
-            rustix::process::Signal::KILL,
-        )?;
+        let descriptor = match &self.0 {
+            Backend::Transient(binding) => binding.guardian_pidfd(),
+            Backend::Activated(binding) => binding.guardian_pidfd(),
+        };
+        rustix::process::pidfd_send_signal(descriptor, rustix::process::Signal::KILL)?;
         Ok(())
     }
 }

@@ -9,7 +9,7 @@ publish = false
 [workspace]
 
 [dependencies]
-agentswapper-linux-manager = { path = "../../crates/agentswapper-linux-manager", version = "=0.1.0-dev" }
+agentswapper-linux-manager = { path = "../../crates/agentswapper-linux-manager", version = "=0.1.0-dev", features = ["qualification"] }
 agentswapper-linux-runtime = { path = "../../crates/agentswapper-linux-runtime", version = "=0.1.0-dev" }
 zbus = { version = "=6.2.0", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt", "time", "net"] }

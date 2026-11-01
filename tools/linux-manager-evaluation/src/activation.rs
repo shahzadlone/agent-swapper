@@ -124,16 +124,22 @@ fn validate_offer(packet: &activation_packet::Packet, prefix: &str) -> io::Resul
 }
 
 pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Report> {
+    // One budget includes the blocking (four-second bounded) offer read and
+    // both manager operations. Leave room before the guardian's 12-second
+    // bind-only deadline, and before the outer 35-second fixture deadline.
+    let admission_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let (socket, mut activation, offer, policy) = connect(prefix, b"BIND\n")?;
     let expected = Expected {
         unit: offer.unit,
         user: offer.uid,
         pid: offer.pid,
         invocation: Some(offer.invocation),
-        kind: UnitKind::Activated { policy },
+        kind: UnitKind::Activated {
+            policy: Box::new(policy),
+        },
     };
     let (connection, owner, mut report, mut binding) =
-        tokio::time::timeout(Duration::from_secs(8), crate::admit(paths, Some(expected)))
+        tokio::time::timeout_at(admission_deadline, crate::admit(paths, Some(expected)))
             .await
             .map_err(|_| {
                 io::Error::new(
@@ -148,7 +154,7 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
         // Read-only hosted control: another independently authenticated manager
         // connection must not substitute for this binding, even with the same
         // unique-name spelling. No target or launch request exists in this mode.
-        let unrelated_key = tokio::time::timeout(Duration::from_secs(8), async {
+        let unrelated_key = tokio::time::timeout_at(admission_deadline, async {
             let (other, other_owner, _) = agentswapper_linux_manager::connect().await?;
             let checked = async {
                 require(

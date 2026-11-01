@@ -448,3 +448,108 @@ review corrections `e8cc4e8` in
 and active invocation rechecks `279cc96` in
 [41292389909](https://github.com/shahzadlone/agent-swapper/actions/runs/41292389909).
 These do not qualify the subsequent lifecycle, NOCTTY or bound-service revisions.
+
+The first bound-service native run
+[41293930402](https://github.com/shahzadlone/agent-swapper/actions/runs/41293930402)
+passed connection substitution, the mutable-template refusal, ordinary
+activation and initial journal cases on both Ubuntu versions. Both stopped at
+a stale assertion in the forged-invocation witness control: direct invocation
+lookup now refused absence before the former unit-name comparison. Binding now
+uses the existing authenticated absence decoder and exposes a stable NotFound
+error; the test requires both that kind and the precise absence message. It does
+not accept arbitrary manager errors. The rest of the composition requires a rerun.
+
+The source-only Opus 5.5 review of `86f6c72` found no authority bypass and
+identified evidence, policy-retention and API-surface gaps. The first corrections
+make both subprocess-role tests require one executed passing test; an actual
+misspelled-role negative control fails, and restoring the name passes. The
+mutable-template control now checks the socket's accepted-connection count and
+idle state before and after refusal, verifies mode restoration, and rechecks the
+loaded unit. Mocked timeout, unexpected success and unexpected connection cases
+all fail while restoring mode 0644. Admission and connection substitution share
+one ten-second deadline, including the bounded offer read. Local runtime and
+evaluation tests, strict evaluation Clippy and 15 activation-harness tests pass.
+Native qualification of these corrections remains pending.
+
+The second review correction records configuration device/inode, link count,
+size, modification/change timestamps, mode and ownership at open. Reads check
+the retained stamp before and after reading; binding and later active rechecks
+also reopen the protected path and require the original stamp. Identical-content
+replacement, in-place edits and mode changes refuse. These are change detectors
+under a trusted root, not proof of an atomic manager load or protection against
+root. Independent witnesses cover only their own observation window.
+
+The hosted private-mount harness now holds an ordinary observer after retaining
+the file, then tests an unchanged file, identical-byte replacement, content
+change and mode change. Local tests cover every stamp field and real owned-file
+replacement/edit/chmod. Native results for the added controls remain pending.
+
+`BoundService` no longer exposes its inner kernel binding. Child observations
+require its original guardian parent; retirement observations pair both halves
+using its private identity and exact manager connection. Returned observations
+remain diagnostics, not Store completion authority. The guardian signal handle
+requires an explicit `qualification` feature in both shared crates, enabled only
+by the evaluation consumer. Dependency checks assert that ordinary application,
+runtime and manager graphs leave that feature disabled. Positive and negative
+doctests check type availability, non-cloneability, hidden inner binding and the
+disabled signal method. Owner/transport replacement leaves retirement unresolved.
+
+Local validation: 38 runtime tests plus five doctests, twelve manager tests plus
+four doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-feature
+Clippy, the dependency boundary, and the Python fixture checks pass. This still
+does not enable a production managed launcher, install local services or consume
+real provider accounts.
+
+## Ordinary guardian credentials and loaded-policy rechecks
+
+The activation policy now binds the primary GID as well as the UID. The original
+guardian's retained proc directory must report matching real/effective/saved/
+filesystem IDs, supplementary groups contained in the caller's existing group
+set, empty inheritable/permitted/effective/bounding/ambient capabilities, and
+`NoNewPrivs: 1`. Original pidfd liveness brackets this read. The fixture template
+explicitly clears the capability bounding and ambient sets and sets `Restart=no`.
+
+Supplementary groups cannot simply be assumed empty: systemd initializes them
+from the user's group database, and `SupplementaryGroups=` extends that list.
+The policy therefore permits a subset of the ordinary caller's groups, including
+its primary group, and refuses group expansion or root group membership. See
+[systemd's group semantics](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#SupplementaryGroups=)
+and the [kernel's process-status fields](https://docs.kernel.org/filesystems/proc.html).
+
+Admission and every active recheck now read the complete loaded-policy snapshot,
+including primary group, drop-ins, reload state, delegation and kill mode, plus
+direct lifecycle and `Restart=no`. The claimed unit must be a nonempty instance
+of the retained template's own stem. Existing connection/owner, invocation,
+configuration-stamp, executable, cgroup and original-process checks remain
+required. This does not add delegated-work custody or crash-recovery authority.
+
+Local checks pass 39 runtime tests, thirteen manager tests, nine combined
+doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-feature
+Clippy, dependency boundaries and 15 activation-harness checks. Native results
+for this new credential policy remain pending. The requested follow-up Opus
+review of predecessor `3ae40ee` could not run because the CLI reported its session
+quota exhausted; it supplies no additional review evidence.
+
+## One-use retirement value
+
+`BoundService::observe_retirement` now returns a private, non-cloneable
+`RetiredService` only after both original-kernel removal and authenticated
+original-invocation retirement agree on the exact retained manager connection.
+It uses the binding's existing paired observer. Success revokes further issuance
+before returning; errors, deadline expiry and cancellation retain the binding
+for retry. The mutable-borrow API avoids dropping the original witnesses when
+a caller cancels an owned asynchronous transition.
+
+An opaque `ServiceKey` identifies this particular binding in memory. Copies
+select an expected binding but prove nothing by themselves. Even an independent
+valid witness of the same invocation has another key, so it cannot replace a
+lost original witness after a crash. The receipt still says nothing about a
+Store run/profile, a target's exit status, or delegated work. It is not yet used
+to authorize profile reuse.
+
+The real BIND fixture now checks an expired deadline while live, successful
+retirement against the original key, rejection against a fresh witness's key,
+and rejection of a second issuance. Its binding and substitution work share the
+existing admission deadline. Local manager tests, positive/negative doctests,
+49 consumer tests and strict manager/consumer Clippy pass; native qualification
+and a real Store consumer are the next gates.

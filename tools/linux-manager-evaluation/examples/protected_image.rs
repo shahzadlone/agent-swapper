@@ -3,7 +3,10 @@
 use agentswapper_linux_runtime::{
     installed_config::ProtectedConfig, installed_image::ProtectedImage,
 };
-use std::{io, path::Path};
+use std::{
+    io::{self, Read, Write},
+    path::Path,
+};
 
 fn run() -> io::Result<()> {
     if rustix::process::getuid().is_root()
@@ -19,6 +22,20 @@ fn run() -> io::Result<()> {
         }
         [_, mode, path] if mode == "--config" => {
             ProtectedConfig::open(Path::new(path))?.read()?;
+        }
+        [_, mode, path] if mode == "--config-recheck" => {
+            let config = ProtectedConfig::open(Path::new(path))?;
+            config.read()?;
+            println!("installed-asset: retained");
+            io::stdout().flush()?;
+            // Only the qualification harness uses this handshake. Its owned
+            // child deadline bounds the wait; no service is created or launched.
+            let mut command = [0; 1];
+            io::stdin().read_exact(&mut command)?;
+            if command != *b"R" {
+                return Err(io::Error::other("invalid configuration recheck request"));
+            }
+            config.require_current(Path::new(path))?;
         }
         _ => return Err(io::Error::other("expected an installed fixture asset path")),
     }

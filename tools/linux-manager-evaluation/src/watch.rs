@@ -15,13 +15,8 @@ pub(crate) async fn retire(
                 owner(connection).await?.as_str() == sender,
                 "manager owner changed while observing retirement",
             )?;
-            if let Some(retirement) = binding.retirement()?
-                && agentswapper_linux_manager::invocation_retired(
-                    connection,
-                    sender,
-                    &unit.unit,
-                    &unit.invocation,
-                )
+            if let Some(retirement) = binding
+                .retirement(connection, sender, &unit.unit, &unit.invocation)
                 .await?
             {
                 require(

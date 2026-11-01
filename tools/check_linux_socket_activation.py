@@ -155,6 +155,7 @@ Description=AgentSwapper disposable fixed-user guardian
 CollectMode=inactive-or-failed
 [Service]
 Type=exec
+Restart=no
 User={uid}
 Group={gid}
 ExecStart={guardian_image(prefix)} --activation-guardian {prefix} {uid} {gid} {directory} %n
@@ -170,6 +171,8 @@ TimeoutStartSec=10s
 TimeoutStopSec=2s
 RuntimeMaxSec=60s
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
 UMask=0077
 '''
     return {prefix + '.socket': socket_unit, prefix + '@.service': service_unit}
@@ -222,6 +225,44 @@ def rollback_created(created):
                 and (meta.st_dev, meta.st_ino) == (device, inode),
                 'partial fixture file changed; refusing rollback')
         path.unlink()
+
+
+def template_refusal(template, contents, prefix, uid, gid):
+    """Caller has authenticated the owned marker, image and every unit file."""
+    before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+    require(before['NConnections'] == '0' and re.fullmatch(r'[0-9]{1,20}', before['NAccepted']),
+            'template control requires an idle activation socket')
+    descriptor = os.open(template, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
+                and stat.S_IMODE(metadata.st_mode) == 0o644,
+                'template control requires the original protected file')
+        observer = os.environ.get('ASWP_MANAGED_OBSERVER', '')
+        require(Path(observer).is_absolute() and Path(observer).is_file(),
+                'template control requires the fixed Rust observer')
+        environment = {name: os.environ[name] for name in PRESERVE.split(',') if name in os.environ}
+        environment.update(PATH='/usr/bin:/bin', LC_ALL='C')
+        try:
+            os.fchmod(descriptor, 0o664)
+            result = subprocess.run(['/usr/bin/setpriv', '--reuid', str(uid), '--regid', str(gid),
+                '--clear-groups', '--inh-caps=-all', '--bounding-set=-all', '--no-new-privs',
+                observer, '--activation-probe', prefix], env=environment, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=12, check=False)
+            require(result.returncode == 125 and not result.stdout
+                    and 'installed file is not a root-owned protected regular file' in result.stderr,
+                    'mutable template did not refuse at the installed-file check: ' + result.stderr[-2000:])
+            after = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+            require(after == before, 'mutable-template observer connected before refusing')
+        finally:
+            os.fchmod(descriptor, 0o644)
+            require(stat.S_IMODE(os.fstat(descriptor).st_mode) == 0o644,
+                    'owned template mode was not restored')
+        require(template.read_text() == contents, 'owned template contents changed during control')
+        effective_unit(f'{prefix}@0-1-{uid}.service', template)
+    finally:
+        os.close(descriptor)
+    print('::notice title=Linux activation template::ordinary observer refused the owned mode-0664 template; accepted connection count unchanged; original mode restored', flush=True)
 
 
 def admin(verb, directory, uid, gid):
@@ -296,33 +337,7 @@ def admin(verb, directory, uid, gid):
                     and metadata.st_mode & 0o022 == 0 and path.read_text() == contents,
                     'fixture unit changed; refusing service control')
     if verb == 'template-refusal':
-        template = parent / (prefix + '@.service')
-        descriptor = os.open(template, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-        try:
-            metadata = os.fstat(descriptor)
-            require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
-                    and stat.S_IMODE(metadata.st_mode) == 0o644,
-                    'template control requires the original protected file')
-            observer = os.environ.get('ASWP_MANAGED_OBSERVER', '')
-            require(Path(observer).is_absolute() and Path(observer).is_file(),
-                    'template control requires the fixed Rust observer')
-            environment = {name: os.environ[name] for name in PRESERVE.split(',') if name in os.environ}
-            environment.update(PATH='/usr/bin:/bin', LC_ALL='C')
-            try:
-                os.fchmod(descriptor, 0o664)
-                result = subprocess.run(['/usr/bin/setpriv', '--reuid', str(uid), '--regid', str(gid),
-                    '--clear-groups', '--inh-caps=-all', '--bounding-set=-all', '--no-new-privs',
-                    observer, '--activation-probe', prefix], env=environment, stdin=subprocess.DEVNULL,
-                    capture_output=True, text=True, timeout=12, check=False)
-                require(result.returncode == 125 and not result.stdout
-                        and 'installed file is not a root-owned protected regular file' in result.stderr,
-                        'mutable template did not refuse at the installed-file check: ' + result.stderr[-2000:])
-            finally:
-                os.fchmod(descriptor, 0o644)
-            require(template.read_text() == files[template.name], 'owned template contents changed during control')
-        finally:
-            os.close(descriptor)
-        print('::notice title=Linux activation template::ordinary observer refused the owned mode-0664 template; original mode restored', flush=True)
+        template_refusal(parent / (prefix + '@.service'), files[prefix + '@.service'], prefix, uid, gid)
         return
     # All names are reserved to this run. Stop activation before collecting its
     # service instances; no wildcard includes any unrelated unit prefix.

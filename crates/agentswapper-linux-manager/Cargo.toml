@@ -7,6 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+qualification = ["agentswapper-linux-runtime/qualification"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 agentswapper-linux-runtime = { path = "../agentswapper-linux-runtime", version = "=0.1.0-dev" }
 zbus = { version = "=6.2.0", default-features = false, features = ["tokio"] }
