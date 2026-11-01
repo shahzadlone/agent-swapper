@@ -6,6 +6,7 @@ mod activation_packet;
 use agentswapper_linux_runtime::admission_transport;
 mod common;
 mod fixture_policy;
+mod generation_probe;
 pub mod journal_client;
 #[allow(
     dead_code,
@@ -460,6 +461,32 @@ fn run() -> io::Result<Report> {
 
 /// Entry for the isolated client/observer executable. No custody receipts.
 pub fn run_cli() {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|value| value == "--activation-generation-probe")
+    {
+        let result = if args.len() == 4 {
+            generation_probe::run(&args[1], &args[2], std::path::Path::new(&args[3]))
+        } else {
+            Err(io::Error::other(
+                "generation probe requires MODE PREFIX DIRECTORY",
+            ))
+        };
+        if let Err(error) = result {
+            eprintln!(
+                "generation probe refused: {}",
+                error
+                    .to_string()
+                    .chars()
+                    .take(2000)
+                    .collect::<String>()
+                    .escape_debug()
+            );
+            std::process::exit(125);
+        }
+        return;
+    }
     if std::env::args_os()
         .skip(1)
         .eq([std::ffi::OsString::from("--installation-version")])

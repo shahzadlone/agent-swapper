@@ -21,6 +21,28 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_selector_replacement_preserves_old_handle_and_rolls_back_failure(self):
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+                root = Path(temporary)
+                selector, replacement = root / 'selector', root / 'replacement'
+                selector.write_text('original')
+                # Only transaction mechanics are under test here. Protected
+                # metadata validation has its separate mode/UID/link controls.
+                stack.enter_context(patch.object(probe, 'verify_config',
+                    side_effect=lambda path, text: self.assertEqual(path.read_text(), text)))
+                if failed:
+                    stack.enter_context(patch.object(probe.os, 'replace', side_effect=OSError('injected replace failure')))
+                with selector.open('r') as original:
+                    if failed:
+                        with self.assertRaisesRegex(OSError, 'injected replace failure'):
+                            probe.replace_selector(selector, replacement, 'next')
+                    else:
+                        probe.replace_selector(selector, replacement, 'next')
+                    self.assertEqual(original.read(), 'original')
+                    self.assertEqual(selector.read_text(), 'original' if failed else 'next')
+                    self.assertFalse(replacement.exists())
+
     def test_isolated_entry_loads_only_explicit_helpers_and_ignores_shadow_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -56,8 +78,8 @@ class ActivationTests(unittest.TestCase):
         with patch.object(probe.os.path, 'lexists', return_value=False) as exists:
             probe.verify_cleanup(prefix)
         paths = [call.args[0] for call in exists.call_args_list]
-        self.assertEqual(len(paths), 8)
-        self.assertEqual(len(set(paths)), 8)
+        self.assertEqual(len(paths), 9)
+        self.assertEqual(len(set(paths)), 9)
         for survivor in paths:
             with self.subTest(path=survivor), \
                  patch.object(probe.os.path, 'lexists', side_effect=lambda path: path == survivor), \
@@ -102,8 +124,9 @@ class ActivationTests(unittest.TestCase):
              patch.object(Path, 'read_text', return_value=json.dumps(ownership)), patch.object(probe, 'verify_image'), \
              patch.object(probe, 'verify_config', side_effect=RuntimeError('installation metadata changed')), \
              patch.object(Path, 'unlink') as unlink, patch.object(probe, 'systemctl') as control:
-            with self.assertRaisesRegex(RuntimeError, 'installation metadata changed'):
-                probe.admin('cleanup', directory, 1000, 1000)
+            for verb in ('cleanup', 'select-original', 'select-next', 'stamp-image'):
+                with self.subTest(verb=verb), self.assertRaisesRegex(RuntimeError, 'installation metadata changed'):
+                    probe.admin(verb, directory, 1000, 1000)
             control.assert_not_called()
             unlink.assert_not_called()
 

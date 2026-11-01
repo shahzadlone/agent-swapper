@@ -158,6 +158,26 @@ hashes. All 47 Linux harness tests pass locally. Native coverage of the new
 layout, followed by real service selector-switch and mutation controls, remains
 required before the admission-lifetime finding is closed.
 
+### Service admission across selector replacement
+
+Three hosted controls now exercise actual service bindings: replacing the
+selector between initial observations and the final binding check must refuse;
+replacing it after successful binding must permit preparation and retirement
+using the original key; changing the retained guardian image's metadata must
+refuse revalidation while still allowing observation of original retirement.
+Both generation manifests and every other artifact remain installed throughout.
+The administrator authenticates its ownership marker and exact fixture assets
+before each action, replaces only its reserved selector, and restores the
+original selection after each control. This is not an installer or revocation API.
+
+The deterministic pre-admission barrier is available only to qualification
+builds and executes every normal admission check. A default-build compile-fail
+test checks that it is absent. Binding also rejects an already-admitted policy.
+Local manager tests, default doctests, strict evaluator Clippy and 48 Linux
+harness controls passed. Real service controls await hosted CI; deliberately
+mutated observers are still needed to demonstrate that these cases detect a
+missing or prematurely executed admission transition.
+
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
 restart recovery and production launch integration remain separate open gates.
