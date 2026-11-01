@@ -48,6 +48,7 @@ enum Request {
     Run,
     Admit,
     Terminal,
+    JobControl,
 }
 
 fn request(channel: &OwnedFd) -> io::Result<Request> {
@@ -75,13 +76,17 @@ fn request(channel: &OwnedFd) -> io::Result<Request> {
             .flags
             .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
             && Instant::now() < deadline
-            && matches!(packet, b"GO\n" | b"BIND\n" | b"ADMIT\n" | b"PTY1\n"),
+            && matches!(
+                packet,
+                b"GO\n" | b"BIND\n" | b"ADMIT\n" | b"PTY1\n" | b"PTY2\n"
+            ),
         "invalid fixture activation request",
     )?;
     Ok(match packet {
         b"BIND\n" => Request::Bind,
         b"ADMIT\n" => Request::Admit,
         b"PTY1\n" => Request::Terminal,
+        b"PTY2\n" => Request::JobControl,
         _ => Request::Run,
     })
 }
@@ -187,6 +192,9 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
         net::send(&channel, &bytes, SendFlags::NOSIGNAL)? == bytes.len(),
         "incomplete activation offer",
     )?;
+    if request == Request::JobControl {
+        return crate::activated_job_control::serve(&channel, prefix, &run, &invocation);
+    }
     if matches!(request, Request::Admit | Request::Terminal) {
         return crate::activated_journal::serve(
             &channel,
@@ -319,19 +327,28 @@ pub(crate) fn dispatch() -> Option<io::Result<()>> {
             )?;
             crate::activated_journal::writer(&args[1], Path::new(&args[2]))
         })()),
-        Some("--activation-terminal-shim") => Some((|| {
+        Some("--activation-terminal-shim" | "--activation-job-shim") => Some((|| {
             require(
                 args.len() == 3,
                 "terminal shim requires prefix and directory",
             )?;
-            crate::activated_terminal::shim(&args[1], Path::new(&args[2]))
+            crate::activated_terminal::shim(
+                &args[1],
+                Path::new(&args[2]),
+                args[0] == "--activation-job-shim",
+            )
         })()),
-        Some("--activation-terminal-target") => Some((|| {
+        Some("--activation-terminal-target" | "--activation-job-target") => Some((|| {
             require(
                 args.len() == 4,
                 "terminal target requires prefix, directory and nonce",
             )?;
-            crate::activated_terminal::target(&args[1], Path::new(&args[2]), &args[3])
+            crate::activated_terminal::target(
+                &args[1],
+                Path::new(&args[2]),
+                &args[3],
+                args[0] == "--activation-job-target",
+            )
         })()),
         Some("--activation-writer") => Some((|| {
             require(
@@ -354,6 +371,9 @@ mod tests {
             (b"BIND\n".as_slice(), false, true),
             (b"ADMIT\n".as_slice(), false, true),
             (b"PTY1\n".as_slice(), false, true),
+            (b"PTY2\n".as_slice(), false, true),
+            (b"PTY2\nX".as_slice(), false, false),
+            (b"PTY2\n".as_slice(), true, false),
             (b"PTY1\nX".as_slice(), false, false),
             (b"PTY1\n".as_slice(), true, false),
             (b"ADMIT".as_slice(), false, false),

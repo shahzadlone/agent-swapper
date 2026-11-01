@@ -8,8 +8,49 @@ use std::{
 };
 
 const START: &[u8] = b"ASWP-FIXTURE-GO-1";
+// Eight-byte versioned tag + nonce + sequence fits the shared 32-byte frame.
+const RESUME: &[u8] = b"ASWPRSM1";
 pub(crate) fn start_packet(nonce: &[u8; 16]) -> Vec<u8> {
     [START, nonce].concat()
+}
+
+pub(crate) fn resume_packet(nonce: &[u8; 16], sequence: u64) -> Vec<u8> {
+    [RESUME, nonce, &sequence.to_be_bytes()].concat()
+}
+
+pub(crate) fn receive_resume(
+    channel: impl AsFd,
+    nonce: &[u8; 16],
+    sequence: u64,
+    deadline: Instant,
+) -> io::Result<()> {
+    require(
+        sequence > 0
+            && net::sockopt::socket_type(&channel)? == net::SocketType::SEQPACKET
+            && !net::sockopt::socket_passcred(&channel)?
+            && !rustix::fs::fcntl_getfl(&channel)?.contains(rustix::fs::OFlags::NONBLOCK),
+        "fixture resume requires a blocking credential-disabled channel and stop sequence",
+    )?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "fixture resume expired"))?;
+    let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
+    net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
+    let result = (|| {
+        if withdrawn(&channel)? {
+            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
+        }
+        crate::admission_transport::receive_control_until(
+            &channel,
+            &resume_packet(nonce, sequence),
+            deadline,
+        )
+    })();
+    let restored =
+        net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, previous)
+            .map_err(io::Error::from);
+    restore(result, restored)
 }
 
 #[derive(Debug)]
@@ -129,6 +170,90 @@ mod tests {
     use super::*;
     use crate::admission_transport as transport;
     use std::{os::fd::AsFd, thread, time::Duration};
+
+    #[test]
+    fn resume_refuses_replays_foreign_nonces_rights_and_empty_records() -> io::Result<()> {
+        for (bytes, rights, accepted) in [
+            (resume_packet(&[4; 16], 2), false, true),
+            (resume_packet(&[4; 16], 1), false, false),
+            (resume_packet(&[4; 16], 3), false, false),
+            (resume_packet(&[5; 16], 2), false, false),
+            (start_packet(&[4; 16]), false, false),
+            (resume_packet(&[4; 16], 2), true, false),
+            (Vec::new(), false, false),
+            (
+                [resume_packet(&[4; 16], 2).as_slice(), b"X"].concat(),
+                false,
+                false,
+            ),
+        ] {
+            let (sender, receiver) = transport::pair()?;
+            let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
+            let (capability, witness) = transport::pair()?;
+            transport::send(
+                &sender,
+                &bytes,
+                &if rights {
+                    vec![capability.as_fd()]
+                } else {
+                    vec![]
+                },
+            )?;
+            drop(capability);
+            net::shutdown(&sender, net::Shutdown::Write)?;
+            let result = receive_resume(
+                &receiver,
+                &[4; 16],
+                2,
+                Instant::now() + Duration::from_secs(1),
+            );
+            assert_eq!(result.is_ok(), accepted, "resume result: {result:?}");
+            if let Err(error) = result {
+                assert!(!is_withdrawal(&error));
+            }
+            assert!(!net::sockopt::socket_passcred(&receiver)?);
+            assert_eq!(
+                net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+                previous
+            );
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !transport::eof(&witness)? {
+                require(
+                    Instant::now() < deadline,
+                    "refused resume retained a transferred capability",
+                )?;
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let (sender, receiver) = transport::pair()?;
+        drop(sender);
+        let error = receive_resume(
+            &receiver,
+            &[4; 16],
+            2,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .err()
+        .ok_or_else(|| io::Error::other("closure resumed target"))?;
+        assert!(is_withdrawal(&error));
+        let (_held, receiver) = transport::pair()?;
+        let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
+        assert!(
+            receive_resume(
+                &receiver,
+                &[4; 16],
+                2,
+                Instant::now() + Duration::from_millis(20)
+            )
+            .is_err()
+        );
+        assert!(!net::sockopt::socket_passcred(&receiver)?);
+        assert_eq!(
+            net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+            previous
+        );
+        Ok(())
+    }
 
     #[test]
     fn delayed_start_deadline_and_channel_policy_are_explicit() -> io::Result<()> {

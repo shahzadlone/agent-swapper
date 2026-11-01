@@ -44,8 +44,56 @@ limit orphaning of these fixed children; they are not descendant containment.
 
 The pre-GO control-character test explicitly flushes its owned PTY after both
 signals have been witnessed. That is a fixture cleanup step, not a production
-typeahead rule. Native Ubuntu 22.04/24.04 results and the focused Opus design
-review remain pending.
+typeahead rule. Both native Ubuntu jobs passed at `82ecbbf` in
+[run 41270270251](https://github.com/shahzadlone/agent-swapper/actions/runs/41270270251).
+Its remaining platform/package checks are tracked separately.
+
+Opus 5.5 xhigh reviewed the topology and supported a guardian-owned session,
+while identifying hangup, signal normalization and child-wait ownership as
+important integration concerns. Some recommendations assumed that std clears
+signal masks during spawn; inspection of both Unix spawn paths in the pinned
+Rust 1.98.0 source shows that they preserve the mask. The fixed shim also checks
+the inherited blocked mask on both hosted kernels. The guardian never unblocks
+its terminal signals, and group operations reject a reaped child. The review's
+generic early-reap concern therefore does not establish a reused-PID operation
+in this restricted owner. A stronger non-reaping lifecycle may still be useful
+for a future arbitrary-target API. The requested focused follow-up hit the
+Claude session quota and is not counted as a completed review.
+
+## Manager-backed integration
+
+The next `PTY2` mode uses the actual protected, fixed-user activation service,
+real profile lease and durable Store callback. `PTY1` stays separately tested.
+The guardian acquires its inner terminal before spawning a separate child
+group, and checks that it did not already have a controlling terminal. The
+shim verifies the controlling session, foreground group and inherited mask
+before final exec at the journaled PID. Its final target verifies that job
+signals are unblocked. No parent-death signal is installed in this hosted mode.
+
+Stop notices carry the kernel sender credentials, guardian invocation, child
+PID, launch nonce and a monotonic bounded sequence. A resume is accepted only
+for the pending stop and must carry its nonce and sequence in the exact
+versioned frame. Unknown fields, foreign identities, replayed sequences,
+extra descriptors and truncated frames are refused. The same single-threaded
+owner handles all child wait events and refuses group operations after reap
+or after the fixed child changes group. No callback receives a raw PID to
+signal independently.
+
+The hosted test covers canonical Ctrl+Z and raw-mode self-suspension, working
+input and Ctrl+C after resume, disconnect while stopped, guardian SIGKILL while
+stopped, terminal hangup while running or stopped, and a real SQLite write
+conflict that withholds GO. Hangup is observed through the retained slave's
+POLLHUP, not attributed from an arbitrary SIGHUP. Its cases retain the control
+connection until an independent witness observes retirement. Other retirement
+cases keep an independent PTY master open. Original and reopened Stores must
+still retain unresolved journal policy after the raw lease lock is released.
+These checks do not claim that terminal hangup alone proves scope retirement.
+
+Local validation passes 39 library tests, 27 binary tests, 12 coordinator guard
+tests, the extracted shared job-control example and strict Clippy. New tests
+cover stop identity/sequence validation and resume withdrawal, replay, rights
+cleanup and timeout restoration. Hosted PTY2 execution and an independent
+implementation review remain pending.
 
 Remaining integration work includes the actual manager-owned guardian,
 authenticated stop/resume framing, durable launch ordering, arbitrary target

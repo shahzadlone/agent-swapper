@@ -138,7 +138,7 @@ SocketMode=0600
 Accept=yes
 MaxConnections=4
 TriggerLimitIntervalSec=30s
-TriggerLimitBurst=24
+TriggerLimitBurst=40
 RemoveOnStop=yes
 '''
     service_unit = f'''[Unit]
@@ -544,7 +544,8 @@ def suite():
                              'invalid_or_independently_locked_lease_never_spawns_writer',
                              'guardian_sigkill_retires_writer_without_clearing_journal',
                              'client_sigkill_retires_writer_without_running_client_cleanup',
-                             'inner_terminal_exec_is_journal_gated_and_retires_with_master_open'):
+                             'inner_terminal_exec_is_journal_gated_and_retires_with_master_open',
+                             'guardian_session_stops_resume_and_retire_without_releasing_journal_policy'):
                     result = owned_fixture(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
                                     '--lib', 'store::linux_activated_journal_tests::' + test,
                                     '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],

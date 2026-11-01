@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod activated_guardian;
+mod activated_job_control;
 mod activated_journal;
 mod activated_terminal;
 #[allow(
@@ -17,6 +18,7 @@ mod activation_packet;
 mod admission_transport;
 mod common;
 mod fixture_policy;
+mod job_control;
 mod journal_protocol;
 #[allow(dead_code, reason = "service uses only the shared own-scope witness")]
 mod kernel;

@@ -1,30 +1,28 @@
 //! Fixed, provider-free inner-session experiment. Never touches the caller's TTY.
 //! The guardian owns the session; its direct child owns the foreground group.
 #![forbid(unsafe_code)]
+#[path = "../src/job_control.rs"]
+mod job_control;
 #[path = "../src/terminal.rs"]
 mod terminal;
+use job_control::{JOB_SIGNALS, OwnedChild, blocked_job_signals, dispositions, target_signals};
 #[allow(dead_code, reason = "experiment uses selected private gate operations")]
 #[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
 mod transport;
 
-use nix::{
-    sys::{
-        signal::{SigSet, SigmaskHow, Signal, killpg, pthread_sigmask},
-        wait::{WaitPidFlag, WaitStatus, waitpid},
-    },
-    unistd::Pid,
+use nix::sys::{
+    signal::{SigSet, SigmaskHow, Signal, pthread_sigmask},
+    wait::WaitStatus,
 };
 use std::{
     fs,
     io::{self, Write},
-    marker::PhantomData,
     os::{
         fd::{AsFd, BorrowedFd, OwnedFd},
         unix::process::CommandExt,
     },
     path::Path,
-    process::{Child, Command, Stdio},
-    rc::Rc,
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -40,34 +38,6 @@ fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(5)
 }
 
-const JOB_SIGNALS: [Signal; 7] = [
-    Signal::SIGHUP,
-    Signal::SIGINT,
-    Signal::SIGQUIT,
-    Signal::SIGCHLD,
-    Signal::SIGTSTP,
-    Signal::SIGTTIN,
-    Signal::SIGTTOU,
-];
-
-fn dispositions() -> io::Result<()> {
-    let status = fs::read_to_string("/proc/self/status")?;
-    let bits = JOB_SIGNALS
-        .iter()
-        .fold(0_u64, |bits, signal| bits | (1 << (*signal as u32 - 1)));
-    for field in ["SigIgn:", "SigCgt:"] {
-        let value = status
-            .lines()
-            .find_map(|line| line.strip_prefix(field))
-            .ok_or_else(|| io::Error::other("missing signal disposition witness"))?;
-        let value = u64::from_str_radix(value.trim(), 16).map_err(io::Error::other)?;
-        require(
-            value & bits == 0,
-            "fixture requires default job-control dispositions",
-        )?;
-    }
-    Ok(())
-}
 fn pending_pre_go_input() -> io::Result<()> {
     let expected = (1_u64 << (Signal::SIGINT as u32 - 1)) | (1_u64 << (Signal::SIGTSTP as u32 - 1));
     let until = deadline();
@@ -91,94 +61,6 @@ fn pending_pre_go_input() -> io::Result<()> {
         thread::sleep(Duration::from_millis(5));
     }
 }
-fn blocked_job_signals() -> io::Result<SigSet> {
-    let mut mask = SigSet::empty();
-    for signal in JOB_SIGNALS {
-        mask.add(signal);
-    }
-    pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&mask), None)?;
-    Ok(mask)
-}
-fn target_signals() -> io::Result<()> {
-    dispositions()?;
-    let current = SigSet::thread_get_mask()?;
-    require(
-        JOB_SIGNALS
-            .into_iter()
-            .all(|signal| !current.contains(signal)),
-        "target inherited a blocked job-control signal",
-    )
-}
-
-/// The sole waiter. Never use std::Child's exit cache for job-control stops.
-struct OwnedChild {
-    child: Child,
-    pid: Pid,
-    reaped: bool,
-    _thread: PhantomData<Rc<()>>,
-}
-impl OwnedChild {
-    fn new(child: Child) -> io::Result<Self> {
-        Ok(Self {
-            pid: Pid::from_raw(i32::try_from(child.id()).map_err(io::Error::other)?),
-            child,
-            reaped: false,
-            _thread: PhantomData,
-        })
-    }
-    fn next(&mut self, until: Instant) -> io::Result<WaitStatus> {
-        require(!self.reaped, "wait ownership already released")?;
-        while Instant::now() < until {
-            let state = match waitpid(
-                self.pid,
-                Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED | WaitPidFlag::WCONTINUED),
-            ) {
-                Ok(state) => state,
-                Err(nix::errno::Errno::EINTR) => continue,
-                Err(nix::errno::Errno::ECHILD) => {
-                    self.reaped = true;
-                    return Err(io::Error::other("lost direct-child wait ownership"));
-                }
-                Err(error) => return Err(error.into()),
-            };
-            if state == WaitStatus::StillAlive {
-                thread::sleep(Duration::from_millis(5));
-                continue;
-            }
-            require(state.pid() == Some(self.pid), "wait returned another child")?;
-            if matches!(state, WaitStatus::Exited(..) | WaitStatus::Signaled(..)) {
-                self.reaped = true;
-            }
-            return Ok(state);
-        }
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "owned-child event expired",
-        ))
-    }
-    fn resume(&self) -> io::Result<()> {
-        require(!self.reaped, "cannot signal a reaped group leader")?;
-        // Only the fixed direct child creates this group and never leaves it.
-        // Its unreaped PID reserves the group ID. Not an arbitrary-job API.
-        killpg(self.pid, Signal::SIGCONT)?;
-        Ok(())
-    }
-}
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if !self.reaped {
-            let _ = self.child.kill();
-            let until = deadline();
-            while Instant::now() < until {
-                match self.next(until) {
-                    Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) | Err(_) => break,
-                    Ok(_) => {}
-                }
-            }
-        }
-    }
-}
-
 fn parent_gate() -> io::Result<OwnedFd> {
     let gate = io::stdin().as_fd().try_clone_to_owned()?;
     let peer = nix::sys::socket::getsockopt(&gate, nix::sys::socket::sockopt::PeerCredentials)?;
