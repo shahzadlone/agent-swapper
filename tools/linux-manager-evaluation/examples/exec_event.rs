@@ -12,7 +12,7 @@ use nix::{
     sys::{
         ptrace,
         signal::{Signal, raise},
-        wait::{WaitPidFlag, WaitStatus, waitpid},
+        wait::WaitStatus,
     },
     unistd::Pid,
 };
@@ -79,28 +79,29 @@ impl TraceChild {
                     "exec-event wait expired",
                 ));
             }
-            let status = match waitpid(self.pid, Some(WaitPidFlag::WNOHANG)) {
-                Ok(status) => status,
-                Err(nix::errno::Errno::EINTR) => continue,
-                Err(nix::errno::Errno::ECHILD) => {
-                    // Ownership was lost; never signal this numeric PID again.
-                    self.reaped = true;
-                    return Err(io::Error::other("tracee wait ownership was lost"));
-                }
-                Err(error) => return Err(error.into()),
-            };
-            if status == WaitStatus::StillAlive {
-                thread::sleep(Duration::from_millis(5));
-                continue;
-            }
-            require(
-                status.pid() == Some(self.pid),
-                "wait returned a different child",
-            )?;
-            if matches!(status, WaitStatus::Exited(..) | WaitStatus::Signaled(..)) {
+            let pid = rustix::process::Pid::from_raw(self.pid.as_raw())
+                .ok_or_else(|| io::Error::other("invalid tracee PID"))?;
+            let (observed, raw) =
+                match rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG) {
+                    Ok(Some(event)) => event,
+                    Ok(None) | Err(rustix::io::Errno::INTR) => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(rustix::io::Errno::CHILD) => {
+                        // Ownership was lost; never signal this numeric PID again.
+                        self.reaped = true;
+                        return Err(io::Error::other("tracee wait ownership was lost"));
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+            // Record reaping before fallible signal-enum decoding. Unsupported
+            // realtime statuses must never leave numeric PID authority alive.
+            if raw.exited() || raw.signaled() {
                 self.reaped = true;
             }
-            return Ok(status);
+            require(observed == pid, "wait returned a different child")?;
+            return WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(io::Error::from);
         }
     }
     fn prepare(&mut self, control: &OwnedFd, deadline: Instant) -> io::Result<()> {
@@ -358,6 +359,41 @@ fn tracer_loss() -> io::Result<()> {
 
 fn experiment() -> io::Result<()> {
     require_wait_ownership()?;
+    let child = Command::new("/usr/bin/python3")
+        .args([
+            "-I",
+            "-S",
+            "-c",
+            "import os,signal; os.kill(os.getpid(), signal.SIGRTMIN)",
+        ])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut child = TraceChild::owned(child)?;
+    let error = child
+        .next(Instant::now() + Duration::from_secs(3))
+        .err()
+        .ok_or_else(|| io::Error::other("realtime termination unexpectedly decoded"))?;
+    let revoked = child.reaped;
+    child.reaped = true; // Also keep a failing negative control safe on Drop.
+    require(
+        error.raw_os_error() == Some(nix::libc::EINVAL) && revoked,
+        "status decoding failure retained a reaped tracee PID",
+    )?;
+    require(
+        child.kill().is_err(),
+        "tracee signal allowed after decoding failure",
+    )?;
+    require(
+        child.next(Instant::now() + Duration::from_secs(1)).is_err(),
+        "tracee wait allowed after decoding failure",
+    )?;
+    drop(child);
+    println!(
+        "exec-event wait ownership: realtime decode failure revokes numeric operations: passed"
+    );
     for mode in [
         "exec-125",
         "exec-error",
