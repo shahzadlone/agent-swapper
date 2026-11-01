@@ -2,8 +2,9 @@
 
 The installation selection reader now captures this read-only observation before
 opening its selector, manifest or images. Normal CLI execution still uses the
-explicitly uncontained preview; the managed launcher is not enabled. A successful observation does not
-establish service-manager custody, trusted installation files or target exit.
+explicitly uncontained preview; the managed launcher is not enabled. A successful
+observation does not establish service-manager custody, trusted installation
+files or target exit.
 
 ## Contract
 
@@ -72,17 +73,26 @@ Privileged controls run only on opted-in disposable hosted runners, in recursive
 private mount namespaces. They exercise a protected positive, root refusal,
 a fresh child user namespace with full identity UID/GID maps, fake procfs,
 a genuine procfs subdirectory in place of the root, overlaid status and an
-overlaid namespace directory. They require the intended result and diagnostic;
+overlaid namespace directory. A separate owner control leaves the observer in
+the initial user namespace but enters a disposable mount namespace owned by a
+child user namespace. Both capture methods must reject that owner, despite the
+observer's initial-user membership. They require the intended result and diagnostic;
 crashes, setup failures and generic errors are not successful negative tests.
 Only the root parent maps its blocked child; no subordinate-ID files, accounts,
 AppArmor policy or host sysctls are changed. Python starts isolated. Temporary
-mounts disappear with the private namespace. Native integration outcomes are pending. An additional hosted probe calls the
+mounts disappear with the private namespace. Both native capture suites passed
+at `85c1059` ([41311810820](https://github.com/shahzadlone/agent-swapper/actions/runs/41311810820));
+complete CI, integration and the additional owner control remain pending.
+An additional hosted probe calls the
 actual production `SelectedInstallation::open` in root and full-map child-user
 contexts. Both must refuse at the origin check before reaching the deliberately
 absent production selector; an absent-file error cannot satisfy that control.
 
-Source-only Opus 5.5 reviews assessed the design and fallback. The implementation
-and fixture audit is pending. The selected and admitted installation types retain origin across the selector
+Source-only Opus 5.5 reviews assessed the design and fallback. The separate
+implementation/fixture review returned a safety-classifier refusal without a
+usable audit conclusion; independent implementation review remains open.
+
+The selected and admitted installation types retain origin across the selector
 transition. Rechecking an active generation verifies its original namespace
 observation before and after artifact checks. Service policy validates the
 selection before reading its unit text. The manager prerequisite check also

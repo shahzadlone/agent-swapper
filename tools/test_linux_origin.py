@@ -12,6 +12,7 @@ class OriginFixtureTests(unittest.TestCase):
     def test_privileged_roles_refuse_outside_explicit_hosted_ci(self):
         script = Path(__file__).with_name('check_linux_origin.py')
         for arguments in ([], ['/unused', 'available'], ['--installation', '/unused'],
+                          ['--namespace-source'], ['--mount-child', '/unused', 'auto', '1000', '1000', '4'],
                           ['--inside', 'private-mount', '/unused', 'auto', '1000', '1000'],
                           ['--child', '/unused', 'auto', '1000', '1000', 'user']):
             result = subprocess.run([sys.executable, '-I', '-B', '-S', str(script), *arguments],

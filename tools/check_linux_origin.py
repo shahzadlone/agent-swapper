@@ -22,6 +22,7 @@ CASES = {
     'private-mount': None,
     'root': 'ordinary capability-free identity',
     'full-map-user': 'outside the initial user namespace',
+    'foreign-mount-owner': 'namespaces are not owned by the initial user namespace',
     'fake-proc': 'origin metadata is not a procfs root',
     'proc-subdirectory': 'origin metadata is not a procfs root',
     'status-overlay': 'origin metadata crosses a mount boundary',
@@ -118,9 +119,67 @@ def child(binary, backend, uid, gid, user_namespace):
     os.execv(binary, [binary, *arguments])
 
 
+def namespace_source():
+    """Hold a new mount namespace owned by a new user namespace, without exec."""
+    _mounts.private_namespace()
+    require(os.readlink('/proc/self/ns/user') == INITIAL_USER,
+            'namespace source must start in the initial user namespace')
+    native = ctypes.CDLL(None, use_errno=True)
+    native.unshare.argtypes = [ctypes.c_int]
+    native.unshare.restype = ctypes.c_int
+    # Fixed CLONE_NEWUSER | CLONE_NEWNS. No mounts, mappings or host files change.
+    if native.unshare(0x10020000) != 0:
+        raise OSError(ctypes.get_errno(), 'fixture owner namespace creation failed')
+    require(os.readlink('/proc/self/ns/user') != INITIAL_USER,
+            'namespace source retained the initial user namespace')
+    os.write(sys.stdout.fileno(), b'R')
+    require(sys.stdin.buffer.read(2) == b'GO', 'missing namespace source release')
+
+
+def mount_child(binary, backend, uid, gid, descriptor):
+    _mounts.private_namespace()
+    require(os.readlink('/proc/self/ns/user') == INITIAL_USER,
+            'mount observer must start in the initial user namespace')
+    native = ctypes.CDLL(None, use_errno=True)
+    native.setns.argtypes = [ctypes.c_int, ctypes.c_int]
+    native.setns.restype = ctypes.c_int
+    if native.setns(descriptor, 0x20000) != 0:  # Fixed CLONE_NEWNS, owned inherited fd only.
+        raise OSError(ctypes.get_errno(), 'fixture mount namespace entry failed')
+    os.close(descriptor)
+    require(os.readlink('/proc/self/ns/user') == INITIAL_USER,
+            'mount observer unexpectedly changed its user namespace')
+    os.setgroups([])
+    os.setresgid(gid, gid, gid)
+    os.setresuid(uid, uid, uid)
+    os.execv(binary, [binary, *([] if backend == 'auto' else [backend])])
+
+
+def foreign_mount(binary, backend, uid, gid):
+    _mounts.private_namespace()
+    script = str(Path(__file__).resolve())
+    source = None
+    try:
+        source = subprocess.Popen(['/usr/bin/python3', '-I', '-B', '-S', script, '--namespace-source'],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ready(source)
+        with open(f'/proc/{source.pid}/ns/mnt', 'rb') as namespace:
+            result = subprocess.run(['/usr/bin/python3', '-I', '-B', '-S', script, '--mount-child',
+                                     binary, backend, str(uid), str(gid), str(namespace.fileno())],
+                                    pass_fds=(namespace.fileno(),), capture_output=True, text=True, timeout=8)
+        expected(result, CASES['foreign-mount-owner'])
+        output, errors = source.communicate(input=b'GO', timeout=3)
+        require(source.returncode == 0 and not output and not errors, 'namespace source did not retire cleanly')
+        print(f'::notice title=Linux origin::foreign-mount-owner/{backend}: intended result verified', flush=True)
+    finally:
+        stop(source)
+
+
 def inside(case, binary, backend, uid, gid):
     require(case in CASES and backend in ('auto', 'procfs', 'pidfd'), 'unknown origin fixture case')
     _mounts.private_namespace()
+    if case == 'foreign-mount-owner':
+        foreign_mount(binary, backend, uid, gid)
+        return
     if case == 'root':
         expected(subprocess.run([binary, *([] if backend == 'auto' else [backend])],
                                 capture_output=True, text=True, timeout=8), CASES[case])
@@ -185,6 +244,14 @@ def main():
         positives(args[1], args[2])
         return
     gate()
+    if args == ['--namespace-source']:
+        namespace_source()
+        return
+    if len(args) == 6 and args[0] == '--mount-child':
+        _, binary, backend, uid, gid, descriptor = args
+        require(backend in ('auto', 'procfs', 'pidfd') and descriptor.isdecimal(), 'invalid mount observer role')
+        mount_child(binary, backend, *_mounts.identity(uid, gid), int(descriptor))
+        return
     if len(args) == 6 and args[0] == '--child':
         _, binary, backend, uid, gid, kind = args
         require(kind in ('user', 'mount') and backend in ('auto', 'procfs', 'pidfd'), 'invalid origin child')
