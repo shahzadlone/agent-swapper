@@ -134,7 +134,9 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
         user: offer.uid,
         pid: offer.pid,
         invocation: Some(offer.invocation),
-        kind: UnitKind::Activated { policy },
+        kind: UnitKind::Activated {
+            policy: Box::new(policy),
+        },
     };
     let (connection, owner, mut report, binding) =
         tokio::time::timeout_at(admission_deadline, crate::admit(paths, Some(expected)))

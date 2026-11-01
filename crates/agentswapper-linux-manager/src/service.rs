@@ -7,14 +7,14 @@ use crate::{
 use agentswapper_linux_runtime::{
     installed_config::ProtectedConfig, installed_image::ProtectedImage, scope_observation,
 };
-use std::{io, path::Path, sync::Arc};
+use std::{io, os::fd::OwnedFd, path::Path, sync::Arc};
 use zbus::OwnedObjectPath;
 
 /// Protected assets at caller-authorized fixed locations in a trusted namespace.
 /// This does not parse a production manifest or authorize arbitrary root-owned files.
 pub struct ServicePolicy {
     template_path: String,
-    _template: ProtectedConfig,
+    template: ProtectedConfig,
     image: ProtectedImage,
     user: u32,
 }
@@ -36,7 +36,7 @@ impl ServicePolicy {
         )?;
         Ok(Self {
             template_path,
-            _template: config,
+            template: config,
             image: ProtectedImage::open(image)?,
             user,
         })
@@ -110,10 +110,24 @@ impl Properties {
 /// not just a unique-name string that another bus connection could reuse.
 /// All operations are caller-deadline bounded. This is not a Store receipt.
 ///
-/// ```compile_fail
+/// ```
+/// use agentswapper_linux_manager::BoundService;
+/// fn accepts_binding(_: &BoundService) {}
+/// ```
+///
+/// ```compile_fail,E0599
 /// use agentswapper_linux_manager::BoundService;
 /// fn duplicate(service: BoundService) { let _ = service.clone(); }
 /// ```
+///
+/// ```compile_fail,E0599
+/// use agentswapper_linux_manager::BoundService;
+/// fn extract_kernel(service: &BoundService) { let _ = service.kernel(); }
+/// ```
+#[cfg_attr(
+    not(feature = "qualification"),
+    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_manager::BoundService;\nfn extract_signal(service: &BoundService) { let _ = service.guardian_pidfd(); }\n```"
+)]
 pub struct BoundService {
     connection_id: Arc<()>,
     owner: String,
@@ -186,6 +200,9 @@ impl BoundService {
         };
         fields.require(&claim, &invocation, &policy.template_path, policy.user)?;
         crate::require_direct_lifecycle(manager, sender, &path).await?;
+        policy
+            .template
+            .require_current(Path::new(&policy.template_path))?;
         let kernel = scope_observation::Binding::bind(claim.unit, policy.user, claim.main_pid)?;
         kernel.require_main_image(&policy.image)?;
         let value = Self {
@@ -236,6 +253,9 @@ impl BoundService {
             self.identity.main_pid,
         )
         .await?;
+        self.policy
+            .template
+            .require_current(Path::new(&self.policy.template_path))?;
         self.kernel.observe()?;
         self.kernel.require_main_image(&self.policy.image)?;
         require(
@@ -244,10 +264,55 @@ impl BoundService {
         )
     }
 
-    /// Retained read-only kernel observations, not completion authority. The
-    /// retirement consumer must also check this manager and original invocation.
-    pub fn kernel(&self) -> &scope_observation::Binding {
-        &self.kernel
+    pub fn observe(&self) -> io::Result<scope_observation::Fact> {
+        self.kernel.observe()
+    }
+
+    /// Corroborate a child of the original admitted guardian, not an arbitrary
+    /// caller-selected parent. Recheck the session before issuing launch grants.
+    pub fn child(&self, pid: u32) -> io::Result<scope_observation::Child> {
+        self.kernel.child(pid, self.identity.main_pid)
+    }
+
+    pub fn directory(&self) -> &OwnedFd {
+        self.kernel.directory()
+    }
+
+    /// Qualification-only signal capability; unavailable in production graphs.
+    #[cfg(feature = "qualification")]
+    pub fn guardian_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.kernel.guardian_pidfd()
+    }
+
+    /// Observe both retirement halves against this binding's own private
+    /// identity and exact transport. Returned facts are not Store authority.
+    /// Owner loss or transport replacement leaves retirement unresolved.
+    pub async fn observe_retired(
+        &self,
+        manager: &Manager,
+    ) -> io::Result<Option<scope_observation::Retirement>> {
+        self.require_manager(manager)?;
+        require(
+            linux::owner(manager).await?.as_str() == self.owner,
+            "manager owner changed while observing retirement",
+        )?;
+        let Some(retirement) = self.kernel.retirement()? else {
+            return Ok(None);
+        };
+        let invocation = self
+            .identity
+            .invocation
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if !invocation::retired(manager, &self.owner, &self.identity.unit, &invocation).await? {
+            return Ok(None);
+        }
+        require(
+            linux::owner(manager).await?.as_str() == self.owner,
+            "manager owner changed at retirement",
+        )?;
+        Ok(Some(retirement))
     }
 }
 

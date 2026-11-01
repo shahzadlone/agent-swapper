@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import struct
 import subprocess
 import sys
@@ -14,6 +15,10 @@ CASES = {
     'config-nosuid-noexec': None,
     'config-executable': 'installed configuration is not mode 0644',
     'config-oversize': 'installed configuration exceeds 16 KiB',
+    'config-retained': None,
+    'config-replaced': 'installed configuration changed since admission began',
+    'config-modified': 'installed configuration changed since admission began',
+    'config-mode-changed': 'installed configuration changed since admission began',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
@@ -60,6 +65,34 @@ def identity(uid, gid):
     return uid, gid
 
 
+def retained_config_control(command, image, case):
+    # The child drops root before exec. Mutate only this namespace's owned tmpfs
+    # file after the ordinary observer has retained its original descriptor.
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE) as child:
+        try:
+            ready, _, _ = select.select([child.stdout], [], [], 5)
+            require(bool(ready) and child.stdout.readline(128) == b'installed-asset: retained\n',
+                    'retained configuration observer did not reach its hold')
+            if case == 'config-replaced':
+                replacement = image.with_name('replacement')
+                replacement.write_bytes(image.read_bytes())
+                replacement.chmod(0o644)
+                require(replacement.stat().st_ino != image.stat().st_ino,
+                        'replacement control needs a distinct inode')
+                replacement.replace(image)
+            elif case == 'config-modified':
+                image.write_bytes(b'changed owned configuration\n')
+            elif case == 'config-mode-changed':
+                image.chmod(0o664)
+            stdout, stderr = child.communicate(b'R', timeout=5)
+            return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
+
+
 def mounted_case(case, binary, uid, gid):
     private_namespace()
     require(case in CASES, 'unknown image fixture case')
@@ -97,9 +130,12 @@ def mounted_case(case, binary, uid, gid):
             os.chown(image, uid, gid)
         script = str(Path(__file__).resolve())
         role = '--config-probe' if case.startswith('config-') else '--probe'
-        result = subprocess.run(['/usr/bin/python3', '-I', '-S', script, role, binary,
-                                 str(image), str(uid), str(gid)], stdin=subprocess.DEVNULL,
-                                capture_output=True, timeout=5)
+        retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed')
+        if retained:
+            role = '--config-recheck-probe'
+        command = ['/usr/bin/python3', '-I', '-S', script, role, binary, str(image), str(uid), str(gid)]
+        result = (retained_config_control(command, image, case) if retained else
+                  subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=5))
         expected = CASES[case]
         if expected is None:
             require(result.returncode == 0 and result.stdout == b'installed-asset: accepted\n'
@@ -123,7 +159,7 @@ def mounted_case(case, binary, uid, gid):
 def main():
     gate()
     args = sys.argv[1:]
-    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe'):
+    if len(args) == 5 and args[0] in ('--inside', '--probe', '--config-probe', '--config-recheck-probe'):
         private_namespace()
         role, first, second, uid, gid = args
         uid, gid = identity(uid, gid)
@@ -135,7 +171,8 @@ def main():
         os.setuid(uid)
         require(os.getuid() == os.geteuid() == uid and os.getgid() == os.getegid() == gid,
                 'probe failed to drop its root identity')
-        probe_args = [first, '--config', second] if role == '--config-probe' else [first, second]
+        modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck'}
+        probe_args = [first, modes[role], second] if role in modes else [first, second]
         os.execve(first, probe_args, {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
     require(len(args) == 1 and os.geteuid() != 0, 'ordinary hosted fixture runner required')
     binary = Path(args[0])

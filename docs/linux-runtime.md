@@ -470,3 +470,32 @@ all fail while restoring mode 0644. Admission and connection substitution share
 one ten-second deadline, including the bounded offer read. Local runtime and
 evaluation tests, strict evaluation Clippy and 15 activation-harness tests pass.
 Native qualification of these corrections remains pending.
+
+The second review correction records configuration device/inode, link count,
+size, modification/change timestamps, mode and ownership at open. Reads check
+the retained stamp before and after reading; binding and later active rechecks
+also reopen the protected path and require the original stamp. Identical-content
+replacement, in-place edits and mode changes refuse. These are change detectors
+under a trusted root, not proof of an atomic manager load or protection against
+root. Independent witnesses cover only their own observation window.
+
+The hosted private-mount harness now holds an ordinary observer after retaining
+the file, then tests an unchanged file, identical-byte replacement, content
+change and mode change. Local tests cover every stamp field and real owned-file
+replacement/edit/chmod. Native results for the added controls remain pending.
+
+`BoundService` no longer exposes its inner kernel binding. Child observations
+require its original guardian parent; retirement observations pair both halves
+using its private identity and exact manager connection. Returned observations
+remain diagnostics, not Store completion authority. The guardian signal handle
+requires an explicit `qualification` feature in both shared crates, enabled only
+by the evaluation consumer. Dependency checks assert that ordinary application,
+runtime and manager graphs leave that feature disabled. Positive and negative
+doctests check type availability, non-cloneability, hidden inner binding and the
+disabled signal method. Owner/transport replacement leaves retirement unresolved.
+
+Local validation: 38 runtime tests plus five doctests, twelve manager tests plus
+four doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-feature
+Clippy, the dependency boundary, and the Python fixture checks pass. This still
+does not enable a production managed launcher, install local services or consume
+real provider accounts.

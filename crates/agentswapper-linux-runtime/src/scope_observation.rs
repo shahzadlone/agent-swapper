@@ -14,7 +14,7 @@ use rustix::{
 use std::{
     fs::File,
     io::{self, Read},
-    os::fd::{AsFd, BorrowedFd, OwnedFd},
+    os::fd::OwnedFd,
 };
 
 fn require(ok: bool, message: &str) -> io::Result<()> {
@@ -372,9 +372,10 @@ impl Binding {
         self.main.require_image(image)
     }
 
-    /// Borrow the original guardian pidfd. This is not a numeric-PID lookup or
-    /// manager authorization; the caller remains responsible for its policy.
-    pub fn guardian_pidfd(&self) -> BorrowedFd<'_> {
+    /// Qualification-only signal capability for a caller's owned fault fixture.
+    #[cfg(feature = "qualification")]
+    pub fn guardian_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        use std::os::fd::AsFd;
         self.main.pidfd.as_fd()
     }
 
