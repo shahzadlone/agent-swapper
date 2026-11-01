@@ -4,7 +4,7 @@ use crate::require;
 use nix::{
     sys::{
         signal::{SigSet, SigmaskHow, Signal, killpg, pthread_sigmask},
-        wait::{WaitPidFlag, WaitStatus, waitpid},
+        wait::WaitStatus,
     },
     unistd::Pid,
 };
@@ -99,26 +99,30 @@ impl OwnedChild {
     }
     pub(crate) fn poll(&mut self) -> io::Result<WaitStatus> {
         require(!self.reaped, "wait ownership already released")?;
-        let state = match waitpid(
-            self.pid,
-            Some(WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED | WaitPidFlag::WCONTINUED),
+        let pid = rustix::process::Pid::from_raw(self.pid.as_raw())
+            .ok_or_else(|| io::Error::other("invalid owned child PID"))?;
+        let (observed, raw) = match rustix::process::waitpid(
+            Some(pid),
+            rustix::process::WaitOptions::NOHANG
+                | rustix::process::WaitOptions::UNTRACED
+                | rustix::process::WaitOptions::CONTINUED,
         ) {
-            Ok(state) => state,
-            Err(nix::errno::Errno::EINTR) => return Ok(WaitStatus::StillAlive),
-            Err(nix::errno::Errno::ECHILD) => {
+            Ok(Some(event)) => event,
+            Ok(None) | Err(rustix::io::Errno::INTR) => return Ok(WaitStatus::StillAlive),
+            Err(rustix::io::Errno::CHILD) => {
                 self.reaped = true;
                 return Err(io::Error::other("lost direct-child wait ownership"));
             }
             Err(error) => return Err(error.into()),
         };
-        if state == WaitStatus::StillAlive {
-            return Ok(state);
-        }
-        require(state.pid() == Some(self.pid), "wait returned another child")?;
-        if matches!(state, WaitStatus::Exited(..) | WaitStatus::Signaled(..)) {
+        // The syscall can reap successfully even when nix cannot decode its
+        // finite Signal enum (e.g. SIGRTMIN). Revoke PID authority BEFORE that
+        // fallible conversion; its EINVAL is not a syscall failure.
+        if raw.exited() || raw.signaled() {
             self.reaped = true;
         }
-        Ok(state)
+        require(observed == pid, "wait returned another child")?;
+        WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(io::Error::from)
     }
     pub(crate) fn resume(&self) -> io::Result<()> {
         require(!self.reaped, "cannot signal a reaped group leader")?;
@@ -144,5 +148,43 @@ impl Drop for OwnedChild {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn reaped_child_revokes_numeric_operations_even_when_status_decode_fails() -> io::Result<()> {
+        // Python sends only its own realtime signal. nix's finite Signal enum
+        // cannot decode that termination, even though waitpid already reaped it.
+        let child = Command::new("/usr/bin/python3")
+            .args([
+                "-I",
+                "-S",
+                "-c",
+                "import os,signal; os.kill(os.getpid(), signal.SIGRTMIN)",
+            ])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let mut child = OwnedChild::new(child)?;
+        let error = child
+            .next(deadline())
+            .err()
+            .ok_or_else(|| io::Error::other("realtime termination unexpectedly decoded"))?;
+        assert_eq!(error.raw_os_error(), Some(nix::libc::EINVAL));
+        let revoked = child.reaped;
+        // Keep the pre-fix negative control from signalling an already-reaped
+        // PID while unwinding its expected assertion failure.
+        child.reaped = true;
+        assert!(revoked, "decoder failure left a reaped numeric PID owned");
+        assert!(child.resume().is_err());
+        assert!(child.poll().is_err());
+        Ok(())
     }
 }
