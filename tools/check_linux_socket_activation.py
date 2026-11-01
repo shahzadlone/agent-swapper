@@ -510,6 +510,7 @@ def suite():
                                 ASWP_ACTIVATION_DIRECTORY=str(directory))
                 for test in ('actual_lease_and_journal_gate_two_independent_activations',
                              'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent',
+                             'invalid_or_independently_locked_lease_never_spawns_writer',
                              'guardian_sigkill_retires_writer_without_clearing_journal',
                              'client_sigkill_retires_writer_without_running_client_cleanup'):
                     result = subprocess.run(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',

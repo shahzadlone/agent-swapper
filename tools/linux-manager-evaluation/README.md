@@ -7,8 +7,8 @@ fixture socket and thereby activates its service; it requires explicit opt-in
 on a disposable hosted runner and the matching run/attempt prefix. It installs
 no units, requests no privileges, reads no login data and issues no
 process-custody receipt. Its private `--activation-guardian` and
-`--activation-writer` roles implement only the fixed hosted-CI fixture; they
-require its opted-in environment and protected temporary executable. They do
+`--activation-writer` / `--activation-gated-writer` roles implement only the fixed
+hosted-CI fixture; they require its opted-in environment and protected temporary executable. They do
 not accept provider launch data or install services. See
 [the activation evaluation](../../docs/linux-managed-launch.md).
 

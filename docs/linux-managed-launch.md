@@ -248,7 +248,8 @@ informational findings, with no high/medium finding in its stated scope. The
 observer now restricts the authenticated service to `Type=exec`, no PID file,
 `NotifyAccess=none` and `RemainAfterExit=no`, rechecks migration controls on each
 live observation, and enforces the namespace precondition inside binding itself.
-These follow-up checks await their own native run. Directory device/inode facts
+These follow-up checks passed both native manager jobs at `4cda3ed` in
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539). Directory device/inode facts
 identify only the retained directory: a failed invocation's directory may be
 reused by a later start. They never replace the manager invocation ID or prove
 freshness. Kernel retirement alone likewise never proves manager retirement.
@@ -281,8 +282,9 @@ The initial Rust service passed both native manager jobs at `e10a564` in
 After correcting the concurrent-fork timing assumption, its 24-test parallel
 suite passed 30/30 stress runs. Its focused Opus service/image review is now
 complete. The subsequent follow-up passes 25 Rust tests, eight core transport
-tests and 11 Python guard tests locally, plus strict Clippy; native validation
-of these later changes remains pending.
+tests and 11 Python guard tests locally, plus strict Clippy. Both Ubuntu
+manager jobs passed the revised service at `4cda3ed` in
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539).
 
 The review's `/run` noexec concern did not occur on either qualified native
 runner. This disposable fixture keeps its existing runtime path but now refuses
@@ -297,12 +299,13 @@ before reload. Error diagnostics retain earlier failures.
 Queued-record refusal is now a distinct error type. Transport, poll and
 socket-option failures cannot produce the expected fault-control attribution.
 Guardian diagnostics use one bounded socket record, and writer startup reports
-early child failure. These address the review's substantive findings; the
-native run must still qualify the complete revised configuration and lifecycle.
+early child failure. These address the review's substantive findings; both native manager jobs
+exercised the complete revised configuration and lifecycle.
 
-Real
-profile lease transfer, durable journal-before-GO ordering and an inner PTY
-remain the next integration work. No normal launch path uses this service.
+This initial service checkpoint did not include real profile lease transfer,
+durable journal-before-GO ordering or an inner PTY. The later journal checkpoint
+below covers the first two with a cooperating gated writer. No normal launch
+path uses this service.
 
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready
@@ -313,7 +316,7 @@ enables automatic switching.
 
 ### Next integration seam
 
-The next checkpoint will expose the observer's client side as an isolated
+The journal checkpoint exposes the observer's client side as an isolated
 library used only by Linux core development tests, with a thin observer binary.
 The service and writer remain binary roles. This keeps the real `Store`
 lifecycle APIs private and avoids an extra subprocess/JSON authentication
@@ -334,6 +337,17 @@ the guardian's duplicate alone retains the lease, and the durable unresolved
 run continues to block reuse after cleanup and reopening. They will use a
 cooperating gated writer, not claim provider exec confirmation. Existing
 operator-attestation behavior need not change to complete this checkpoint.
+
+### Integrated Rust activation evidence
+
+The complete `4cda3ed` checkpoint passed
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539):
+Linux, macOS and Windows tests; both Ubuntu manager suites; namespace evidence;
+dependency policies; candidate builds and independent reproducibility on all
+three platforms. Branch provenance attestation was skipped by policy. The
+checkpoint is integrated into main; main's provenance run is a separate gate.
+No provider login, normal managed launch, public release or signing was enabled.
+The subsequent real lease/journal work remains under qualification separately.
 
 ### Activated journal checkpoint under qualification
 
@@ -360,10 +374,83 @@ block launch even though a raw lock can be acquired. No completion receipt,
 operator attestation or production launch enablement is added.
 
 Local protocol, wrong-parent/group, duplicate-socket and runtime-boundary
-regressions pass. Native activation/journal validation and focused Opus review
-remain pending for this checkpoint. The library is a Linux-only core dev
-dependency; CI checks matching audited transport/runtime pins in both lockfiles
+regressions pass. Both native manager jobs passed the initial activated journal
+checkpoint at `9ca328e` in
+[run 41263488760](https://github.com/shahzadlone/agent-swapper/actions/runs/41263488760).
+Focused Opus review and the remaining platform/packaging checks are pending.
+The library is a Linux-only core dev dependency; CI checks matching audited transport/runtime pins in both lockfiles
 and excludes the evaluation library, zbus and Tokio from normal/build graphs.
+
+### Next: abrupt loss, then terminal integration
+
+The current journal fixture closes its client channel cooperatively. Before
+connecting this backend to normal launches, add independent client-SIGKILL and
+guardian-SIGKILL trials. The controller must retain its own authenticated
+manager/cgroup/process witnesses before killing its owned fixture child. A
+marker containing a PID or invocation is only input to independent binding,
+never retirement evidence. Guardian fault injection must target the retained
+pidfd, not a newly looked-up numeric PID. In both cases, verify a live writer
+before the fault, its original scope's retirement afterwards, raw lease release
+and the unresolved journal's continued refusal after reopening. Keep these
+cases separate from cooperative EOF attribution.
+
+The next terminal checkpoint needs a genuine pre-exec shim plus an inner PTY;
+the current gated writer has already executed and has null output streams.
+Keep the service's control channel separate from target stdin, stdout and
+stderr, and preserve descriptor hygiene across the final exec. First measure
+a fixed target's controlling terminal, nonce-bound execution barrier, resize,
+interrupt, raw-mode input and disconnect. Then qualify shell suspend/resume,
+redirection, foreground restoration, client/guardian loss and sessions beyond
+startup timeouts. Do not infer these properties from the earlier delegated
+fixture: a root-manager service starts with a different terminal relationship.
+
+### Journal review follow-up under qualification
+
+The focused Opus review of `9ca328e` found no ADMIT execution path preceding the
+separate start grant, but identified gaps in the assertions and failure APIs.
+The follow-up centralizes recheck → synchronous journal callback → recheck → GO
+in `Prepared::start_after`; the callback runs outside an entered async runtime.
+A failed write records whether the prepared writer was still live before the
+channel closes. The only public start method uses this ordering. A later
+transport error means GO might have been delivered; intent remains unresolved.
+
+The test now observes a live, ready writer without a heartbeat across ten
+writer intervals before GO, repeats that check after journaling, and requires
+PID plus nonce in heartbeats. Lock transitions are checked in the still-open
+store as well as after reopening, where the successful spawn PID must persist.
+Invalid lease metadata and a separately held file lock must refuse before
+writer creation, with exact fixture-only fault attribution.
+
+Retirement observation errors retain the original witnesses for retry.
+Connection-close errors after successful observation are separate diagnostic
+results, not a lost observation. Connection destruction runs under the owned
+runtime context before nonblocking shutdown. Prepared packets now carry an
+explicit version tag and have independent malformed/sender regression cases.
+The writer authenticates its gate's peer and null outputs; the guardian drops
+its extra child-stdin descriptor and checks atomically published readiness.
+
+Withdrawal before GO has distinct attribution only after strict EOF. A
+credential-requesting peek with zero ancillary capacity distinguishes even an
+empty queued record from closure, without decoding credentials. The flags may
+include `MSG_CMSG_CLOEXEC` at EOF, so only data/control truncation participates
+in that distinction. Modes and timeout restoration are explicit and tested,
+including delayed delivery, expiry, queued-empty-plus-shutdown and discarded
+rights. The blocking receiver refuses a nonblocking or credential-enabled
+channel. Client sends remain bounded nonblocking attempts and can fail without
+waiting for queue space.
+
+The review's failed-unit lifecycle concern was already covered by
+`CollectMode=inactive-or-failed`, the watcher's explicit failed-state handling
+and both native jobs. Stderr already goes to the journal; stdout must remain
+the protocol socket. Tests already run individually with one test thread, and
+the runner now also requires exactly one passing test and publishes its own
+annotation. The single twelve-second client startup budget remains intentional
+and conservative relative to the guardian's fifteen-second window; it is not
+reset around a slow journal callback. The legacy GO mode remains a separate
+fixed-writer control; journal-order claims apply to ADMIT only.
+
+This follow-up passes local protocol tests and strict Clippy. Its revised
+native tests and focused withdrawal/ordering follow-up review remain pending.
 
 ### Abrupt-loss checkpoint under qualification
 
