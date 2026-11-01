@@ -237,6 +237,12 @@ one-second wait for those independent holders too; a retained receiver
 descriptor still fails. Source inspection, rather than instantaneous lock
 reacquisition, establishes the receiver's destructor timing.
 
+A separate socketpair check reproduced a diagnostic race: closing with unread
+trailing records can reset the peer and discard an already queued error reply.
+BIND fault trials now require an invocation-specific refusal marker written at
+the intended error path; reset alone never passes. A regression accepts only
+the exact marker and refuses both a missing marker and an unrelated error.
+
 The focused Opus kernel review completed with two low-severity and two
 informational findings, with no high/medium finding in its stated scope. The
 observer now restricts the authenticated service to `Type=exec`, no PID file,

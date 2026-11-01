@@ -43,6 +43,24 @@ def require_clean_eof(connection, message):
             and closed and not failed, message)
 
 
+def read_bind_refusal(connection, directory, invocation):
+    require(isinstance(invocation, str) and re.fullmatch(r'[0-9a-f]{32}', invocation)
+            and invocation != '0' * 32, 'invalid bind refusal invocation')
+    reset = False
+    try:
+        diagnostic = connection.recv(4096)
+    except ConnectionResetError:
+        # Unread trailing records can discard an already queued diagnostic.
+        # A reset alone never proves the intended guardian refusal.
+        reset, diagnostic = True, b''
+    refusal = directory / (invocation + '.bind-refused')
+    wait_for(refusal.exists, seconds=2)
+    require(refusal.read_text() == 'bind-only probe sent launch data'
+            and (reset or b'bind-only probe sent launch data' in diagnostic),
+            'bind fault did not reach the intended refusal')
+    refusal.unlink()
+
+
 def fixture_prefix():
     require(sys.platform == 'linux' and os.environ.get('GITHUB_ACTIONS') == 'true'
             and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
@@ -218,7 +236,11 @@ def service(directory, uid, unit):
             # record is queued and any half-close is complete.
             wait_for(lambda: not (directory / 'bind-eof-hold').exists(), seconds=5)
             connection.settimeout(12)
-            require_clean_eof(connection, 'bind-only probe sent launch data')
+            try:
+                require_clean_eof(connection, 'bind-only probe sent launch data')
+            except RuntimeError:
+                (directory / (invocation + '.bind-refused')).write_text('bind-only probe sent launch data')
+                raise
             (directory / (invocation + '.bind-clean-eof')).write_text(invocation)
             return
         run = directory / invocation
@@ -388,8 +410,7 @@ def suite():
                     if shutdown:
                         invalid_bind.shutdown(socket.SHUT_WR)
                     hold.unlink()
-                    require(b'bind-only probe sent launch data' in invalid_bind.recv(4096),
-                            'bind fault did not reach the intended refusal')
+                    read_bind_refusal(invalid_bind, directory, offer['invocation'])
                 wait_for(lambda: not (Path('/sys/fs/cgroup/system.slice') / offer['unit']).exists(), seconds=5)
                 require(not any(directory.iterdir()), 'failed bind created an EOF marker or worker')
             print('::notice title=Linux activation bind EOF control::unexpected and empty records refused before and after peer shutdown, including trailing data; no clean EOF marker or worker', flush=True)

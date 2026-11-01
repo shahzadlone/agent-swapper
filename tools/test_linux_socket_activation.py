@@ -1,6 +1,7 @@
 """Guard and fixed-user unit-rendering checks; no privileged operations."""
 from pathlib import Path
 import stat
+import tempfile
 import socket
 import sys
 from types import SimpleNamespace
@@ -11,6 +12,32 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_bind_reset_requires_the_exact_guardian_refusal_marker(self):
+        invocation = 'a' * 32
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            marker = directory / (invocation + '.bind-refused')
+            for value, accepted in [('bind-only probe sent launch data', True), ('unrelated error', False), (None, False)]:
+                if value is not None:
+                    marker.write_text(value)
+                else:
+                    marker.unlink(missing_ok=True)
+                client, guardian = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+                with client:
+                    client.settimeout(1)
+                    client.send(b'')
+                    client.send(b'X')
+                    client.shutdown(socket.SHUT_WR)
+                    guardian.recv(1)
+                    guardian.send(b'bind-only probe sent launch data')
+                    guardian.close()  # unread X causes ECONNRESET, discarding that diagnostic
+                    if accepted:
+                        probe.read_bind_refusal(client, directory, invocation)
+                        self.assertFalse(marker.exists())
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            probe.read_bind_refusal(client, directory, invocation)
+
     @unittest.skipUnless(sys.platform == 'linux', 'Linux sequenced-packet EOF semantics')
     def test_empty_record_is_not_read_side_eof(self):
         sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
