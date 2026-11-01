@@ -217,18 +217,27 @@ enum ControlReadiness {
 }
 fn control_readiness(socket: impl AsFd) -> io::Result<ControlReadiness> {
     let mut byte = [0_u8];
-    match rustix::net::recv(
-        &socket,
-        &mut byte,
-        rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT,
-    ) {
-        Ok((0, _)) => {
-            require(transport::eof(&socket)?, "empty job control record")?;
-            Ok(ControlReadiness::Closed)
+    let mut reset_consumed = false;
+    loop {
+        match rustix::net::recv(
+            &socket,
+            &mut byte,
+            rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT,
+        ) {
+            // A peer closing with an unread request sets SO_ERROR before the
+            // kernel exposes its queued final reply. Consume that error once,
+            // then inspect the actual queue. Reset alone proves no outcome.
+            Err(rustix::io::Errno::CONNRESET) if !reset_consumed => reset_consumed = true,
+            Ok((0, _)) => {
+                require(transport::eof(&socket)?, "empty job control record")?;
+                return Ok(ControlReadiness::Closed);
+            }
+            Ok(_) => return Ok(ControlReadiness::Packet),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                return Ok(ControlReadiness::Pending);
+            }
+            Err(error) => return Err(error.into()),
         }
-        Ok(_) => Ok(ControlReadiness::Packet),
-        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(ControlReadiness::Pending),
-        Err(error) => Err(error.into()),
     }
 }
 pub struct Closed(Session);
@@ -1251,6 +1260,48 @@ mod tests {
         ] {
             assert!(validate_exec(&packet(&value, sender)?, &expected).is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn queued_final_packet_survives_peer_reset_before_readiness() -> io::Result<()> {
+        let (guardian, client) = transport::pair()?;
+        rustix::fs::fcntl_setfl(
+            &client,
+            rustix::fs::fcntl_getfl(&client)? | rustix::fs::OFlags::NONBLOCK,
+        )?;
+        rustix::net::sockopt::set_socket_passcred(&client, true)?;
+        transport::send(&client, b"unread-resume", &[])?;
+        transport::send(&guardian, b"final-report", &[])?;
+        drop(guardian);
+        assert_eq!(control_readiness(&client)?, ControlReadiness::Packet);
+        let packet = activation_packet::receive(&client, Instant::now() + Duration::from_secs(1))?;
+        assert_eq!(packet.bytes, b"final-report");
+        assert_eq!(packet.sender.pid(), std::process::id() as i32);
+        assert_eq!(control_readiness(&client)?, ControlReadiness::Closed);
+        assert!(rustix::net::sockopt::socket_passcred(&client)?);
+        Ok(())
+    }
+
+    #[test]
+    fn reset_without_a_final_packet_never_fabricates_one() -> io::Result<()> {
+        let (guardian, client) = transport::pair()?;
+        rustix::net::sockopt::set_socket_passcred(&client, true)?;
+        transport::send(&client, b"unread-resume", &[])?;
+        drop(guardian);
+        assert_eq!(control_readiness(&client)?, ControlReadiness::Closed);
+        Ok(())
+    }
+
+    #[test]
+    fn an_empty_record_before_reset_is_still_not_eof() -> io::Result<()> {
+        let (guardian, client) = transport::pair()?;
+        rustix::net::sockopt::set_socket_passcred(&client, true)?;
+        transport::send(&client, b"unread-resume", &[])?;
+        rustix::net::send(&guardian, b"", rustix::net::SendFlags::NOSIGNAL)?;
+        drop(guardian);
+        assert!(control_readiness(&client).is_err());
+        assert!(rustix::net::sockopt::socket_passcred(&client)?);
         Ok(())
     }
 

@@ -60,6 +60,29 @@ fn receive_files(
             && rustix::fs::fcntl_getfl(socket)?.contains(rustix::fs::OFlags::NONBLOCK),
         "activation requires a nonblocking credential-enabled sequenced-packet socket",
     )?;
+    let mut reset_consumed = false;
+    loop {
+        match receive_one(socket, deadline, terminal) {
+            // Closing with unread client data can put ECONNRESET ahead of an
+            // already queued report. Retry once with the ORIGINAL deadline and
+            // fresh ancillary ownership; all normal packet checks still apply.
+            Err(error)
+                if !reset_consumed
+                    && error.raw_os_error()
+                        == Some(rustix::io::Errno::CONNRESET.raw_os_error()) =>
+            {
+                reset_consumed = true;
+            }
+            result => return result,
+        }
+    }
+}
+
+fn receive_one(
+    socket: &OwnedFd,
+    deadline: Instant,
+    terminal: bool,
+) -> io::Result<(Packet, Vec<OwnedFd>)> {
     let remaining = deadline
         .checked_duration_since(Instant::now())
         .filter(|duration| !duration.is_zero())
@@ -155,6 +178,20 @@ mod tests {
 
     fn deadline() -> Instant {
         Instant::now() + Duration::from_secs(1)
+    }
+
+    #[test]
+    fn queued_credentials_and_packet_survive_reset_without_a_prior_peek() -> io::Result<()> {
+        let (sender, receiver) = pair()?;
+        send(&receiver, b"unread-request", SendFlags::NOSIGNAL)?;
+        send(&sender, b"final-packet", SendFlags::NOSIGNAL)?;
+        drop(sender);
+        let packet = receive(&receiver, deadline())?;
+        assert_eq!(packet.bytes, b"final-packet");
+        assert_eq!(packet.sender.pid(), std::process::id() as i32);
+        assert_eq!(packet.sender.uid(), rustix::process::getuid().as_raw());
+        assert!(net::sockopt::socket_passcred(&receiver)?);
+        Ok(())
     }
 
     #[test]
