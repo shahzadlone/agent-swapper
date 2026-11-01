@@ -221,7 +221,21 @@ socket option is restored before returning; shutdown must also have no poll
 error. Seven shared transport tests now cover queued-empty and trailing-data
 cases, descriptor release, and restoration before later control messages.
 Native fault controls include shutdown after an empty record and after trailing
-data. This stricter EOF implementation is undergoing a focused follow-up review.
+data. The focused Opus follow-up found the stricter EOF discrimination correct
+for the single-reader Linux protocol. A double-error diagnostic now preserves
+both the read and socket-option restoration failures. The implementation relies
+on the kernel attaching credentials to every queued record but not to EOF;
+this was checked against the Linux 6.8
+[UNIX receive path](https://github.com/torvalds/linux/blob/v6.8/net/unix/af_unix.c)
+and [ancillary delivery](https://github.com/torvalds/linux/blob/v6.8/include/net/scm.h).
+
+Parallel execution of the new Rust fixture's tests exposed a test timing
+assumption: the lock-release regression passed 30/30 alone but failed 7/30
+with process-spawning tests. An in-flight fork can briefly share CLOEXEC open
+file descriptions until exec. Descriptor-release tests now use a bounded
+one-second wait for those independent holders too; a retained receiver
+descriptor still fails. Source inspection, rather than instantaneous lock
+reacquisition, establishes the receiver's destructor timing.
 
 The focused Opus kernel review completed with two low-severity and two
 informational findings, with no high/medium finding in its stated scope. The
