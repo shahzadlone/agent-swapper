@@ -1,5 +1,7 @@
 //! A surviving parent restores an owned terminal after its fixed child dies.
 #![forbid(unsafe_code)]
+#[path = "../src/fresh_entry.rs"]
+mod fresh_entry;
 #[allow(
     dead_code,
     reason = "shared exclusive child waiter; this probe never signals a child group"
@@ -10,8 +12,9 @@ mod job_control;
 mod outer_terminal;
 #[path = "../src/terminal_owner.rs"]
 mod terminal_owner;
+use agentswapper_linux_runtime::signals::Signals;
 use nix::sys::signal::{SigSet, Signal};
-use outer_terminal::{Signals, Terminal, require};
+use outer_terminal::require;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     process::Pid,
@@ -45,7 +48,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
     // own event loop; it never changes an already multithreaded caller.
     SigSet::empty().thread_set_mask()?;
     let signals = Signals::new()?;
-    let mut terminal = Terminal::capture_for_group(directory, parent)?;
+    let mut terminal = outer_terminal::capture_for_group(directory, &signals, parent)?;
     terminal.enter()?;
     marker(directory, "child-ready", &std::process::id().to_string())?;
     io::stdout().write_all(b"OWNED-CHILD-READY\r\n")?;
@@ -100,9 +103,9 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
                 }
             }
         }
-        let mut watched = vec![PollFd::new(&signals.file, PollFlags::IN)];
+        let mut watched = vec![PollFd::new(&signals, PollFlags::IN)];
         if !paused {
-            watched.push(PollFd::new(&terminal.fd, PollFlags::IN));
+            watched.push(PollFd::new(&terminal, PollFlags::IN));
         }
         match poll(
             &mut watched,
@@ -121,7 +124,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
             .is_some_and(|fd| fd.revents().contains(PollFlags::IN))
         {
             let mut bytes = [0; 32];
-            match rustix::io::read(&terminal.fd, &mut bytes) {
+            match rustix::io::read(&terminal, &mut bytes) {
                 Ok(0) => return Err(io::Error::other("owned child input ended")),
                 Ok(count) => input.extend_from_slice(&bytes[..count]),
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
@@ -135,6 +138,12 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
 fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
+        [_, role, path] if role == "--fresh-entry" => fresh_entry::start(Path::new(path), false),
+        [_, role, path] if role == "--fresh-entry-fail" => {
+            fresh_entry::start(Path::new(path), true)
+        }
+        [_, role, path] if role == "--fresh-owner" => fresh_entry::restore(Path::new(path))
+            .and_then(|()| terminal_owner::run(Path::new(path), false)),
         [_, path] => terminal_owner::run(Path::new(path), false),
         [_, role, path, pid] if role == "--child" => pid
             .to_str()

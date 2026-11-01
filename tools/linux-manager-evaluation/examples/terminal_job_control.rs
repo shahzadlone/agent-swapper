@@ -5,10 +5,8 @@
 mod job_control;
 #[path = "../src/terminal.rs"]
 mod terminal;
+use agentswapper_linux_runtime::admission_transport as transport;
 use job_control::{JOB_SIGNALS, OwnedChild, blocked_job_signals, dispositions, target_signals};
-#[allow(dead_code, reason = "experiment uses selected private gate operations")]
-#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
-mod transport;
 
 use nix::sys::{
     signal::{SigSet, SigmaskHow, Signal, pthread_sigmask},

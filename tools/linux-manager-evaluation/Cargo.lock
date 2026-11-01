@@ -3,9 +3,19 @@
 version = 4
 
 [[package]]
+name = "agentswapper-linux-runtime"
+version = "0.1.0-dev"
+dependencies = [
+ "nix",
+ "rustix",
+ "zeroize",
+]
+
+[[package]]
 name = "aswp-linux-manager-evaluation"
 version = "0.0.0"
 dependencies = [
+ "agentswapper-linux-runtime",
  "fuxix",
  "nix",
  "rustix",
@@ -566,6 +576,12 @@ checksum = "939f186d9ecebe044315a5cb6d6f78568bbc21152adc954d5a0c2f58bdbc9920"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zmij"

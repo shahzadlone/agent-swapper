@@ -1,8 +1,6 @@
 //! Read-only image-change comparison. Positive observations only, no receipts.
 #![forbid(unsafe_code)]
-#[allow(dead_code, reason = "comparison uses selected private gate operations")]
-#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
-mod transport;
+use agentswapper_linux_runtime::admission_transport as transport;
 
 use std::{
     fs, io,

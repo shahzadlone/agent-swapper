@@ -1,8 +1,9 @@
 //! Surviving parent for fixed owned-terminal qualification executables.
 use crate::{
     job_control,
-    outer_terminal::{Signals, Terminal, require},
+    outer_terminal::{self, Terminal, require},
 };
+use agentswapper_linux_runtime::signals::Signals;
 use nix::sys::wait::WaitStatus;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -20,8 +21,8 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
     fs::rename(directory.join(format!("{name}.tmp")), directory.join(name))
 }
 
-struct Owner(Terminal, Option<OwnedFd>);
-impl Drop for Owner {
+struct Owner<'a>(Terminal<'a>, Option<OwnedFd>);
+impl Drop for Owner<'_> {
     fn drop(&mut self) {
         let Some(child) = &self.1 else {
             return;
@@ -52,7 +53,7 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
     // Declared before child: cleanup attempts child retirement first. A bounded
     // child destructor is not proof of exit; this guard requires its retained
     // process pidfd to confirm exit before restoring any modes on error.
-    let mut terminal = Owner(Terminal::capture(directory)?, None);
+    let mut terminal = Owner(outer_terminal::capture(directory, &signals)?, None);
     let mut command = Command::new(std::env::current_exe()?);
     command
         .arg(if managed { "--owned-child" } else { "--child" })
@@ -109,7 +110,7 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
                 "owned child readiness differs",
             )?;
             let mut value = serde_json::json!({"pid":std::process::id(),
-                "group":terminal.0.group.as_raw_pid(), "session":rustix::process::getsid(None)?.as_raw_pid(),
+                "group":terminal.0.group().as_raw_pid(), "session":rustix::process::getsid(None)?.as_raw_pid(),
                 "child":child.pid.as_raw()});
             if managed {
                 let details: serde_json::Value =
@@ -168,7 +169,7 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let mut watched = [PollFd::new(&terminal.0.fd, PollFlags::empty())];
+    let mut watched = [PollFd::new(&terminal.0, PollFlags::empty())];
     poll(
         &mut watched,
         Some(&Timespec {

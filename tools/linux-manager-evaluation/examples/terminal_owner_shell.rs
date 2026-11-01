@@ -9,8 +9,10 @@ mod outer_terminal;
 use std::{fs, io, os::unix::process::CommandExt, path::Path, process::Command};
 
 fn run(directory: &Path) -> io::Result<()> {
-    let terminal = outer_terminal::Terminal::capture(directory)?;
+    let signals = agentswapper_linux_runtime::signals::Signals::new()?;
+    let terminal = outer_terminal::capture(directory, &signals)?;
     drop(terminal);
+    signals.finish(None)?;
     nix::sys::prctl::set_child_subreaper(true)?;
     outer_terminal::require(
         nix::sys::prctl::get_child_subreaper()?,

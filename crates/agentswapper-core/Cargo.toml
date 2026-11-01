@@ -26,6 +26,7 @@ wait-timeout = "0.2"
 rustix = { version = "1", features = ["process", "fs", "termios"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+agentswapper-linux-runtime = { path = "../agentswapper-linux-runtime", version = "=0.1.0-dev" }
 rustix = { version = "1", features = ["event", "net"] }
 fuxix = "=0.8.0"
 
