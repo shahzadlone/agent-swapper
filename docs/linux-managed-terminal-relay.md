@@ -25,10 +25,15 @@ closes the control channel, and independently observes the original scope's
 retirement before preserving the cancellation signal's exit status. Full
 output queues cannot prevent control and signal processing.
 
-Six hosted scenarios cover byte preservation, hidden input, resizing, final
+Nine hosted scenarios cover byte preservation, hidden input, resizing, final
 output, orphaned suspension, target-managed nested jobs, actual output
 backpressure with SIGTERM, and shell stop/background/foreground transitions
-from canonical Ctrl-Z and a raw-mode self-stop. The existing independent outer
+from canonical Ctrl-Z and a raw-mode self-stop. Added faults close the outer
+master, kill the client, or kill the guardian while final output is blocked.
+Those faults retain original process/cgroup handles and observe the death of
+a descendant that blocks SIGHUP. They check scope removal, released leases
+and a stopped heartbeat independently of the relay's cleanup markers.
+The existing independent outer
 probe keeps its nine restoration, input, signal and shell tests.
 
 This component creates a private locked fixture file and syncs a small fixture
@@ -37,8 +42,15 @@ failure, retained leases and unresolved run policy using the same client API.
 The combined relay does not claim to integrate a production Store or complete
 its journal. The guardian accepts only its protected fixed executable.
 
+After outer master loss, restoration is explicitly unavailable; the relay still
+attempts independent scope retirement and preserves delivered SIGHUP. SIGKILL
+cannot run client cleanup and leaves the test terminal raw. This is a measured
+restoration limit, not a terminal-restoration pass. A bounded drain timeout
+restores modes and retires the scope, then reports failure without a blocking
+stderr write into the same full terminal. Hosted results remain pending.
+
 Open gates include external suspension requests while the inner target runs,
-outer master loss and uncatchable client death, output-drain failure policy,
+restoration by a surviving owner after uncatchable client death,
 long sessions, already multithreaded CLI composition, arbitrary provider
 execution, final-exec/exit receipts, and production manager installation.
 The shared signal/terminal component requires a fresh process; it blocks

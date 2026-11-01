@@ -110,7 +110,8 @@ class OwnedPty:
             # Only the original unreaped child; no PID from a marker is killed.
             os.kill(self.pid, signal.SIGKILL)
             os.waitpid(self.pid, 0)
-        os.close(self.master)
+        if self.master is not None:
+            os.close(self.master)
 
 
 def direct(binary, scenario):

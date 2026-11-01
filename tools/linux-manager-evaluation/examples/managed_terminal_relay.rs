@@ -12,7 +12,7 @@ use rustix::{
 use std::{
     collections::VecDeque,
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     os::{fd::AsFd, unix::fs::OpenOptionsExt},
     path::Path,
     time::{Duration, Instant},
@@ -187,11 +187,16 @@ fn relay(
                 inner_events |= PollFlags::OUT;
             }
         }
-        let mut ready = [
+        let mut ready = vec![
             PollFd::new(&terminal.fd, outer_events),
-            PollFd::new(&master, inner_events),
             PollFd::new(&signals.file, PollFlags::IN),
         ];
+        // An unrequested HUP is always reported. Omit the inner descriptor
+        // when no progress is possible, so blocked final output cannot spin
+        // on that HUP for the entire drain deadline.
+        if !inner_events.is_empty() {
+            ready.push(PollFd::new(&master, inner_events));
+        }
         let count = match poll(
             &mut ready,
             Some(&Timespec {
@@ -207,7 +212,7 @@ fn relay(
             backpressured = true;
         }
         let outer = ready[0].revents();
-        let inner = ready[1].revents();
+        let inner = ready.get(2).map_or(PollFlags::empty(), PollFd::revents);
         require(
             !outer.intersects(PollFlags::ERR | PollFlags::NVAL),
             "outer terminal failed",
@@ -299,9 +304,33 @@ fn run(directory: &Path) -> io::Result<()> {
     terminal.enter()?;
     marker(directory, "relay-ready", "raw")?;
     let outcome = relay(directory, &signals, &mut terminal, &mut running);
+    if let Err(error) = &outcome {
+        marker(directory, "relay-error", &error.to_string())?;
+    }
     // Restore promptly even if manager observation takes longer or fails.
-    terminal.restore()?;
-    marker(directory, "restored", "complete")?;
+    let restored = terminal.restore();
+    let mut watched = [PollFd::new(&terminal.fd, PollFlags::empty())];
+    poll(
+        &mut watched,
+        Some(&Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        }),
+    )?;
+    let disconnected = watched[0].revents().contains(PollFlags::HUP);
+    if restored.is_ok() {
+        marker(directory, "restored", "complete")?;
+    } else {
+        marker(
+            directory,
+            "restoration-unavailable",
+            if disconnected {
+                "owned outer terminal disconnected"
+            } else {
+                "terminal restoration failed"
+            },
+        )?;
+    }
     let retired = running.close().retire().map_err(|failure| failure.error)?;
     require(
         retired.identity == identity && retired.connection_close_error.is_none(),
@@ -313,6 +342,12 @@ fn run(directory: &Path) -> io::Result<()> {
         "original scope and child retired; journal policy unchanged",
     )?;
     drop(terminal);
+    // A vanished master cannot be restored. Record that limit without
+    // skipping independent scope retirement or hiding a delivered SIGHUP.
+    if disconnected && matches!(outcome, Ok(Some(nix::sys::signal::Signal::SIGHUP))) {
+        return signals.finish(Some(nix::sys::signal::Signal::SIGHUP));
+    }
+    restored?;
     signals.finish(outcome?)
 }
 
@@ -325,7 +360,12 @@ fn main() {
         )),
     };
     if let Err(error) = result {
-        eprintln!("managed terminal relay: {error}");
+        // The original stderr description may be blocking and share a full
+        // outer PTY. A diagnostic must not hang after bounded cleanup. The
+        // admitted harness reads the private relay-error marker instead.
+        if !io::stderr().is_terminal() {
+            eprintln!("managed terminal relay: {error}");
+        }
         std::process::exit(125);
     }
 }
