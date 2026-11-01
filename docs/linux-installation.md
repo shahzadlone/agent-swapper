@@ -66,7 +66,8 @@ without echoing contents or supplied values.
 The hash implementation reuses the application's locked `sha2 0.10.9` graph.
 The isolated evaluator adds those same eight existing package versions; no
 registry version changes in the application lockfile. The dependency-boundary
-check compares their versions and checksums between the two locks.
+check compares their versions and registry sources between the two locks;
+Cargo validates the locked archive checksums.
 
 Local digest controls cover published SHA-256 test vectors, mismatched bytes,
 malformed hashes, exact size limits, overflow, empty files, multiple read blocks
@@ -129,3 +130,8 @@ to a second complete valid generation while the first observation is held.
 Custom fixture layouts remain qualification-only. Local runtime tests and
 thirteen API doctests, strict runtime/evaluator Clippy, dependency boundaries
 and harness refusal tests pass; native selection qualification is pending.
+
+The first digest checkpoint (`5f3469c`) passed the asset matrix on both native
+runners. Ubuntu 22.04 then stopped at the dependency-boundary step, whose new
+`tomllib` import required Python 3.11. The checker now uses Cargo's JSON metadata
+on the older interpreter too. Native rerun of that correction is pending.

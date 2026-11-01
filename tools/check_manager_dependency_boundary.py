@@ -2,7 +2,6 @@
 """Keep the qualification client out of production dependency graphs."""
 import subprocess
 import json
-import tomllib
 from pathlib import Path
 
 
@@ -24,11 +23,11 @@ def check():
     # collapse multiple versions into a name-keyed dictionary for this check.
     digests = {'sha2', 'digest', 'crypto-common', 'cpufeatures', 'block-buffer',
                'generic-array', 'typenum', 'version_check'}
-    hash_pins = []
-    for name in ('Cargo.lock', 'tools/linux-manager-evaluation/Cargo.lock'):
-        packages = tomllib.loads((root / name).read_text())['package']
-        hash_pins.append({(p['name'], p['version'], p.get('checksum'))
-                          for p in packages if p['name'] in digests})
+    # Use Cargo's parsed metadata on both Python 3.10 and newer runners. Cargo
+    # validates the locked registry checksums; compare exact version/source
+    # tuples here without importing Python 3.11-only tomllib.
+    hash_pins = [{(p['name'], p['version'], p['source'])
+                  for p in packages if p['name'] in digests} for packages in locks]
     if not hash_pins[1] <= hash_pins[0] or {p[0] for p in hash_pins[1]} != digests:
         raise RuntimeError('isolated asset hash dependencies differ from application pins')
     if {p[1] for p in hash_pins[1] if p[0] == 'sha2'} != {'0.10.9'}:
