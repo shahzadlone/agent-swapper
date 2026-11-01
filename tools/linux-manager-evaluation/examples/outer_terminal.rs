@@ -2,7 +2,8 @@
 #![forbid(unsafe_code)]
 #[path = "../src/outer_terminal.rs"]
 mod outer_terminal;
-use outer_terminal::{Signals, Terminal, require};
+use agentswapper_linux_runtime::signals::Signals;
+use outer_terminal::{Terminal, require};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     termios,
@@ -131,7 +132,7 @@ fn run(directory: &Path) -> io::Result<()> {
         }
         let mut watched = [
             PollFd::new(&terminal.fd, events),
-            PollFd::new(&signals.file, PollFlags::IN),
+            PollFd::new(&signals, PollFlags::IN),
         ];
         let count = match poll(
             &mut watched,

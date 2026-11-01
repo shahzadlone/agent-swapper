@@ -114,6 +114,7 @@ dependencies = [
 name = "agentswapper-linux-runtime"
 version = "0.1.0-dev"
 dependencies = [
+ "nix",
  "rustix",
  "tempfile",
  "wait-timeout",

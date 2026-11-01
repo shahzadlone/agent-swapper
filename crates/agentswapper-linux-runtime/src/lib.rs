@@ -9,3 +9,6 @@
 pub mod admission_transport;
 #[cfg(target_os = "linux")]
 pub mod launch_envelope;
+
+#[cfg(target_os = "linux")]
+pub mod signals;

@@ -1,8 +1,9 @@
 //! Surviving parent for fixed owned-terminal qualification executables.
 use crate::{
     job_control,
-    outer_terminal::{Signals, Terminal, require},
+    outer_terminal::{Terminal, require},
 };
+use agentswapper_linux_runtime::signals::Signals;
 use nix::sys::wait::WaitStatus;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},

@@ -1,9 +1,5 @@
 //! Fresh-process terminal ownership shared only by fixed qualification probes.
 #![forbid(unsafe_code)]
-use nix::sys::{
-    signal::{SigSet, SigmaskHow, Signal, raise},
-    signalfd::{SfdFlags, SignalFd},
-};
 use rustix::{
     fs::{Mode, OFlags},
     termios,
@@ -22,109 +18,6 @@ pub(crate) fn require(ok: bool, message: &str) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::other(message))
-    }
-}
-const SIGNALS: [Signal; 8] = [
-    Signal::SIGINT,
-    Signal::SIGTERM,
-    Signal::SIGHUP,
-    Signal::SIGQUIT,
-    Signal::SIGTSTP,
-    Signal::SIGCONT,
-    Signal::SIGWINCH,
-    Signal::SIGCHLD,
-];
-
-#[derive(Default)]
-pub(crate) struct Notices {
-    pub(crate) terminate: Option<Signal>,
-    pub(crate) stop: bool,
-    pub(crate) continued: bool,
-    pub(crate) resized: bool,
-}
-pub(crate) struct Signals {
-    pub(crate) file: SignalFd,
-    saved: SigSet,
-}
-impl Signals {
-    pub(crate) fn new() -> io::Result<Self> {
-        require(
-            fs::read_dir("/proc/self/task")?.count() == 1,
-            "signal fixture must start single-threaded",
-        )?;
-        let status = fs::read_to_string("/proc/self/status")?;
-        let bits = SIGNALS
-            .iter()
-            .fold(0_u64, |bits, s| bits | (1 << (*s as u32 - 1)));
-        for name in ["SigIgn:", "SigCgt:", "SigBlk:"] {
-            let field = status
-                .lines()
-                .find_map(|line| line.strip_prefix(name))
-                .ok_or_else(|| io::Error::other("missing signal witness"))?;
-            require(
-                u64::from_str_radix(field.trim(), 16).map_err(io::Error::other)? & bits == 0,
-                "outer fixture requires default unblocked signal state",
-            )?;
-        }
-        let mut mask = SigSet::empty();
-        for signal in SIGNALS {
-            mask.add(signal);
-        }
-        let saved = mask.thread_swap_mask(SigmaskHow::SIG_BLOCK)?;
-        match SignalFd::with_flags(&mask, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK) {
-            Ok(file) => Ok(Self { file, saved }),
-            Err(error) => {
-                saved.thread_set_mask()?;
-                Err(error.into())
-            }
-        }
-    }
-    pub(crate) fn drain(&self) -> io::Result<Notices> {
-        let mut notices = Notices::default();
-        for _ in 0..16 {
-            let Some(info) = self.file.read_signal()? else {
-                break;
-            };
-            match Signal::try_from(i32::try_from(info.ssi_signo).map_err(io::Error::other)?)? {
-                signal @ (Signal::SIGINT | Signal::SIGTERM | Signal::SIGHUP | Signal::SIGQUIT) => {
-                    notices.terminate.get_or_insert(signal);
-                }
-                Signal::SIGTSTP => notices.stop = true,
-                Signal::SIGCONT => notices.continued = true,
-                Signal::SIGWINCH => notices.resized = true,
-                Signal::SIGCHLD => {}
-                _ => return Err(io::Error::other("unexpected outer fixture signal")),
-            }
-        }
-        Ok(notices)
-    }
-    pub(crate) fn suspend(&self) -> io::Result<Notices> {
-        let before = self.drain()?;
-        if before.terminate.is_some() {
-            return Ok(before);
-        }
-        let mut stop = SigSet::empty();
-        stop.add(Signal::SIGTSTP);
-        let saved = stop.thread_swap_mask(SigmaskHow::SIG_UNBLOCK)?;
-        let result = raise(Signal::SIGTSTP);
-        let restored = saved.thread_set_mask();
-        result?;
-        restored?;
-        // SIGCONT resumes a process even while blocked. A discarded orphaned
-        // SIGTSTP returns without a corresponding continuation notification.
-        self.drain()
-    }
-    pub(crate) fn finish(self, termination: Option<Signal>) -> io::Result<()> {
-        drop(self);
-        if let Some(signal) = termination {
-            raise(signal)?;
-        }
-        Ok(())
-    }
-}
-impl Drop for Signals {
-    fn drop(&mut self) {
-        let _ = self.saved.thread_set_mask();
     }
 }
 

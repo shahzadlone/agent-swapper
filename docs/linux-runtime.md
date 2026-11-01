@@ -14,7 +14,7 @@ buffers and cross-process argv-canary test. Its fields remain private and it has
 no Debug or serialization implementation. Encoding and decoding are private;
 consumers use validated capture and bounded transfer operations.
 
-Normal dependencies are only rustix and zeroize, already used by the core.
+The initial transport slice uses only rustix and zeroize, already used by the core.
 Dependencies are Linux-targeted; other platforms compile an empty library and
 the core does not depend on it there. The dependency-boundary check rejects
 database, CLI, encryption application, or manager dependencies in this first
@@ -34,3 +34,32 @@ targets, both locked dependency audits and the dependency-boundary check.
 Hosted platform, terminal, packaging and rebuild qualification remains pending.
 The [production integration sequence](linux-production-integration.md) describes
 the remaining installation, fresh helper, exec/journal and retirement work.
+
+## Fresh-process signal ownership
+
+The next extraction moves the existing terminal helpers' signalfd event loop
+into the runtime. All three terminal examples and the surviving parent now use
+that shared implementation. Fixture terminal admission and marker files stay
+outside the runtime. This adds the already pinned nix 0.31.3 signal feature as
+a normal Linux dependency; it does not enable ptrace in the production graph.
+
+The owner is explicitly neither Send nor Sync. Its signal mask therefore cannot
+be restored on another thread by moving or sharing the owner; compile-fail tests
+check both constraints. Descriptor access uses AsFd and keeps the signalfd field
+private. Construction still requires a fresh single-threaded process with the
+relevant signals at their default unblocked dispositions. Procfs enumeration
+errors now propagate instead of being counted as threads. An actual concurrent
+thread test verifies refusal without changing the calling thread's mask.
+
+This does not change the running CLI's signal policy. The fresh helper still
+owns signal setup, and each consumer restores its terminal and completes cleanup
+before restoring the saved mask. Terminal and manager composition are validated
+by their existing owned-PTY tests; the shared owner itself grants no process
+custody or permission to reuse a profile.
+
+Local checks for the signal extraction passed 17 runtime tests, two compile-fail
+doctests, all nine outer-terminal cases and all nine surviving-owner cases,
+strict runtime and qualification Clippy, both dependency audits and the boundary
+check. The stopped-parent case required its companion shell executable to be
+built before running; it then passed. Hosted managed-terminal and full packaging
+qualification remain pending.

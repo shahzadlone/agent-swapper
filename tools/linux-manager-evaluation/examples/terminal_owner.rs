@@ -10,8 +10,9 @@ mod job_control;
 mod outer_terminal;
 #[path = "../src/terminal_owner.rs"]
 mod terminal_owner;
+use agentswapper_linux_runtime::signals::Signals;
 use nix::sys::signal::{SigSet, Signal};
-use outer_terminal::{Signals, Terminal, require};
+use outer_terminal::{Terminal, require};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     process::Pid,
@@ -100,7 +101,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
                 }
             }
         }
-        let mut watched = vec![PollFd::new(&signals.file, PollFlags::IN)];
+        let mut watched = vec![PollFd::new(&signals, PollFlags::IN)];
         if !paused {
             watched.push(PollFd::new(&terminal.fd, PollFlags::IN));
         }

@@ -11,8 +11,9 @@ mod outer_terminal;
 #[path = "../src/terminal_owner.rs"]
 mod terminal_owner;
 
+use agentswapper_linux_runtime::signals::Signals;
 use aswp_linux_manager_evaluation::journal_client::{Bound, JobEvent, Running, TargetExit};
-use outer_terminal::{Signals, Terminal, require};
+use outer_terminal::{Terminal, require};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     termios,
@@ -208,7 +209,7 @@ fn relay(
         }
         let mut ready = vec![
             PollFd::new(&terminal.fd, outer_events),
-            PollFd::new(&signals.file, PollFlags::IN),
+            PollFd::new(signals, PollFlags::IN),
         ];
         // An unrequested HUP is always reported. Omit the inner descriptor
         // when no progress is possible, so blocked final output cannot spin
