@@ -39,6 +39,14 @@ separately. These changes do not supply restart recovery or target-exit evidence
 | Policy API | Guard admitted policies from reuse; test production path derivation and narrow caller-selected generation/layout APIs. |
 | Build features | Verify shipped CLI feature graphs exclude qualification APIs. |
 
+The vendor-path measurement creates one exclusively owned, inactive unit under
+`/usr/lib/systemd/system` on each hosted Ubuntu image. It queries the loaded
+`FragmentPath`, checks that it names the same inode, records the `/lib` alias,
+and removes its unit. The fixture has no activation dependencies and refuses
+manual start. Local controls cover early refusal outside hosted CI and the
+fixed path spellings. Native measurements remain pending; no runtime alias
+acceptance is added on the strength of a presumed distribution layout.
+
 Source review suggested that selector admission ends at successful `bind`.
 That is the current implementation: already-bound services retain their original
 generation even if launch preparation happens later. A selector change does not
