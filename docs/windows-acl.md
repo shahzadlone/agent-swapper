@@ -644,6 +644,18 @@ on failure and allow a bounded 30-second PowerShell startup instead of 15.
 All six synthetic cases passed locally through Windows PowerShell 5.1, and the
 contract step passed in `1b50756`. No disk operations run in these mock cases.
 
+A later main run at `b164615` (`41310313545`) timed out after 30 seconds in
+one synthetic PowerShell runner-contract case. The source and workflow were
+identical to the fully passing `4b31ce9` checkpoint; no runtime cause is inferred
+from that fact. The follow-up keeps the same deadline and disables retries,
+emits startup/payload/cargo phase markers, and includes partial output in a
+bounded timeout failure. A portable control verifies that a timeout cannot be
+retried or counted as a passing refusal. All six synthetic invocations passed
+locally through Windows PowerShell 5.1, together with the timeout diagnostic
+control; the native Windows job passed at `72a672c` (`41311310454`). Full pipeline
+completion is tracked separately. No disk or account operations run in these
+synthetic cases.
+
 The review's suggestion to use `SetKernelObjectSecurity` was rejected:
 [Microsoft explicitly directs filesystem callers to SetSecurityInfo instead](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setkernelobjectsecurity).
 The retained handle targets only the verified newly owned root. DACL propagation
