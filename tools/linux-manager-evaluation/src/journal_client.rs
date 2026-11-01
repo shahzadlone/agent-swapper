@@ -149,6 +149,8 @@ pub struct Prepared {
 }
 pub struct Running(Session);
 pub struct Closed(Session);
+/// Independent read-only witness; it never owns a copy of the activation socket.
+pub struct Witness(Session);
 
 /// A failed transition retains the original witnesses for explicit retirement.
 pub struct TransitionFailure {
@@ -265,6 +267,78 @@ impl Bound {
     }
 }
 
+impl Witness {
+    /// Claims select an observation only. Manager and kernel facts must match
+    /// before this instance can observe retirement of the original invocation.
+    pub fn bind(prefix: &str, claimed: &Identity, child_pid: u32) -> io::Result<Self> {
+        outside_runtime()?;
+        fixture_policy::gate(prefix)?;
+        require(
+            std::env::var("ASWP_CI_ACTIVATED_JOURNAL").as_deref() == Ok("1"),
+            "independent witness requires the activated journal fixture",
+        )?;
+        require(
+            fixture_policy::valid_scope_unit(&claimed.unit)
+                && claimed.unit.starts_with(&format!("{prefix}@"))
+                && crate::valid_invocation(&claimed.invocation)
+                && claimed.guardian_pid > 1,
+            "invalid independent witness claims",
+        )?;
+        let paths = crate::prerequisites()?;
+        let expected = Expected {
+            unit: claimed.unit.clone(),
+            user: rustix::process::getuid().as_raw(),
+            pid: claimed.guardian_pid,
+            invocation: Some(claimed.invocation.clone()),
+            kind: UnitKind::Activated {
+                fragment: format!("/run/systemd/system/{prefix}@.service"),
+            },
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let (connection, owner, report, binding) = runtime.block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                crate::admit(paths, Some(expected)),
+            )
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "independent witness binding expired",
+                )
+            })?
+        })?;
+        let binding =
+            binding.ok_or_else(|| io::Error::other("independent kernel binding absent"))?;
+        let child = binding.child(child_pid, claimed.guardian_pid)?;
+        let session = Session {
+            control: Control(None),
+            connection: Some(connection),
+            owner,
+            unit: report
+                .unit
+                .ok_or_else(|| io::Error::other("independent unit absent"))?,
+            binding,
+            child: Some(child),
+            deadline,
+            runtime: Some(runtime),
+            _same_thread: PhantomData,
+        };
+        require(
+            identity(&session) == *claimed,
+            "independent manager/kernel facts differ from claims",
+        )?;
+        session.recheck()?;
+        Ok(Self(session))
+    }
+    pub fn retire(self) -> io::Result<Identity> {
+        self.0.close().retire()
+    }
+}
+
 impl Prepared {
     pub fn pid(&self) -> u32 {
         self.pid
@@ -300,6 +374,25 @@ impl Running {
     }
     pub fn close(self) -> Closed {
         self.0.close()
+    }
+
+    /// Hosted fixture fault injection using only the original retained pidfd.
+    pub fn crash_guardian(self) -> Result<Closed, TransitionFailure> {
+        let result = (|| {
+            require(
+                std::env::var("ASWP_CI_ACTIVATED_JOURNAL").as_deref() == Ok("1"),
+                "guardian fault injection requires the activated journal fixture",
+            )?;
+            self.0.recheck()?;
+            self.0.binding.kill_guardian_for_fixture()
+        })();
+        match result {
+            Ok(()) => Ok(self.0.close()),
+            Err(error) => Err(TransitionFailure {
+                error,
+                closed: Box::new(self.0.close()),
+            }),
+        }
     }
 }
 impl Closed {

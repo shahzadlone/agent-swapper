@@ -364,3 +364,16 @@ regressions pass. Native activation/journal validation and focused Opus review
 remain pending for this checkpoint. The library is a Linux-only core dev
 dependency; CI checks matching audited transport/runtime pins in both lockfiles
 and excludes the evaluation library, zbus and Tokio from normal/build graphs.
+
+### Abrupt-loss checkpoint under qualification
+
+The next hosted trials kill the original guardian through its retained pidfd,
+and kill an independently spawned client with SIGKILL. The latter controller
+never receives a copy of the activation socket. It authenticates its own
+read-only manager/cgroup/process witnesses before the fault, rejecting wrong
+invocation, directory identity and child claims. Each trial verifies a live
+writer before the fault, original-scope retirement and lease release afterwards,
+and continued journal refusal after reopening. Guardian-loss must lack a clean
+EOF marker; client-loss requires guardian EOF handling without any client
+cleanup. These tests remain qualification code; native results and focused
+review are pending. No production custody receipt is added.

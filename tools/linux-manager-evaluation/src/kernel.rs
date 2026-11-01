@@ -306,6 +306,12 @@ pub(crate) struct Retirement {
 }
 
 impl Binding {
+    pub(crate) fn kill_guardian_for_fixture(&self) -> io::Result<()> {
+        self.observe()?;
+        rustix::process::pidfd_send_signal(&self.main.pidfd, rustix::process::Signal::KILL)?;
+        Ok(())
+    }
+
     pub(crate) fn bind(unit: &str, user: u32, pid: u32) -> io::Result<Self> {
         initial_namespace()?;
         // The caller has already restricted the unit to one safe fixture name.
