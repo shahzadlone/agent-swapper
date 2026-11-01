@@ -486,6 +486,86 @@ fn descendant_heartbeat(scope: &Path, previous: Option<&str>) -> String {
     }
 }
 
+fn nested_job_stays_inside_target(
+    master: impl AsFd,
+    scope: &Path,
+    target: u32,
+    id: &Identity,
+    running: &mut aswp_linux_manager_evaluation::journal_client::Running,
+) {
+    terminal_input(&master, b"nested\n");
+    let until = Instant::now() + Duration::from_secs(3);
+    let nested: u32 = loop {
+        if let Ok(value) = fs::read_to_string(scope.join("nested-ready")) {
+            break value.parse().unwrap();
+        }
+        assert!(Instant::now() < until, "nested job did not become ready");
+        thread::sleep(Duration::from_millis(10));
+    };
+    let suffix = format!("NESTED-RUNNING:{nested}\r\n");
+    assert_eq!(
+        terminal_output(&master, suffix.as_bytes()),
+        format!("nested\r\n{suffix}").as_bytes()
+    );
+    job_topology(&master, target, id.guardian_pid, nested, false);
+    let nested_fd = rustix::process::pidfd_open(
+        rustix::process::Pid::from_raw(nested as i32).unwrap(),
+        rustix::process::PidfdFlags::empty(),
+    )
+    .unwrap();
+    terminal_input(&master, b"\x1a");
+    let suffix = format!("NESTED-STOPPED:{nested}\r\n");
+    assert_eq!(
+        terminal_output(&master, suffix.as_bytes()),
+        format!("^Z{suffix}").as_bytes()
+    );
+    job_topology(&master, target, id.guardian_pid, target, false);
+    let stat = fs::read_to_string(format!("/proc/{nested}/stat")).unwrap();
+    let fields: Vec<_> = stat
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .collect();
+    assert_eq!(fields[0], "T");
+    assert_eq!(fields[1], target.to_string());
+    assert_eq!(fields[2], nested.to_string());
+    assert_eq!(fields[3], id.guardian_pid.to_string());
+    assert_eq!(fields[5], target.to_string());
+    // The direct target has handled its own child's stop. It remains running,
+    // and no guardian notice may misidentify this as an outer-session stop.
+    let error = running.wait_stopped().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "activation packet did not arrive before deadline"
+    );
+    let previous = descendant_heartbeat(scope, None);
+    descendant_heartbeat(scope, Some(&previous));
+    job_topology(&master, target, id.guardian_pid, target, false);
+    terminal_input(&master, b"resume-nested\n");
+    assert_eq!(
+        terminal_output(&master, b"NESTED-DONE\r\n"),
+        b"resume-nested\r\nNESTED-DONE\r\n"
+    );
+    job_topology(&master, target, id.guardian_pid, target, false);
+    let mut watched = [rustix::event::PollFd::new(
+        &nested_fd,
+        rustix::event::PollFlags::IN,
+    )];
+    assert_eq!(
+        rustix::event::poll(
+            &mut watched,
+            Some(&rustix::event::Timespec {
+                tv_sec: 0,
+                tv_nsec: 0
+            })
+        )
+        .unwrap(),
+        1
+    );
+    assert!(watched[0].revents().contains(rustix::event::PollFlags::IN));
+}
+
 #[test]
 #[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
 fn guardian_session_stops_resume_and_retire_without_releasing_journal_policy() {
@@ -622,6 +702,9 @@ fn guardian_session_stops_resume_and_retire_without_releasing_journal_policy() {
                 0
             );
             descendant_heartbeat(&scope, None);
+            if finish == "resume" {
+                nested_job_stays_inside_target(&master, &scope, pid, &id, &mut running);
+            }
             assert!(running.resume().is_err(), "resume accepted without a stop");
             if finish != "hangup-running" {
                 terminal_input(&master, b"\x1a");

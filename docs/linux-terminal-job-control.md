@@ -98,6 +98,27 @@ both Ubuntu manager jobs in
 Its full platform/package pipeline subsequently passed. Independent
 implementation review remains separately tracked.
 
+### Nested foreground job
+
+The fixed target can additionally create one child in a separate foreground
+group within the same inner session. When Ctrl+Z stops that child, its parent
+target observes the stop, restores its own foreground group and handles the
+resume locally. Its temporary SIGTTOU mask is restored on success and error;
+neither the guardian nor the outer caller's terminal is modified by this handoff.
+
+The hosted case requires the nested child's stopped state while the direct
+target remains running. The guardian's stop-notice wait must expire for its
+specific no-packet reason, and the other descendant must continue writing.
+The target then foregrounds/resumes its nested child, waits for normal exit,
+restores its own group and returns to the existing direct-target stop/resume
+checks. This prevents a nested stop from being mistaken for an outer-session
+suspend request. All roles and commands are fixed; this is not a generic shell.
+
+Local compilation, strict Clippy and the existing 39 library/27 binary tests
+pass. The nested foreground case passed both Ubuntu manager jobs and the full
+platform/package pipeline at `891edb9` in
+[run 41271931704](https://github.com/shahzadlone/agent-swapper/actions/runs/41271931704).
+
 ### Descendant cleanup and stop scope
 
 The follow-up target can spawn one fixed descendant in its foreground group.
@@ -150,12 +171,14 @@ directory, on both images. All strengthened descendant cases also passed.
 This checkpoint includes the earlier qualified PTY2 and local job-control work;
 it still supplies no production launch backend or journal-completion authority.
 
-Remaining integration work includes the actual manager-owned guardian,
-authenticated stop/resume framing, durable launch ordering, arbitrary target
-signal policy, stopped or regrouped descendants, terminal-mode restoration,
-outer-shell foreground handoff, redirected streams and bounded relay
-backpressure. An EIO observation alone does not establish retirement of every
-writer or safe subscription reuse.
+The fixed fixtures now qualify the manager-owned guardian, authenticated
+stop/resume framing, durable launch ordering and retirement of stopped or
+regrouped descendants. Remaining production integration includes arbitrary
+target signal policy, a caller-facing relay, outer-shell restoration,
+redirected streams and continued execution after handover. The separate
+[outer-terminal component](linux-outer-terminal.md) qualifies modes and shell
+job control without attaching a provider. An EIO observation alone does not
+establish retirement of every writer or safe subscription reuse.
 
 ```sh
 cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example terminal_job_control

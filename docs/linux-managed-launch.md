@@ -646,3 +646,11 @@ See [job-control evidence and limitations](linux-terminal-job-control.md).
 The existing terminal/exec integration on main at `21c0afb` also passed its
 full pipeline and preview attestation in
 [run 41270730612](https://github.com/shahzadlone/agent-swapper/actions/runs/41270730612).
+
+The main integration at `c9f8ff8` passed its complete pipeline, including
+candidate packaging, independent rebuilds and attestation, in
+[run 41273149101](https://github.com/shahzadlone/agent-swapper/actions/runs/41273149101).
+The independently qualified nested-job and outer-terminal components are now
+integrated; see their linked evidence above. Managed inner/outer relay work
+remains separately qualified before integration. These results still do not
+enable production Linux containment or automatic profile reuse.

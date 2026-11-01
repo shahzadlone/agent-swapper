@@ -262,6 +262,11 @@ jobs:
       - name: Evaluate inner-session terminal job control
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example terminal_job_control
+      - name: Evaluate owned outer-terminal modes and job control
+        timeout-minutes: 2
+        run: |
+          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example outer_terminal
+          python3 tools/check_linux_outer_terminal.py tools/linux-manager-evaluation/target/debug/examples/outer_terminal
       - name: Qualify root-owned service cleanup
         env:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe
