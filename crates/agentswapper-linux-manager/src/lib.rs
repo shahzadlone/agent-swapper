@@ -9,4 +9,6 @@ pub use linux::*;
 #[cfg(target_os = "linux")]
 mod invocation;
 #[cfg(target_os = "linux")]
+pub use invocation::require_active as require_active_invocation;
+#[cfg(target_os = "linux")]
 pub use invocation::retired as invocation_retired;

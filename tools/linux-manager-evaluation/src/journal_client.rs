@@ -131,47 +131,14 @@ impl Session {
                     crate::owner(connection).await? == self.owner,
                     "manager owner changed",
                 )?;
-                let path = crate::unit_path(&self.unit.unit);
-                let invocation = Vec::<u8>::try_from(
-                    crate::property(
-                        connection,
-                        self.owner.as_str(),
-                        &path,
-                        crate::UNIT_INTERFACE,
-                        "InvocationID",
-                    )
-                    .await?,
+                agentswapper_linux_manager::require_active_invocation(
+                    connection,
+                    self.owner.as_str(),
+                    &self.unit.unit,
+                    &self.unit.invocation,
+                    self.unit.pid,
                 )
-                .map_err(io::Error::other)?;
-                let invocation: String = invocation.iter().map(|b| format!("{b:02x}")).collect();
-                let pid = u32::try_from(
-                    crate::property(
-                        connection,
-                        self.owner.as_str(),
-                        &path,
-                        crate::SERVICE_INTERFACE,
-                        "MainPID",
-                    )
-                    .await?,
-                )
-                .map_err(io::Error::other)?;
-                let active = String::try_from(
-                    crate::property(
-                        connection,
-                        self.owner.as_str(),
-                        &path,
-                        crate::UNIT_INTERFACE,
-                        "ActiveState",
-                    )
-                    .await?,
-                )
-                .map_err(io::Error::other)?;
-                require(
-                    invocation == self.unit.invocation
-                        && pid == self.unit.pid
-                        && active == "active",
-                    "bound guardian invocation changed",
-                )?;
+                .await?;
                 self.binding.observe()?;
                 if let Some(child) = &self.child {
                     child.check()?;

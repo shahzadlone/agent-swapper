@@ -358,3 +358,23 @@ consumer tests, strict runtime/consumer/core-feature Clippy, the two harness
 refusal tests, 14 activation harness tests and the dependency-boundary check.
 One ignored runtime receiver role is invoked by its passing process test.
 Native template and asset qualification of this revision remain pending.
+
+## Active invocation rechecks
+
+The real journal/terminal client's live recheck now uses the shared manager
+crate's `require_active_invocation`. It validates bounded identity inputs, looks
+up the original invocation through the bound unique manager, and checks unit ID,
+invocation before and after the read, MainPID and active state. It no longer
+addresses a reusable unit-name object during a live recheck. Missing or collected
+invocations refuse admission/resume; they do not silently bind a replacement.
+
+The caller retains its absolute admission deadline or bounded active-observation
+window, original kernel handles, and current-owner checks around the whole
+observation. A successful manager recheck remains separate from installation
+policy, kernel custody, exec confirmation and Store completion. There is no
+new dependency or production launch permission.
+
+Local checks pass ten manager tests and 49 consumer tests with strict Clippy.
+The new refusal tests cover invalid identity bounds and every observed identity
+component, including a consistent replacement invocation. The complete native
+terminal/admission matrix must qualify the changed query path; that run is pending.
