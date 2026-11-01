@@ -113,3 +113,9 @@ consistent replay and unresolved profile policy despite an available OS lease.
 This composes journal durability with withdrawal; it is not yet a Store-backed
 terminal frontend. Strict core Clippy and coordinator checks pass locally; the
 privileged fixture is run only on disposable native CI.
+
+The first combined run (41282864768) stopped at the existing terminal-hangup
+journal test: reporting an already reaped target before checking terminal
+hangup omitted its diagnostic marker. The correction preserves both observations,
+reporting terminal status first and recording a separately observed HUP as
+best-effort diagnostics. The existing hangup assertion remains unchanged.
