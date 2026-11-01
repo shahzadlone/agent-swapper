@@ -17,6 +17,138 @@ fn environment() -> (String, PathBuf) {
     (prefix, directory)
 }
 
+#[cfg(feature = "linux-journal-qualification")]
+#[test]
+#[ignore = "requires opted-in hosted activation and real opaque retirement receipts"]
+fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exit() {
+    use aswp_linux_manager_evaluation::journal_client::Witness;
+    fn pending(
+        store: &mut Store,
+        alias: &str,
+        prefix: &str,
+    ) -> (
+        ProfileId,
+        String,
+        super::linux_scope::PendingLinuxScope,
+        Prepared,
+    ) {
+        let profile = store
+            .register(Harness::Codex, alias.parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let run = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
+            )
+            .unwrap();
+        let bound = Bound::connect(prefix).unwrap();
+        let pending = store
+            .bind_linux_scope(&run, &lease, bound.service_key().unwrap())
+            .unwrap();
+        let prepared = bound.prepare(lease.as_fd()).unwrap();
+        drop(lease);
+        (profile.id, run, pending, prepared)
+    }
+    let (prefix, directory) = environment();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("state");
+    let mut store = Store::open(&root).unwrap();
+
+    let (a_profile, a_run, a_pending, a) = pending(&mut store, "receipt-a", &prefix);
+    let (b_profile, b_run, b_pending, b) = pending(&mut store, "receipt-b", &prefix);
+    let a_receipt = a.close().retire().unwrap().into_service();
+    let b_receipt = b.close().retire().unwrap().into_service();
+    assert!(matches!(
+        store.retire_linux_scope(&b_pending, a_receipt),
+        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
+    ));
+    assert!(matches!(
+        store.retire_linux_scope(&a_pending, b_receipt),
+        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
+    ));
+    unresolved(&store, a_profile, &a_run);
+    unresolved(&store, b_profile, &b_run);
+
+    let (profile, run, original, prepared) = pending(&mut store, "original-witness", &prefix);
+    let identity = prepared.identity();
+    let witness = Witness::bind(&prefix, &identity, prepared.pid()).unwrap();
+    let duplicate = Witness::bind(&prefix, &identity, prepared.pid()).unwrap();
+    let receipt = prepared.close().retire().unwrap().into_service();
+    assert!(matches!(
+        store.retire_linux_scope(&original, witness.retire().unwrap().into_service()),
+        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
+    ));
+    unresolved(&store, profile, &run);
+    let before = store.verify().unwrap().events;
+    store.db.commit_hook(Some(|| true)).unwrap();
+    let failure = store.retire_linux_scope(&original, receipt).unwrap_err();
+    store.db.commit_hook(None::<fn() -> bool>).unwrap();
+    assert!(matches!(failure.error, Error::Database(_)));
+    unresolved(&store, profile, &run);
+    assert_eq!(store.verify().unwrap().events, before);
+    store
+        .retire_linux_scope(&original, failure.retired)
+        .unwrap();
+    let count = store.verify().unwrap().events;
+    assert!(matches!(
+        store.retire_linux_scope(&original, duplicate.retire().unwrap().into_service()),
+        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
+    ));
+    assert_eq!(store.verify().unwrap().events, count);
+    assert_eq!(
+        store.run(&run).unwrap().custody,
+        ProcessCustody::LocalScopeEmpty
+    );
+    assert_eq!(store.run(&run).unwrap().exit_code, None);
+    drop(store.lease(profile).unwrap());
+
+    let (profile, run, original, prepared) = pending(&mut store, "reopened-store", &prefix);
+    let receipt = prepared.close().retire().unwrap().into_service();
+    let mut reopened = Store::open(&root).unwrap();
+    assert!(matches!(
+        reopened.retire_linux_scope(&original, receipt),
+        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
+    ));
+    unresolved(&store, profile, &run);
+    drop(reopened);
+
+    let (profile, run, original, prepared) = pending(&mut store, "retired-unknown-exit", &prefix);
+    let identity = prepared.identity();
+    let writer = prepared.pid();
+    let nonce = *Uuid::new_v4().as_bytes();
+    let running = prepared
+        .start_after(nonce, |pid| store.observe_spawn(&run, pid))
+        .unwrap();
+    heartbeat(&directory, &identity, writer, &nonce, None);
+    assert!(running.observed_exit().is_none());
+    let receipt = running
+        .crash_guardian()
+        .unwrap()
+        .retire()
+        .unwrap()
+        .into_service();
+    store.retire_linux_scope(&original, receipt).unwrap();
+    let record = store.run(&run).unwrap();
+    assert_eq!(record.custody, ProcessCustody::LocalScopeEmpty);
+    assert_eq!(record.exit_code, None);
+    assert_eq!(record.observed_pid, Some(writer));
+    assert!(store.verify().unwrap().consistent);
+    drop(store.lease(profile).unwrap());
+    let reopened = Store::open(&root).unwrap();
+    assert_eq!(reopened.run(&run).unwrap().exit_code, None);
+    assert_eq!(
+        reopened.run(&run).unwrap().custody,
+        ProcessCustody::LocalScopeEmpty
+    );
+    assert!(reopened.verify().unwrap().consistent);
+    println!(
+        "::notice title=Linux opaque scope receipt::wrong run, independent witness, duplicate and reopened Store refused; original receipt committed; guardian loss retired scope without inventing target exit"
+    );
+}
+
 fn prepare(store: &mut Store, alias: &str, prefix: &str) -> (ProfileId, String, Prepared) {
     prepare_mode(store, alias, prefix, false)
 }

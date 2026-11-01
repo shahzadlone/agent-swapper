@@ -572,3 +572,11 @@ The manager dependency is optional behind `linux-journal-qualification`; default
 application graphs remain isolated. Local manager/doctests, 49 evaluation tests,
 strict evaluation/core-feature Clippy and the dependency boundary pass. Native
 qualification of this consumer is pending.
+
+The next qualification checkpoint adds the
+[durable scope-retirement consumer](linux-scope-retirement.md). It associates the
+original live binding with the run before preparation, consumes an opaque value,
+and records scope retirement separately from target status. Schema 8 preserves
+unknown exit codes and migrates existing intent conservatively. This API remains
+feature-gated; the production managed launcher is still disabled. See that
+document for migration, substitution, retry controls and remaining limits.

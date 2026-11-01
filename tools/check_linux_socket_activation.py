@@ -609,8 +609,10 @@ def suite():
                              'inner_terminal_exec_is_journal_gated_and_retires_with_master_open',
                              'guardian_session_stops_resume_and_retire_without_releasing_journal_policy',
                              'exec_stop_precedes_spawn_journal_and_release_or_retirement',
-                             'authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown'):
+                             'authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown',
+                             'opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exit'):
                     result = owned_fixture(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
+                                    '--features', 'linux-journal-qualification',
                                     '--lib', 'store::linux_activated_journal_tests::' + test,
                                     '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],
                                    environment=test_env)

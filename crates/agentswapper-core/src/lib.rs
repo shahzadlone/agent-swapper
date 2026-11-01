@@ -54,6 +54,8 @@ pub enum Error {
     Disabled,
     #[error("profile is busy or has an unfinished run; inspect `aswp status` before continuing")]
     Busy,
+    #[error("scope retirement does not match this live run; previous work remains unresolved")]
+    ScopeReceiptMismatch,
     #[error("unsafe state path or permissions; use a private, local directory with no symlinks")]
     UnsafePath,
     #[error("profile directory is missing; restore it rather than silently creating a new login")]
@@ -251,6 +253,7 @@ impl Error {
             Self::DuplicateAlias => "duplicate_alias",
             Self::Disabled => "profile_disabled",
             Self::Busy => "profile_busy",
+            Self::ScopeReceiptMismatch => "scope_receipt_mismatch",
             Self::UnsafePath => "unsafe_state_path",
             Self::MissingProfileDirectory => "profile_dir_missing",
             Self::NewerSchema => "newer_schema",

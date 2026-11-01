@@ -1057,6 +1057,128 @@ fn migrated_pending_gents_run_requires_reconciliation_and_retains_unknown_sessio
     assert_eq!(s.latest_gents_session(p.id).unwrap().session, session);
 }
 
+fn restore_pre_binding_schema(db: &Connection, version: i64) {
+    db.execute_batch("ALTER TABLE runs DROP COLUMN linux_binding; DROP INDEX one_unfinished_run; CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE exit_code IS NULL;").unwrap();
+    db.pragma_update(None, "user_version", version).unwrap();
+}
+fn v7_dump(db: &Connection) -> Vec<Vec<Vec<Value>>> {
+    projection_dump_with_run_fields(db, "id,alias,harness,enabled,retired,gents", "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session,local_scope").unwrap()
+}
+
+#[test]
+fn v7_upgrade_preserves_linux_intent_without_inventing_a_binding() {
+    let (_temp, mut store) = setup();
+    let root = store.root().to_owned();
+    let profile = store
+        .register(Harness::Codex, "linux".parse().unwrap())
+        .unwrap();
+    let lease = store.lease(profile.id).unwrap();
+    let run = store
+        .begin_run_with_scope(
+            &lease,
+            "run",
+            None,
+            Some(crate::store::LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
+        )
+        .unwrap();
+    store.observe_spawn(&run, 42).unwrap();
+    drop(lease);
+    restore_pre_binding_schema(&store.db, 7);
+    let before = v7_dump(&store.db);
+    let expected = Connection::open_in_memory().unwrap();
+    expected
+        .execute_batch(include_str!("../schema_v7.sql"))
+        .unwrap();
+    assert_eq!(
+        schema_dump(&store.db).unwrap(),
+        schema_dump(&expected).unwrap()
+    );
+    drop(store);
+    let upgraded = Store::open(&root).unwrap();
+    assert_eq!(v7_dump(&upgraded.db), before);
+    assert_eq!(
+        upgraded
+            .db
+            .query_row::<Option<String>, _, _>(
+                "SELECT linux_binding FROM runs WHERE id=?1",
+                [&run],
+                |r| r.get(0)
+            )
+            .unwrap(),
+        None
+    );
+    assert!(matches!(upgraded.lease(profile.id), Err(Error::Busy)));
+    assert!(upgraded.verify().unwrap().consistent);
+    let copies = backups(&root);
+    assert_eq!(copies.len(), 1);
+    let original = Connection::open(&copies[0]).unwrap();
+    assert_eq!(v7_dump(&original), before);
+    assert_eq!(
+        original
+            .pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+            .unwrap(),
+        7
+    );
+}
+
+#[test]
+fn v7_upgrade_refuses_future_receipts_and_schema_tampering_without_erasing_evidence() {
+    for mutation in ["future", "schema"] {
+        let (_temp, mut store) = setup();
+        let root = store.root().to_owned();
+        if mutation == "future" {
+            let profile = store
+                .register(Harness::Claude, "work".parse().unwrap())
+                .unwrap();
+            let lease = store.lease(profile.id).unwrap();
+            let run = store
+                .begin_run_with_scope(
+                    &lease,
+                    "run",
+                    None,
+                    Some(crate::store::LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
+                )
+                .unwrap();
+            store
+                .record(Event::LinuxScopeBound {
+                    id: run,
+                    binding: crate::store::linux_scope::LinuxBinding {
+                        unit: "aswp@1.service".into(),
+                        invocation: [7; 16],
+                        user: 1000,
+                        guardian: 42,
+                        device: 25,
+                        inode: 100,
+                    },
+                })
+                .unwrap();
+        }
+        restore_pre_binding_schema(&store.db, 7);
+        if mutation == "schema" {
+            store
+                .db
+                .execute_batch("CREATE INDEX injected ON runs(kind)")
+                .unwrap();
+        }
+        let before = v7_dump(&store.db);
+        let schema = schema_dump(&store.db).unwrap();
+        let count = event_count(&store.db);
+        drop(store);
+        assert!(Store::open(&root).is_err());
+        let original = Connection::open(root.join("registry.sqlite3")).unwrap();
+        assert_eq!(v7_dump(&original), before);
+        assert_eq!(schema_dump(&original).unwrap(), schema);
+        assert_eq!(event_count(&original), count);
+        assert_eq!(
+            original
+                .pragma_query_value::<i64, _>(None, "user_version", |r| r.get(0))
+                .unwrap(),
+            7
+        );
+        assert_eq!(backups(&root).len(), 1);
+    }
+}
+
 fn legacy_v5(root: &Path) -> Connection {
     let mut store = Store::open(root).unwrap();
     let native = store
@@ -1086,6 +1208,7 @@ fn legacy_v5(root: &Path) -> Connection {
         store.begin_run(&lease, "run").unwrap();
     }
     // No scope metadata was emitted. Restore the exact previous projection DDL.
+    restore_pre_binding_schema(&store.db, 7);
     store.db.execute_batch("DROP INDEX unique_local_scope; ALTER TABLE runs DROP COLUMN local_scope; PRAGMA user_version=5;").unwrap();
     let expected = Connection::open_in_memory().unwrap();
     expected
@@ -1202,11 +1325,11 @@ fn v6_migration_preserves_scoped_pending_run_and_backup() {
         })
         .unwrap();
     drop(finished_lease);
-    let before = projection_dump(&store.db).unwrap();
-    store.db.pragma_update(None, "user_version", 6).unwrap();
+    let before = v7_dump(&store.db);
+    restore_pre_binding_schema(&store.db, 6);
     drop(store);
     let mut upgraded = Store::open(&root).unwrap();
-    assert_eq!(projection_dump(&upgraded.db).unwrap(), before);
+    assert_eq!(v7_dump(&upgraded.db), before);
     assert_eq!(upgraded.run(&run).unwrap().local_scope, Some(scope));
     assert_eq!(upgraded.run(&run).unwrap().observed_pid, Some(4242));
     assert_eq!(
@@ -1224,7 +1347,7 @@ fn v6_migration_preserves_scoped_pending_run_and_backup() {
             .unwrap(),
         6
     );
-    assert_eq!(projection_dump(&backup).unwrap(), before);
+    assert_eq!(v7_dump(&backup), before);
     upgraded.attest_stopped(&run).unwrap();
     assert!(upgraded.lease(profile.id).is_ok());
 }
@@ -1254,8 +1377,8 @@ fn v6_migration_refuses_new_scope_events_and_schema_tampering() {
                 .execute_batch("CREATE INDEX injected ON runs(kind)")
                 .unwrap();
         }
-        store.db.pragma_update(None, "user_version", 6).unwrap();
-        let before = projection_dump(&store.db).unwrap();
+        restore_pre_binding_schema(&store.db, 6);
+        let before = v7_dump(&store.db);
         let events = event_count(&store.db);
         drop(store);
         assert!(Store::open(&root).is_err());
@@ -1265,7 +1388,7 @@ fn v6_migration_refuses_new_scope_events_and_schema_tampering() {
                 .unwrap(),
             6
         );
-        assert_eq!(projection_dump(&db).unwrap(), before);
+        assert_eq!(v7_dump(&db), before);
         assert_eq!(event_count(&db), events);
         assert_eq!(backups(&root).len(), 1);
     }

@@ -469,11 +469,6 @@ fn retire_closed(
                 // error is diagnostic, not a reversal of that observation.
                 let _ = marker(directory, "retirement-connection-error", &error.to_string());
             }
-            marker(
-                directory,
-                "retired",
-                "original scope and child retired; journal policy unchanged",
-            )?;
             Ok(retired.into_service())
         }
         Err(failure) => {
@@ -643,8 +638,15 @@ fn run<J: AdmissionJournal>(
         Ok(running) => running,
         Err(failure) => {
             let _ = marker(directory, "admission-error", &failure.error.to_string());
-            let retired = retire_closed(directory, *failure.closed, &identity)
-                .and_then(|retired| journal.audit_retired(retired));
+            let retired =
+                retire_closed(directory, *failure.closed, &identity).and_then(|retired| {
+                    journal.audit_retired(retired)?;
+                    marker(
+                        directory,
+                        "retired",
+                        "original scope and child retired; journal audited",
+                    )
+                });
             drop(terminal);
             signals.finish_after_cleanup(cancelled.get())?;
             return Err(match retired {
@@ -703,8 +705,14 @@ fn run<J: AdmissionJournal>(
         );
     }
     let target_exit = running.observed_exit();
-    let retired = retire_closed(directory, running.close(), &identity)
-        .and_then(|retired| journal.audit_retired(retired));
+    let retired = retire_closed(directory, running.close(), &identity).and_then(|retired| {
+        journal.audit_retired(retired)?;
+        marker(
+            directory,
+            "retired",
+            "original scope and child retired; journal audited",
+        )
+    });
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.

@@ -245,7 +245,7 @@ fn projection_dump(db: &Connection) -> Result<Vec<Vec<Vec<Value>>>> {
     projection_dump_with_run_fields(
         db,
         "id,alias,harness,enabled,retired,gents",
-        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session,local_scope",
+        "id,profile,kind,exit_code,outcome,started_at,observed_pid,spawned_at,requires_spawn_observation,gents_session,local_scope,linux_binding",
     )
 }
 
@@ -279,6 +279,18 @@ fn projection_dump_with_run_fields(
 pub(super) fn validate_event(event: &Event) -> Result<()> {
     match event {
         Event::Registered { profile } => profile.validate().map_err(|_| Error::CorruptRegistry)?,
+        Event::LinuxScopeBound { id, binding } => {
+            if !canonical_uuid(id) {
+                return Err(Error::CorruptRegistry);
+            }
+            binding.validate()?;
+        }
+        Event::LinuxScopeRetired { id, scope, binding } => {
+            if !canonical_uuid(id) || scope.is_nil() {
+                return Err(Error::CorruptRegistry);
+            }
+            binding.validate()?;
+        }
         Event::RunSpawned { id, pid } => {
             if !canonical_uuid(id) || *pid == 0 {
                 return Err(Error::CorruptRegistry);
@@ -341,7 +353,7 @@ fn valid_timestamp(value: &str) -> bool {
 pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != from || !matches!(from, 1..=6) {
+    if version != from || !matches!(from, 1..=7) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -387,6 +399,12 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
             return Err(Error::CorruptRegistry);
         }
     }
+    let future_scope_event: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM main.event_log WHERE json_extract(payload,'$.type') IN ('linux_scope_bound','linux_scope_retired'))", [], |row| row.get(0),
+    )?;
+    if future_scope_event {
+        return Err(Error::CorruptRegistry);
+    }
     // Validate every event before changing the live projection. The envelope
     // timestamp is canonical, including for legacy events without a JSON time.
     let (rebuilt, _) = replay(&tx)?;
@@ -402,9 +420,13 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         }
         drop(update);
     }
-    if from == 6 {
+    if from >= 6 {
         let legacy_schema = Connection::open_in_memory()?;
-        legacy_schema.execute_batch(include_str!("schema_v6.sql"))?;
+        legacy_schema.execute_batch(if from == 6 {
+            include_str!("schema_v6.sql")
+        } else {
+            include_str!("schema_v7.sql")
+        })?;
         if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
             return Err(Error::ProjectionMismatch);
         }
@@ -445,6 +467,9 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         INSERT INTO main.mappings SELECT * FROM temp.migration_mappings;
         DROP TABLE temp.migration_profiles; DROP TABLE temp.migration_runs; DROP TABLE temp.migration_mappings;
 ")?;
+    }
+    if from >= 4 {
+        tx.execute_batch("ALTER TABLE runs ADD COLUMN linux_binding TEXT CHECK(linux_binding IS NULL OR json_valid(linux_binding)); DROP INDEX one_unfinished_run; CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE outcome IS NULL;")?;
     }
     tx.pragma_update(None, "user_version", SCHEMA)?;
     if !verify_snapshot(&tx)?.consistent {

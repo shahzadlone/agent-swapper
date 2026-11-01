@@ -1,5 +1,5 @@
 //! Opt-in, fixed-target journal consumer for disposable native CI only.
-//! This module is absent from default builds and cannot finish a Linux run.
+//! Absent from default builds; completion requires the original opaque receipt.
 use super::{LocalScope, ProcessCustody, ProfileLease, Store};
 use crate::{Error, Harness, ProfileId, Result};
 use std::{
@@ -19,7 +19,7 @@ pub struct FixtureJournal {
     lease: Option<ProfileLease>,
     profile: ProfileId,
     run: String,
-    service: Option<agentswapper_linux_manager::ServiceKey>,
+    service: Option<super::linux_scope::PendingLinuxScope>,
 }
 
 fn require(ok: bool, message: &str) -> Result<()> {
@@ -88,7 +88,8 @@ impl FixtureJournal {
             self.lease.is_some() && self.service.is_none(),
             "journal scope already bound or lease absent",
         )?;
-        self.service = Some(key);
+        let lease = self.lease.as_ref().ok_or(Error::Busy)?;
+        self.service = Some(self.store.bind_linux_scope(&self.run, lease, key)?);
         Ok(())
     }
     pub fn confirm_intent(&mut self, pid: u32) -> Result<()> {
@@ -110,36 +111,36 @@ impl FixtureJournal {
         drop(self.lease.take());
     }
 
-    /// Audit conservative journal state after the observer retired its scope.
-    /// This intentionally never calls finish_run or issues a reuse receipt.
+    /// Commit only independently observed scope retirement. Target outcome
+    /// remains unknown even if the fixture process returned an exit status.
     pub fn audit_retired(
         &mut self,
         retired: agentswapper_linux_manager::RetiredService,
     ) -> Result<()> {
-        require(
-            self.service
-                .as_ref()
-                .is_some_and(|key| retired.matches(key)),
-            "journal retirement does not belong to its original service binding",
-        )?;
         require(self.lease.is_none(), "client retained the profile lease")?;
         drop(self.store.acquire_lease(self.profile)?);
-        require(
-            matches!(self.store.lease(self.profile), Err(Error::Busy)),
-            "retirement incorrectly released unfinished-run policy",
-        )?;
+        let pending = self.service.as_ref().ok_or(Error::Busy)?;
+        self.store
+            .retire_linux_scope(pending, retired)
+            .map_err(|failure| {
+                // This fixed CLI fixture aborts on failure. The Store API also
+                // returns the original value for consumers that retry in place.
+                drop(failure.retired);
+                failure.error
+            })?;
         let record = self.store.run(&self.run)?;
         require(
-            record.custody == ProcessCustody::Unknown
-                && record.outcome.is_none()
+            record.custody == ProcessCustody::LocalScopeEmpty
+                && record.outcome.as_deref() == Some("local_scope_empty")
                 && record.exit_code.is_none()
                 && self.store.verify()?.consistent,
-            "fixture fabricated journal completion",
+            "scope retirement fabricated a target exit or broke journal consistency",
         )?;
+        drop(self.store.lease(self.profile)?);
         Self::record(
             &self.directory,
             "journal-audited",
-            "consistent and unresolved",
+            "scope retired; target outcome unknown",
         )
     }
     fn confirmation(&self, name: &str, pid: u32) -> Result<()> {
