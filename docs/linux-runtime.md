@@ -202,3 +202,9 @@ strict runtime and existing-consumer Clippy. Tests open the system's protected
 coreutils image read-only, reject a different running image, malformed/staging
 paths, special files and directories. They neither execute that image nor install
 files. Hosted guardian qualification of this change remains pending.
+
+The first Ubuntu-latest run exposed a test portability assumption: its coreutils
+`true` path is a symlink. The test now resolves that test asset before checking
+its protected target, and separately requires refusal of the original symlink.
+Production image admission keeps its no-symlink policy. The corrected pipeline
+is pending; the earlier test failure is not an image-admission bypass.

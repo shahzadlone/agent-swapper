@@ -111,9 +111,16 @@ mod tests {
     use super::*;
     #[test]
     fn retains_a_protected_system_image_and_rejects_a_different_running_image() -> io::Result<()> {
-        // Qualification hosts provide the root-owned coreutils executable.
-        // The test opens it read-only and never executes or changes it.
-        let image = ProtectedImage::open(Path::new("/usr/bin/true"))?;
+        // Some qualification images install coreutils applets as symlinks.
+        // Resolve the test asset explicitly, then apply the unchanged strict
+        // ancestry/image checks. Production open never follows symlinks.
+        let requested = Path::new("/usr/bin/true");
+        if requested.is_symlink() {
+            assert!(ProtectedImage::open(requested).is_err());
+        }
+        let path = std::fs::canonicalize(requested)?;
+        // Open read-only; never execute or change the system image.
+        let image = ProtectedImage::open(&path)?;
         assert!(rustix::io::fcntl_getfd(&image)?.contains(rustix::io::FdFlags::CLOEXEC));
         assert!(image.require_current_image().is_err());
         Ok(())
