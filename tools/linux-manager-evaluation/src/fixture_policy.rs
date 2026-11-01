@@ -77,12 +77,14 @@ pub(crate) fn valid_scope_unit(unit: &str) -> bool {
         .is_some_and(|(prefix, _)| valid_prefix(prefix) && valid_instance(unit, prefix))
 }
 
-pub(crate) fn protected_fragment(fragment: &str) -> io::Result<()> {
-    let config =
-        agentswapper_linux_runtime::installed_config::ProtectedConfig::open(Path::new(fragment))?;
-    let bytes = config.read()?;
-    require(
-        !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
-        "activation template is empty or invalid text",
+#[allow(dead_code, reason = "only clients construct the shared binding policy")]
+pub(crate) fn activated_policy(
+    prefix: &str,
+) -> io::Result<agentswapper_linux_manager::ServicePolicy> {
+    gate(prefix)?;
+    agentswapper_linux_manager::ServicePolicy::open(
+        Path::new(&format!("/run/systemd/system/{prefix}@.service")),
+        Path::new(&format!("/usr/lib/{prefix}.guardian")),
+        rustix::process::getuid().as_raw(),
     )
 }

@@ -146,3 +146,10 @@ helper roles are invoked by their passing subprocess tests. The current changes
 still require native qualification. The review recommends an opaque activated
 service binding as the next extraction, consumed by the existing qualification
 client and witness before installation or Store receipt work.
+
+The retained-config/FIFO checkpoint `6d2f727` subsequently passed the complete
+pipeline [41291656552](https://github.com/shahzadlone/agent-swapper/actions/runs/41291656552),
+and the first review follow-up `e8cc4e8` passed
+[41292133837](https://github.com/shahzadlone/agent-swapper/actions/runs/41292133837).
+The later NOCTTY correction has its own evidence requirement; the two earlier
+passes are not substituted for it.

@@ -1,6 +1,6 @@
 //! Bind a fixture activation connection before sending any launch data.
 //! This probe deliberately sends no GO and starts no workload.
-use crate::fixture_policy::{connection_instance, protected_fragment, valid_prefix};
+use crate::fixture_policy::{activated_policy, connection_instance, valid_prefix};
 use crate::{Expected, PathFact, Report, UnitKind, activation_packet, require};
 use rustix::net::{self, AddressFamily, SendFlags, SocketAddrUnix, SocketFlags, SocketType};
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,8 @@ pub(crate) struct Fact {
     sender_uid: u32,
     sender_gid: u32,
     launch_data_sent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manager_connection_substitution_refused: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -37,14 +39,22 @@ pub(crate) struct Offer {
     _started: f64,
 }
 
-pub(crate) fn connect(prefix: &str, request: &[u8]) -> io::Result<(OwnedFd, Fact, Offer)> {
+pub(crate) fn connect(
+    prefix: &str,
+    request: &[u8],
+) -> io::Result<(
+    OwnedFd,
+    Fact,
+    Offer,
+    agentswapper_linux_manager::ServicePolicy,
+)> {
     require(valid_prefix(prefix), "invalid activation fixture prefix")?;
     require(
         rustix::process::getuid() == rustix::process::geteuid()
             && rustix::process::getgid() == rustix::process::getegid(),
         "activation requires matching real and effective identities",
     )?;
-    protected_fragment(&format!("/run/systemd/system/{prefix}@.service"))?;
+    let policy = activated_policy(prefix)?;
     let path = format!("/run/{prefix}.sock");
     let before = fs::symlink_metadata(&path)?;
     require(
@@ -86,8 +96,10 @@ pub(crate) fn connect(prefix: &str, request: &[u8]) -> io::Result<(OwnedFd, Fact
             sender_uid: packet.sender.uid(),
             sender_gid: packet.sender.gid(),
             launch_data_sent: false,
+            manager_connection_substitution_refused: None,
         },
         offer,
+        policy,
     ))
 }
 
@@ -112,16 +124,13 @@ fn validate_offer(packet: &activation_packet::Packet, prefix: &str) -> io::Resul
 }
 
 pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Report> {
-    let (socket, activation, offer) = connect(prefix, b"BIND\n")?;
+    let (socket, mut activation, offer, policy) = connect(prefix, b"BIND\n")?;
     let expected = Expected {
         unit: offer.unit,
         user: offer.uid,
         pid: offer.pid,
         invocation: Some(offer.invocation),
-        kind: UnitKind::Activated {
-            fragment: format!("/run/systemd/system/{prefix}@.service"),
-            image: format!("/usr/lib/{prefix}.guardian"),
-        },
+        kind: UnitKind::Activated { policy },
     };
     let (connection, owner, mut report, binding) =
         tokio::time::timeout(Duration::from_secs(8), crate::admit(paths, Some(expected)))
@@ -136,6 +145,34 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
         let binding = binding
             .as_ref()
             .ok_or_else(|| io::Error::other("activation lacks retained kernel binding"))?;
+        // Read-only hosted control: another independently authenticated manager
+        // connection must not substitute for this binding, even with the same
+        // unique-name spelling. No target or launch request exists in this mode.
+        tokio::time::timeout(Duration::from_secs(8), async {
+            let (other, other_owner, _) = agentswapper_linux_manager::connect().await?;
+            let refused = binding.require_manager(&other);
+            other.close().await.map_err(io::Error::other)?;
+            require(
+                other_owner == owner,
+                "substitution control changed manager owner",
+            )?;
+            let error = refused.err().ok_or_else(|| {
+                io::Error::other("another manager connection substituted for the original")
+            })?;
+            require(
+                error.to_string() == "service belongs to another manager connection",
+                "substitution refused at the wrong boundary",
+            )?;
+            binding.require_manager(&connection)
+        })
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "manager substitution control expired",
+            )
+        })??;
+        activation.manager_connection_substitution_refused = Some(true);
         report.activation = Some(activation);
         report.phase = "activation_bound";
         report.scope = "fixture activation binding only; no launch data or custody receipt";

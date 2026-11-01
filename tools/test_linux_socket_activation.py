@@ -243,7 +243,7 @@ time.sleep(20)
                 unlink.assert_not_called()
 
     def test_local_invocation_never_reaches_administrator_commands(self):
-        for role in ('install', 'cleanup'):
+        for role in ('install', 'cleanup', 'template-refusal'):
             with patch.dict(probe.os.environ, {}, clear=True), \
                  patch.object(probe.os, 'geteuid', return_value=0), \
                  patch.object(probe.subprocess, 'run') as command, \

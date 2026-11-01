@@ -24,7 +24,7 @@ fn decode_invocation(value: &str) -> io::Result<Vec<u8>> {
 
 const ABSENT: &str = "org.freedesktop.systemd1.NoUnitForInvocationID";
 
-fn active_identity(unit: &str, invocation: &str, pid: u32) -> io::Result<Vec<u8>> {
+pub(crate) fn active_identity(unit: &str, invocation: &str, pid: u32) -> io::Result<Vec<u8>> {
     require(
         !unit.is_empty()
             && unit.len() <= 255
@@ -74,20 +74,32 @@ pub async fn require_active(
     let path = lookup(connection, sender, &expected)
         .await?
         .ok_or_else(|| io::Error::other("bound guardian invocation is absent"))?;
-    let id = String::try_from(property(connection, sender, &path, UNIT_INTERFACE, "Id").await?)
+    require_active_path(connection, sender, &path, unit, &expected, pid).await
+}
+
+pub(crate) async fn require_active_path(
+    connection: &Manager,
+    sender: &str,
+    path: &OwnedObjectPath,
+    unit: &str,
+    expected: &[u8],
+    pid: u32,
+) -> io::Result<()> {
+    connection.require_sender(sender)?;
+    let id = String::try_from(property(connection, sender, path, UNIT_INTERFACE, "Id").await?)
         .map_err(io::Error::other)?;
     let first = Vec::<u8>::try_from(
-        property(connection, sender, &path, UNIT_INTERFACE, "InvocationID").await?,
+        property(connection, sender, path, UNIT_INTERFACE, "InvocationID").await?,
     )
     .map_err(io::Error::other)?;
     let main_pid =
-        u32::try_from(property(connection, sender, &path, SERVICE_INTERFACE, "MainPID").await?)
+        u32::try_from(property(connection, sender, path, SERVICE_INTERFACE, "MainPID").await?)
             .map_err(io::Error::other)?;
     let active =
-        String::try_from(property(connection, sender, &path, UNIT_INTERFACE, "ActiveState").await?)
+        String::try_from(property(connection, sender, path, UNIT_INTERFACE, "ActiveState").await?)
             .map_err(io::Error::other)?;
     let last = Vec::<u8>::try_from(
-        property(connection, sender, &path, UNIT_INTERFACE, "InvocationID").await?,
+        property(connection, sender, path, UNIT_INTERFACE, "InvocationID").await?,
     )
     .map_err(io::Error::other)?;
     ActiveValues {
@@ -97,7 +109,7 @@ pub async fn require_active(
         active,
         last,
     }
-    .require(unit, &expected, pid)
+    .require(unit, expected, pid)
 }
 
 fn lookup_result(

@@ -31,7 +31,6 @@ use agentswapper_linux_manager::{
     unit_path,
 };
 
-#[derive(Debug)]
 struct Expected {
     unit: String,
     user: u32,
@@ -40,10 +39,9 @@ struct Expected {
     kind: UnitKind,
 }
 
-#[derive(Debug)]
 enum UnitKind {
     Transient,
-    Activated { fragment: String, image: String },
+    Activated { policy: manager::ServicePolicy },
 }
 
 impl Expected {
@@ -136,8 +134,46 @@ fn invocation_xattr(
 async fn snapshot(
     connection: &Connection,
     owner: &str,
-    expected: &Expected,
+    expected: Expected,
 ) -> io::Result<(UnitFact, kernel::Binding)> {
+    if let UnitKind::Activated { policy } = expected.kind {
+        let invocation = expected
+            .invocation
+            .as_deref()
+            .ok_or_else(|| io::Error::other("activation lacks its original invocation"))?;
+        let bound = manager::BoundService::bind(
+            connection,
+            owner,
+            policy,
+            manager::ServiceClaim {
+                unit: &expected.unit,
+                invocation,
+                main_pid: expected.pid,
+            },
+        )
+        .await?;
+        let identity = bound.identity();
+        let kernel = kernel::Binding::activated(bound)?;
+        let invocation = identity
+            .invocation
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let invocation_xattr =
+            invocation_xattr(kernel.directory(), &identity.invocation, &invocation)?;
+        let fact = UnitFact {
+            control_group: format!("/system.slice/{}", identity.unit),
+            unit: identity.unit,
+            invocation,
+            user: identity.user,
+            pid: identity.main_pid,
+            delegate: false,
+            kill_mode: "control-group".into(),
+            invocation_xattr,
+            kernel: kernel.observe()?,
+        };
+        return Ok((fact, kernel));
+    }
     let name_path = manager::get_unit(connection, owner, &expected.unit).await?;
     require(
         name_path.as_str() == unit_path(&expected.unit),
@@ -171,24 +207,7 @@ async fn snapshot(
     let transient =
         bool::try_from(property(connection, owner, &path, UNIT_INTERFACE, "Transient").await?)
             .map_err(io::Error::other)?;
-    match &expected.kind {
-        UnitKind::Transient => require(transient, "expected a transient fixture unit")?,
-        UnitKind::Activated { fragment, .. } => {
-            let actual = String::try_from(
-                property(connection, owner, &path, UNIT_INTERFACE, "FragmentPath").await?,
-            )
-            .map_err(io::Error::other)?;
-            let drop_ins = Vec::<String>::try_from(
-                property(connection, owner, &path, UNIT_INTERFACE, "DropInPaths").await?,
-            )
-            .map_err(io::Error::other)?;
-            require(
-                !transient && actual == *fragment && drop_ins.is_empty(),
-                "activation template or drop-ins differ",
-            )?;
-            fixture_policy::protected_fragment(fragment)?;
-        }
-    }
+    require(transient, "expected a transient fixture unit")?;
     let pid =
         u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
             .map_err(io::Error::other)?;
@@ -242,12 +261,6 @@ async fn snapshot(
         "unit snapshot disagrees with expected fixture",
     )?;
     let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
-    if let UnitKind::Activated { image, .. } = &expected.kind {
-        let image = agentswapper_linux_runtime::installed_image::ProtectedImage::open(
-            std::path::Path::new(image),
-        )?;
-        kernel.require_main_image(&image)?;
-    }
     let invocation_xattr = invocation_xattr(kernel.directory(), &first, &invocation)?;
     let bound_pid =
         u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
@@ -307,7 +320,7 @@ async fn admit(
     let result = async {
         let (unit, kernel) = match expected {
             Some(e) => {
-                let (fact, binding) = snapshot(&connection, owner_before.as_str(), &e).await?;
+                let (fact, binding) = snapshot(&connection, owner_before.as_str(), e).await?;
                 (Some(fact), Some(binding))
             }
             None => (None, None),

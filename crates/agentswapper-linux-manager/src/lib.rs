@@ -16,3 +16,7 @@ mod lifecycle;
 pub use invocation::retired as invocation_retired;
 #[cfg(target_os = "linux")]
 pub use lifecycle::require_direct_lifecycle;
+#[cfg(target_os = "linux")]
+mod service;
+#[cfg(target_os = "linux")]
+pub use service::{BoundService, ServiceClaim, ServiceIdentity, ServicePolicy};

@@ -401,3 +401,50 @@ Local validation passes eleven manager tests and 49 evaluation tests, strict
 manager/consumer Clippy and the dependency-boundary check. Native qualification
 of the new property read remains pending. The shared check grants no production
 launch or Store completion authority.
+
+## Opaque activated-service binding
+
+`agentswapper-linux-manager::BoundService` now owns the original invocation path,
+retained process/cgroup binding and protected configuration/image handles. It is
+neither cloneable nor serializable. A private connection identity ties it to the
+exact authenticated `Manager` instance; equal unique-name text on another
+connection is insufficient. Identity copies and kernel observations remain
+non-authoritative diagnostics.
+
+The caller supplies fixed trusted installation paths and an ordinary UID through
+`ServicePolicy`. The activation client opens and retains that policy **before
+connecting**, and carries the same handles into binding. The independent witness
+uses the same paired-path constructor. The normal library contains no fixture
+prefix, environment bypass, fault command or root installation procedure.
+
+Binding reads the original invocation object, validates unit/UID/PID/cgroup,
+non-transient status, exact template path, absent drop-ins, direct lifecycle,
+delegation and kill mode, and rejects `NeedDaemonReload`. That last check refuses
+manager-reported stale configuration; it is not proof of byte-identical loaded
+content or an atomic snapshot against root. Kernel binding and guardian-image
+comparison precede a final active recheck. Subsequent rechecks retain the
+invocation path, check the same connection and owner, and corroborate the original
+process/image again. Existing caller deadlines and child checks remain in place.
+
+The qualification client and witness consume this shared binding. The transient
+measurement observer remains in the evaluation crate. Retirement still requires
+original kernel removal plus the authenticated original invocation's retirement;
+the watch checks the exact connection before starting. No Store receipt or
+production managed launcher is introduced.
+
+Local checks pass twelve manager tests, a non-cloneability compile-fail doctest,
+49 evaluation tests and strict manager/consumer Clippy. A policy refusal matrix
+covers fourteen mismatches. Native CI additionally checks that a second valid
+manager connection with the same owner cannot substitute, and temporarily changes
+only its owned template to mode 0664 to require the shared policy's precise
+refusal before connecting. That control drops root before executing the observer,
+restores mode 0644 in `finally`, and requires no worker or marker. Existing
+qualification suites cover the new composition; native results remain pending.
+
+Completed predecessor pipelines: retained-config/FIFO revision `6d2f727` in
+[41291656552](https://github.com/shahzadlone/agent-swapper/actions/runs/41291656552),
+review corrections `e8cc4e8` in
+[41292133837](https://github.com/shahzadlone/agent-swapper/actions/runs/41292133837),
+and active invocation rechecks `279cc96` in
+[41292389909](https://github.com/shahzadlone/agent-swapper/actions/runs/41292389909).
+These do not qualify the subsequent lifecycle, NOCTTY or bound-service revisions.

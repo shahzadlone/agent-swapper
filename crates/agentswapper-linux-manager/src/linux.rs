@@ -138,6 +138,7 @@ pub(crate) fn destination(owner: &str) -> io::Result<zbus::names::UniqueName<'_>
 /// still need installation policy, original kernel witnesses and phase deadlines.
 pub struct Manager {
     pub(crate) connection: Connection,
+    pub(crate) identity: std::sync::Arc<()>,
     bound_owner: zbus::names::OwnedUniqueName,
 }
 impl Manager {
@@ -337,6 +338,7 @@ async fn connect_inner() -> io::Result<(Manager, zbus::names::OwnedUniqueName, T
         Ok((owner, facts)) => Ok((
             Manager {
                 connection,
+                identity: std::sync::Arc::new(()),
                 bound_owner: owner.clone(),
             },
             owner,

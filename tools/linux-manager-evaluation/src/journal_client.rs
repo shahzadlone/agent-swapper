@@ -131,14 +131,15 @@ impl Session {
                     crate::owner(connection).await? == self.owner,
                     "manager owner changed",
                 )?;
-                agentswapper_linux_manager::require_active_invocation(
-                    connection,
-                    self.owner.as_str(),
-                    &self.unit.unit,
-                    &self.unit.invocation,
-                    self.unit.pid,
-                )
-                .await?;
+                self.binding
+                    .recheck_manager(
+                        connection,
+                        self.owner.as_str(),
+                        &self.unit.unit,
+                        &self.unit.invocation,
+                        self.unit.pid,
+                    )
+                    .await?;
                 self.binding.observe()?;
                 if let Some(child) = &self.child {
                     child.check()?;
@@ -432,7 +433,7 @@ impl Bound {
         fixture_policy::gate(prefix)?;
         let paths = crate::prerequisites()?;
         let deadline = Instant::now() + Duration::from_secs(12);
-        let (socket, _, offer) = activation::connect(
+        let (socket, _, offer, policy) = activation::connect(
             prefix,
             match mode {
                 Mode::Writer => b"ADMIT\n",
@@ -447,10 +448,7 @@ impl Bound {
             user: offer.uid,
             pid: offer.pid,
             invocation: Some(offer.invocation),
-            kind: UnitKind::Activated {
-                fragment: format!("/run/systemd/system/{prefix}@.service"),
-                image: format!("/usr/lib/{prefix}.guardian"),
-            },
+            kind: UnitKind::Activated { policy },
         };
         let runtime = RuntimeGuard::new()?;
         let (connection, owner, report, binding) = runtime.get()?.block_on(async {
@@ -566,8 +564,7 @@ impl Witness {
             pid: claimed.guardian_pid,
             invocation: Some(claimed.invocation.clone()),
             kind: UnitKind::Activated {
-                fragment: format!("/run/systemd/system/{prefix}@.service"),
-                image: format!("/usr/lib/{prefix}.guardian"),
+                policy: fixture_policy::activated_policy(prefix)?,
             },
         };
         let runtime = RuntimeGuard::new()?;
