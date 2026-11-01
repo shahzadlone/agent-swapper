@@ -347,8 +347,10 @@ Positional reads ignore shared file offsets and read one extra byte to detect
 oversized input. Tests cover an exact-limit file, a changed shared offset,
 one-byte overflow, empty data, and a real protected system configuration file;
 an executable is refused as configuration. Data is never executed or logged.
-The native asset matrix now has ten cases, adding configuration on nosuid/noexec
-mounts, executable-mode refusal and oversized data to the seven image controls.
+The native asset matrix now has eleven cases, adding configuration on nosuid/noexec
+mounts, executable-mode refusal, oversized data and a nonblocking FIFO refusal
+to the seven image controls. The FIFO has protected ancestry, so the actual leaf
+open must refuse promptly rather than stopping at an earlier directory check.
 Privileged cases remain confined to disposable hosted CI.
 
 Local validation passes 35 runtime tests, five compile-fail doctests, 49 existing

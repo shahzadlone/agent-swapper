@@ -18,6 +18,7 @@ CASES = {
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
     'symlink': '(os error 40)',
+    'fifo': 'installed file is not a root-owned protected regular file',
     'writable': 'installed file is not a root-owned protected regular file',
     'user-owned': 'installed file is not a root-owned protected regular file',
 }
@@ -78,6 +79,9 @@ def mounted_case(case, binary, uid, gid):
         elif case == 'symlink':
             image.rename(base / 'target')
             image.symlink_to('target')
+        elif case == 'fifo':
+            image.unlink()
+            os.mkfifo(image, 0o755)
         elif case == 'writable':
             image.chmod(0o775)
         elif case == 'user-owned':
