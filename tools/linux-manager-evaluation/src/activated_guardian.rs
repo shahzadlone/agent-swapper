@@ -171,7 +171,7 @@ fn serve(prefix: &str, uid: u32, directory: &Path, unit: &str) -> io::Result<()>
     } else {
         "unexpected fixture activation command"
     };
-    wait_until(
+    let disconnected = wait_until(
         Instant::now() + Duration::from_secs(if bind_only { 12 } else { 40 }),
         || {
             let eof = admission_transport::eof(&channel).map_err(|_| io::Error::other(refusal))?;
@@ -183,7 +183,20 @@ fn serve(prefix: &str, uid: u32, directory: &Path, unit: &str) -> io::Result<()>
             }
             Ok(eof)
         },
-    )?;
+    );
+    if bind_only
+        && disconnected
+            .as_ref()
+            .is_err_and(|error| error.to_string() == refusal)
+    {
+        // A close with unread trailing records may reset the peer before it
+        // receives our diagnostic. This is fixture attribution, not authority.
+        fs::write(
+            directory.join(format!("{invocation}.bind-refused")),
+            refusal,
+        )?;
+    }
+    disconnected?;
     let marker = if bind_only {
         directory.join(format!("{invocation}.bind-clean-eof"))
     } else {
