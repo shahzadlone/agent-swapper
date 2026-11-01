@@ -156,6 +156,21 @@ impl OwnedChild {
         Ok(())
     }
 
+    fn next_admission_state(&mut self, until: Instant) -> io::Result<WaitStatus> {
+        loop {
+            match self.next(until)? {
+                WaitStatus::Stopped(pid, Signal::SIGWINCH | Signal::SIGCHLD) if pid == self.pid => {
+                    // Only advisory notifications in the trusted pre-exec shim.
+                    // These cannot be group stops. Suppress their delivery and
+                    // keep waiting under the original absolute admission limit.
+                    // Cancellation, job stops and traps are never continued here.
+                    ptrace::cont(self.pid, None)?;
+                }
+                state => return Ok(state),
+            }
+        }
+    }
+
     #[allow(dead_code, reason = "only the exec-gated guardian uses tracing")]
     pub(crate) fn arm_exec(&mut self, until: Instant) -> io::Result<()> {
         require(
@@ -163,7 +178,7 @@ impl OwnedChild {
             "exec trace already configured",
         )?;
         require(
-            self.next(until)? == WaitStatus::Stopped(self.pid, Signal::SIGSTOP),
+            self.next_admission_state(until)? == WaitStatus::Stopped(self.pid, Signal::SIGSTOP),
             "exec shim did not reach its initial trace stop",
         )?;
         ptrace::setoptions(
@@ -179,7 +194,7 @@ impl OwnedChild {
     pub(crate) fn hold_exec(&mut self, until: Instant) -> io::Result<()> {
         require(self.trace == TracePhase::Armed, "exec trace is not armed")?;
         require(
-            self.next(until)?
+            self.next_admission_state(until)?
                 == WaitStatus::PtraceEvent(self.pid, Signal::SIGTRAP, nix::libc::PTRACE_EVENT_EXEC),
             "original child did not report the exact exec event",
         )?;

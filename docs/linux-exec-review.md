@@ -136,3 +136,32 @@ race; the original empty-snapshot cause cannot be proved from those older logs.
 The corrected combined source is integrated unchanged into main; main CI checks
 that integration again. These results qualify the fixed-target test harness,
 not a production managed launcher or authority to complete an unresolved run.
+
+Pre-exec advisory signals are now qualified separately using the actual
+exclusive child owner. The original implementation failed a real SIGWINCH
+delivery-stop case. Allowing that advisory stop exposed a second failure: the
+shim's timed recvmsg returned EINTR even though the tracer suppressed delivery.
+This behavior is documented in the Linux
+[ptrace signal-suppression rules](https://man7.org/linux/man-pages/man2/ptrace.2.html).
+The shared bounded receive path now retries only EINTR, creates fresh ancillary
+ownership for each attempt, recalculates the remaining absolute deadline, and
+restores the original socket timeout. Other transport failures remain errors.
+
+Only SIGWINCH and SIGCHLD in the trusted pre-exec shim are suppressed. They
+are advisory, non-group-stop signals; this rule does not continue termination,
+job-stop or trap events. The final image still requires the exact exec event,
+durable observation and a separate release. Nine local cases pass: both
+advisory signals before initial tracing and after trace arming, plus INT, TERM,
+TSTP, STOP and TRAP refusals after arming. Every case retains the original child
+pidfd and verifies retirement; successful targets verify they are detached
+before executing. Actual cancellation/job suspension at the outer CLI boundary
+remains a separate phase policy. No arbitrary ptrace attachment is added.
+
+Local validation for this correction passed the nine real-process cases, 18
+runtime tests plus three compile-fail doctests, 65 isolated-manager tests and
+strict Clippy for both workspaces. Both native CI manager jobs now run the new
+probe before activation tests. The complete
+[run 41283669022](https://github.com/shahzadlone/agent-swapper/actions/runs/41283669022)
+passed on `a490aa7`, including native manager jobs 124780519940 (Ubuntu 24.04)
+and 124780519960 (Ubuntu 22.04), platform tests, dependency checks, unsigned
+candidate builds and independent rebuilds. Main integrates that source unchanged.

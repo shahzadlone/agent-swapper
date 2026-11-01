@@ -276,17 +276,27 @@ pub fn receive_number_until(
 fn with_deadline<T>(
     socket: impl AsFd,
     deadline: Instant,
-    operation: impl FnOnce() -> io::Result<T>,
+    mut operation: impl FnMut() -> io::Result<T>,
 ) -> io::Result<T> {
-    let remaining = deadline
-        .checked_duration_since(Instant::now())
-        .filter(|d| !d.is_zero())
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::TimedOut, "guardian startup deadline expired")
-        })?;
     let previous = sockopt::socket_timeout(&socket, Timeout::Recv)?;
-    sockopt::set_socket_timeout(&socket, Timeout::Recv, Some(remaining))?;
-    let result = operation();
+    let result = (|| {
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::TimedOut, "guardian startup deadline expired")
+                })?;
+            sockopt::set_socket_timeout(&socket, Timeout::Recv, Some(remaining))?;
+            match operation() {
+                // Suppressed ptrace signal delivery can still interrupt recvmsg.
+                // EINTR consumed no record: rebuild ancillary ownership on retry,
+                // recalculate the remaining time, and never extend the deadline.
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => break result,
+            }
+        }
+    })();
     let restore = sockopt::set_socket_timeout(&socket, Timeout::Recv, previous);
     let value = result?;
     restore?;
