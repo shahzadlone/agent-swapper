@@ -16,7 +16,7 @@ The following findings require resolution before product integration:
 | Socket reset can hide a queued final report | Reproduced locally; bounded retry qualified in the complete 815a878 run |
 | Early relay errors discard their retirement witness | Admission and post-entry errors now attempt explicit retirement using retained witnesses; qualified in the complete 815a878 run |
 | Guardian resume/hangup/marker paths can discard a terminal wait result | One raw terminal-status handler now serves ordinary and resume waits; qualified in the complete 082629f run |
-| External stops during cooked admission/cleanup windows | Explicitly outside the current fixture contract; define and qualify phase-specific behavior before production |
+| Stops during startup, active relay and final cleanup | Cooked fg/bg/deadline behavior, active external refusal and queued cleanup signals qualified in the complete ae97a1d run |
 
 For the reset finding, two real socketpair regressions failed against the old
 code with ECONNRESET. Both now pass. Readiness and credential-bearing receive
@@ -165,3 +165,88 @@ probe before activation tests. The complete
 passed on `a490aa7`, including native manager jobs 124780519940 (Ubuntu 24.04)
 and 124780519960 (Ubuntu 22.04), platform tests, dependency checks, unsigned
 candidate builds and independent rebuilds. Main integrates that source unchanged.
+
+
+## Cooked startup suspension and final cleanup
+
+The next qualification checkpoint lets the managed outer owner forward Ctrl-Z
+without stopping before its child. While admission is still cooked, that child
+suspends before GO or held-exec release. Foreground continuation uses the original
+admission deadline: time spent stopped does not extend it. If the guardian expires
+while the client is suspended, foregrounding the client must fail without target
+instructions and still attempt original-scope retirement. Durable Store records
+remain unresolved. Active-session external SIGTSTP remains outside the fixture
+contract; inner-terminal Ctrl-Z already uses the target's observed stop protocol.
+
+Final cleanup drains already queued suspension requests before restoring the
+signal mask. It preserves fatal cancellation, including when a cleanup observation
+fails. This is not atomic against signals arriving after the drain and does not
+establish target success or scope retirement. A three-case real-process probe
+checks stop-only completion, pending fatal cancellation, and an earlier explicit
+cancellation. Its negative control with the old finalizer stopped the child on
+SIGTSTP instead of returning its expected exit code; all three corrected cases
+pass locally.
+
+New hosted cases stop admission at the final GO and held-exec release guards,
+then resume; they run through both the file journal and the real Store adapter.
+A separate case holds suspension past guardian expiry and verifies original
+pidfds, original cgroup-directory disappearance, absent target instructions,
+terminal restoration and unresolved Store state. Native qualification passed in the complete ae97a1d run below.
+
+Opus's follow-up review against `a490aa7` found more create-before-write races
+in shell-generated terminal snapshots. All snapshots in this harness are now
+published by rename, compared only once newline-terminated, and include both
+values on mismatch. The background/foreground drain test now leaves four seconds
+of idle-budget margin instead of two. These are evidence-quality corrections;
+they do not change the five-second idle or fifteen-second total drain policy.
+
+Local validation for cooked suspension passed: 67 isolated manager tests,
+18 shared runtime tests plus three compile-fail doctests, 67 Store tests with
+the qualification feature (33 privileged/crash roles explicitly gated), nine
+outer-PTY cases, thirteen surviving-owner/fresh-entry cases, fourteen installer
+checks, all three completion-signal cases, and strict isolated/core-feature
+Clippy. The ordinary-host Store refusal probe also passed. The hosted suites
+now contain 60 file-journal cases, 24 real-Store cases, the long-session case,
+and a stopped-admission-expiry case for each journal consumer. Their results passed in the complete ae97a1d run below.
+
+The [follow-up source review](linux-exec-review-followup.md) records the second
+Opus review, the stronger signal regression and diagnostic/snapshot corrections.
+The combined qualification revision includes cooked suspension and real-Store
+composition. Its native results passed in the complete ae97a1d run below.
+
+
+## Background startup and active external stop policy
+
+Source review found that the cooked startup continuation path could return from
+SIGTSTP after shell `bg` without checking foreground ownership before its grant.
+Admission now waits for `fg` without terminal I/O, mode changes or target release.
+Every checkpoint uses the original session deadline, including time spent stopped
+or backgrounded. Cancellation remains observable while waiting in the background.
+Expiry attempts original-scope retirement and preserves unresolved Store state.
+
+Four new regular cases cover bg/fg at the final GO and held-exec release guards
+through the two journal consumers. Separate background-expiry cases verify that
+the waiting helper exits, the shell keeps its foreground and modes, original
+pidfds/cgroup disappear, and no target instructions run. The preceding foreground
+stop/expiry cases remain. The hosted suites now comprise 64 file-journal cases,
+27 Store cases, the long-session case, and four admission-expiry cases.
+
+External SIGTSTP during active relay is explicitly refused: restoration and
+scope retirement are attempted and the command returns 125. New direct/owned
+and Store cases check the refusal, descendant cleanup and exact modes. This does
+not change normal typed Ctrl-Z through the inner terminal and its authenticated
+target-stop/resume flow. Supporting an external stop for arbitrary nested
+foreground jobs requires an additional protocol; it is not silently treated as
+a successful suspension. New native results passed in the complete ae97a1d run below.
+
+
+The complete [run 41285837591](https://github.com/shahzadlone/agent-swapper/actions/runs/41285837591)
+passed on `ae97a1d`: native manager jobs 124786839723 (Ubuntu 24.04) and
+124786839910 (Ubuntu 22.04), platform tests, dependency checks, unsigned candidate
+builds and independent rebuilds. Both hosts passed 64 file-journal cases,
+27 real-Store cases, the long-session case, four startup-expiry cases, all eleven
+pre-exec signal cases and all three completion-signal cases. This includes the
+follow-up review fixes and foreground-only admission after background continuation.
+Main integrates that code unchanged and checks its integration again. These remain
+fixed-target qualification consumers; production Linux launch and Store completion
+are still disabled.

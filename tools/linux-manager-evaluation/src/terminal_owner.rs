@@ -48,6 +48,15 @@ impl Drop for Owner<'_> {
     }
 }
 
+fn notify_child(child: &OwnedFd, signal: rustix::process::Signal) -> io::Result<()> {
+    match rustix::process::pidfd_send_signal(child, signal) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+    // ESRCH is not an exit receipt: the exclusive waiter still must observe
+    // the original child's status before restoration or normal completion.
+}
+
 pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
     let signals = Signals::new()?;
     // Declared before child: cleanup attempts child retirement first. A bounded
@@ -107,13 +116,18 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
         let notices = signals.drain()?;
         if let Some(signal) = notices.terminate {
             cancellation = Some(signal);
-            rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::TERM)?;
-            rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::CONT)?;
+            notify_child(&child_fd, rustix::process::Signal::TERM)?;
+            notify_child(&child_fd, rustix::process::Signal::CONT)?;
         }
-        require(
-            !notices.stop,
-            "external owner suspension is outside this fixed probe",
-        )?;
+        if notices.stop {
+            require(
+                managed,
+                "external owner suspension is outside this fixed probe",
+            )?;
+            // The child decides the phase policy. Do not stop this restorer
+            // before its sole waiter observes the child's actual stop.
+            notify_child(&child_fd, rustix::process::Signal::TSTP)?;
+        }
         if !ready && directory.join("child-ready").exists() {
             require(
                 fs::read_to_string(directory.join("child-ready"))? == child.pid.to_string(),
@@ -163,8 +177,8 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
                 let resumed = signals.suspend()?;
                 if let Some(signal) = resumed.terminate {
                     cancellation = Some(signal);
-                    rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::TERM)?;
-                    rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::CONT)?;
+                    notify_child(&child_fd, rustix::process::Signal::TERM)?;
+                    notify_child(&child_fd, rustix::process::Signal::CONT)?;
                 }
             }
             WaitStatus::Exited(_, code) => {
@@ -211,7 +225,7 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
     }
     drop(child);
     drop(terminal);
-    signals.finish(cancellation.or(result.1))?;
+    signals.finish_after_cleanup(cancellation.or(result.1))?;
     result
         .0
         .and_then(|code| u8::try_from(code).ok())

@@ -201,7 +201,7 @@ fn relay(
         }
         require(
             !notices.stop,
-            "external relay suspension is not yet qualified",
+            "external suspension is unsupported for an active managed target",
         )?;
         if notices.resized && !inner_closed {
             resize(terminal, &master)?;
@@ -427,22 +427,38 @@ impl From<StartFailure<io::Error>> for AdmissionFailure {
 fn cancellation(
     signals: &Signals,
     cancelled: &Cell<Option<nix::sys::signal::Signal>>,
+    terminal: &Terminal,
+    until: Instant,
 ) -> io::Result<()> {
-    let notices = signals.drain()?;
-    if cancelled.get().is_none() {
-        cancelled.set(notices.terminate);
-    }
-    require(
-        !notices.stop,
-        "external admission suspension is not yet qualified",
-    )?;
-    if cancelled.get().is_some() {
-        Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "managed admission cancelled",
-        ))
-    } else {
-        Ok(())
+    loop {
+        let notices = signals.drain()?;
+        if cancelled.get().is_none() {
+            cancelled.set(notices.terminate);
+        }
+        if notices.stop && cancelled.get().is_none() {
+            // Admission is still cooked and provider execution remains gated.
+            // A shell `bg` may continue us without returning the foreground.
+            let resumed = signals.suspend()?;
+            cancelled.set(resumed.terminate);
+        }
+        if cancelled.get().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "managed admission cancelled",
+            ));
+        }
+        if Instant::now() >= until {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "managed admission expired before foreground release",
+            ));
+        }
+        if terminal.foreground()? {
+            return Ok(());
+        }
+        // No target grant, terminal I/O or mode mutation in the background.
+        // Waiting for fg does not extend the manager/client admission budget.
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 fn admission_barrier(directory: &Path, phase: &str) -> io::Result<()> {
@@ -522,6 +538,7 @@ fn admit<J: AdmissionJournal>(
         }
     };
     let identity = prepared.identity();
+    let until = prepared.admission_deadline();
     let target = prepared.pid();
     let ready =
         (|| {
@@ -536,7 +553,7 @@ fn admit<J: AdmissionJournal>(
                 "session":rustix::process::getsid(None)?.as_raw_pid(), "target":target,
                 "guardian":identity.guardian_pid, "invocation":identity.invocation}).to_string())?;
             admission_barrier(directory, "go")?;
-            cancellation(signals, cancelled)
+            cancellation(signals, cancelled, terminal, until)
         })();
     if let Err(error) = ready {
         return Err(AdmissionFailure {
@@ -548,13 +565,13 @@ fn admit<J: AdmissionJournal>(
         .start_after_checked(
             [0x41; 16],
             |pid| {
-                cancellation(signals, cancelled)?;
+                cancellation(signals, cancelled, terminal, until)?;
                 journal.confirm_intent(pid)?;
-                cancellation(signals, cancelled)
+                cancellation(signals, cancelled, terminal, until)
             },
             || {
                 admission_barrier(directory, "go-send")?;
-                cancellation(signals, cancelled)
+                cancellation(signals, cancelled, terminal, until)
             },
         )
         .map_err(AdmissionFailure::from)?;
@@ -564,7 +581,7 @@ fn admit<J: AdmissionJournal>(
             held.observe_held()?;
             marker(directory, "exec-held", &target.to_string())?;
             admission_barrier(directory, "release")?;
-            cancellation(signals, cancelled)
+            cancellation(signals, cancelled, terminal, until)
         })();
         if let Err(error) = observed {
             return Err(AdmissionFailure {
@@ -575,13 +592,13 @@ fn admit<J: AdmissionJournal>(
         running = held
             .release_after_checked(
                 |pid| {
-                    cancellation(signals, cancelled)?;
+                    cancellation(signals, cancelled, terminal, until)?;
                     journal.observe_spawn(pid)?;
-                    cancellation(signals, cancelled)
+                    cancellation(signals, cancelled, terminal, until)
                 },
                 || {
                     admission_barrier(directory, "release-send")?;
-                    cancellation(signals, cancelled)
+                    cancellation(signals, cancelled, terminal, until)
                 },
             )
             .map_err(AdmissionFailure::from)?;
@@ -650,7 +667,7 @@ fn run<J: AdmissionJournal>(
             let retired = retire_closed(directory, *failure.closed, &identity)
                 .and_then(|()| journal.audit_retired());
             drop(terminal);
-            signals.finish(cancelled.get())?;
+            signals.finish_after_cleanup(cancelled.get())?;
             return Err(match retired {
                 Ok(()) => failure.error,
                 Err(error) => error,
@@ -709,12 +726,18 @@ fn run<J: AdmissionJournal>(
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.
+    let termination = outcome.as_ref().ok().copied().flatten();
+    let restoration = match disconnected {
+        Ok(true) if termination.is_some() => Ok(()),
+        Ok(_) => restored,
+        Err(error) => Err(error),
+    };
+    // Final signal policy runs even when a cleanup observation failed. Its
+    // return never completes the unresolved journal or supplies a scope receipt.
+    signals.finish_after_cleanup(termination)?;
     retired?;
-    if disconnected? && let Ok(Some(signal)) = &outcome {
-        return signals.finish(Some(*signal)).map(|()| 0);
-    }
-    restored?;
-    signals.finish(outcome?)?;
+    restoration?;
+    outcome?;
     if !exec_gate {
         return Ok(0);
     }

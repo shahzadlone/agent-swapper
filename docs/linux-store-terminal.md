@@ -39,7 +39,7 @@ a Linux completion receipt. The native harness also opens SQLite read-only after
 each case and checks the actual run's profile, local-scope metadata and unresolved
 outcome.
 
-The 22-case native suite covers ordinary and fresh-entry byte/resize/raw/hidden
+The first 22-case native suite covers ordinary and fresh-entry byte/resize/raw/hidden
 input, final output, nonzero and real-time target exit, cancellation, stopped
 SIGKILL with fg/bg, death during resume, bounded output truncation, relay/guardian
 loss, terminal hangup and errors before/after held release. It reuses the original
@@ -70,3 +70,8 @@ unsigned candidate builds and independent rebuilds. The two native jobs passed
 all 22 Store cases alongside the 58 file-journal cases and long-session check.
 Main integrates this source unchanged; its pipeline checks the integration again.
 Later suspension and review follow-ups require their own qualification evidence.
+
+The expanded Store suite now has 27 cases, with separate stopped/background
+admission-expiry checks. Both native hosts and the full ae97a1d pipeline passed;
+[the integration evidence](linux-exec-review.md) records the exact run and scope.
+No completion receipt or production provider support is inferred from this result.

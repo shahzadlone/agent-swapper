@@ -134,6 +134,16 @@ impl Signals {
         // SIGTSTP returns without a corresponding continuation notification.
         self.drain()
     }
+    /// Finish an ending helper after terminal restoration and a cleanup attempt.
+    /// Consume queued suspension requests during this final return path. This
+    /// does not establish target success or scope retirement. A queued fatal
+    /// signal still takes precedence over normal exit.
+    /// This does not make mask restoration atomic with later arriving signals.
+    pub fn finish_after_cleanup(self, termination: Option<Signal>) -> io::Result<()> {
+        let pending = self.drain()?;
+        self.finish(termination.or(pending.terminate))
+    }
+
     pub fn finish(self, termination: Option<Signal>) -> io::Result<()> {
         drop(self);
         if let Some(signal) = termination {
