@@ -56,6 +56,8 @@ pub enum Error {
     Busy,
     #[error("scope retirement does not match this live run; previous work remains unresolved")]
     ScopeReceiptMismatch,
+    #[error("scope retirement is already committed for this run; no additional event was written")]
+    ScopeAlreadyRetired,
     #[error("unsafe state path or permissions; use a private, local directory with no symlinks")]
     UnsafePath,
     #[error("profile directory is missing; restore it rather than silently creating a new login")]
@@ -254,6 +256,7 @@ impl Error {
             Self::Disabled => "profile_disabled",
             Self::Busy => "profile_busy",
             Self::ScopeReceiptMismatch => "scope_receipt_mismatch",
+            Self::ScopeAlreadyRetired => "scope_already_retired",
             Self::UnsafePath => "unsafe_state_path",
             Self::MissingProfileDirectory => "profile_dir_missing",
             Self::NewerSchema => "newer_schema",

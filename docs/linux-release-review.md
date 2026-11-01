@@ -31,8 +31,6 @@ separately. These changes do not supply restart recovery or target-exit evidence
 
 | Area | Required follow-up |
 | --- | --- |
-| Commit ambiguity | Distinguish a matching already-committed retirement from corruption while preserving failed-commit receipts. |
-| Consumer compatibility | Audit unknown exit status versus unfinished work in JSON/session consumers; retain explicit completion semantics. |
 | Migration fixtures | Supplement synthetic downgrade tests with databases produced by actual historical schema-5/6/7 revisions. |
 | Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
 | Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
@@ -110,6 +108,30 @@ without isolation, proving the negative control is meaningful. Cleanup reporting
 also requires all seven owned filesystem names to be absent, including dangling
 symlinks; the administrator separately checks its units and scope teardown.
 All 46 local Linux harness controls pass. Native qualification is pending.
+
+## Retirement retry and consumer semantics
+
+An authorized retry now returns `scope_already_retired` when the verified,
+write-locked snapshot contains both the exact retirement event and its matching
+projection. It writes nothing and returns the original opaque receipt to the
+caller. A mismatched identity or corrupted projection cannot produce that
+diagnostic. The native receipt control injects a lost acknowledgement after a
+successful commit, then retries with the same returned receipt; this models the
+ambiguous-success branch without claiming a real disk fault was reproduced.
+The existing pre-commit failure-and-retry control remains separate.
+
+The consumer audit found that CLI history already uses `outcome` to distinguish
+pending work from an unknown exit. Gents resume requires an observed PID, exit 0
+and `external_client_exited`; scope retirement cannot satisfy it. JSON already
+contains `outcome` and `custody`, so no redundant completion flag was added.
+Serialization controls now pin both pending and retired records with a null
+`exitCode`, and the registry documentation explains their different meanings.
+All 310 pinned Nextest tests passed with retries disabled, together with strict
+qualification Clippy and workspace doctests. A parallel `cargo test` run hit
+the existing stale-engine-plan assertion once; the isolated control and a later
+139-test core run passed. That assertion now includes the unexpected result for
+diagnosis if it recurs. No cause or runtime fix is claimed from a passing retry.
+Native qualification of the retirement retry remains pending.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,

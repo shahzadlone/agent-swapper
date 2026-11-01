@@ -986,7 +986,7 @@ mod tests {
     #[test]
     fn retired_linux_scope_does_not_invent_a_target_exit()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let run = agentswapper_core::store::RunRecord {
+        let mut run = agentswapper_core::store::RunRecord {
             id: "00000000-0000-4000-8000-000000000001".into(),
             profile_id: "00000000-0000-4000-8000-000000000002".parse()?,
             alias: "work".parse()?,
@@ -1007,6 +1007,16 @@ mod tests {
         assert!(text.contains("exit=unknown"));
         assert!(text.contains("Linux scope observed retired"));
         assert!(!text.contains("exit=0") && !text.contains("exit=pending"));
+        let retired = serde_json::to_value(&run)?;
+        assert!(retired["exitCode"].is_null());
+        assert_eq!(retired["outcome"], "local_scope_empty");
+        assert_eq!(retired["custody"], "local_scope_empty");
+        run.outcome = None;
+        run.custody = agentswapper_core::store::ProcessCustody::Unknown;
+        let pending = serde_json::to_value(&run)?;
+        assert!(pending["exitCode"].is_null() && pending["outcome"].is_null());
+        assert_eq!(pending["custody"], "unknown");
+        assert!(run_line(&run).contains("exit=pending"));
         Ok(())
     }
     #[test]

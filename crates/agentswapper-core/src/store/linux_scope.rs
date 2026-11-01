@@ -323,6 +323,73 @@ mod tests {
     }
 
     #[test]
+    fn lost_commit_acknowledgement_does_not_duplicate_or_mask_corruption() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let scope = Uuid::new_v4();
+        let run = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: scope }),
+            )
+            .unwrap();
+        store
+            .record_scope_fixture(Event::LinuxScopeBound {
+                id: run.clone(),
+                binding: binding(),
+            })
+            .unwrap();
+        let retired = Event::LinuxScopeRetired {
+            id: run.clone(),
+            scope,
+            binding: binding(),
+        };
+        let before = store.verify().unwrap().events;
+        store.fail_after_scope_commit = true;
+        assert!(matches!(
+            store.record_scope_fixture(retired.clone()).unwrap_err(),
+            Error::Io(error) if error.to_string() == "injected lost scope commit acknowledgement"
+        ));
+        assert_eq!(store.verify().unwrap().events, before + 1);
+        assert!(matches!(
+            store.record_scope_fixture(retired.clone()),
+            Err(Error::ScopeAlreadyRetired)
+        ));
+        assert_eq!(store.verify().unwrap().events, before + 1);
+        // Matching diagnostics still cannot use the unprivileged recording path.
+        assert!(matches!(
+            store.record(retired.clone()),
+            Err(Error::ScopeReceiptMismatch)
+        ));
+        let mut different = binding();
+        different.guardian += 1;
+        assert!(matches!(
+            store.record_scope_fixture(Event::LinuxScopeRetired {
+                id: run.clone(),
+                scope,
+                binding: different,
+            }),
+            Err(Error::CorruptRegistry)
+        ));
+        // An outcome is not sufficient when its projection no longer agrees
+        // with the journal. Refuse rather than blessing a similar completion.
+        store
+            .db
+            .execute("UPDATE runs SET exit_code=0 WHERE id=?1", [&run])
+            .unwrap();
+        assert!(matches!(
+            store.record_scope_fixture(retired),
+            Err(Error::ProjectionMismatch)
+        ));
+    }
+
+    #[test]
     fn schema_eight_migration_preserves_unknown_exit_and_retirement() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");

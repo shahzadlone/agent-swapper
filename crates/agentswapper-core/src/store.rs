@@ -137,6 +137,8 @@ pub struct Store {
     scope_instance: std::sync::Arc<()>,
     #[cfg(test)]
     full_write_checks: u64,
+    #[cfg(test)]
+    fail_after_scope_commit: bool,
 }
 
 /// An advisory profile lease. A free lease does not prove a previous child stopped.
@@ -234,6 +236,8 @@ impl Store {
             scope_instance: std::sync::Arc::new(()),
             #[cfg(test)]
             full_write_checks: 0,
+            #[cfg(test)]
+            fail_after_scope_commit: false,
         })
     }
 
@@ -658,6 +662,19 @@ impl Store {
         if json.len() > journal::MAX_EVENT_BYTES {
             return Err(Error::RegistryEventTooLarge);
         }
+        if let Event::LinuxScopeRetired { id, scope, binding } = &event {
+            // The snapshot above is verified while holding the write lock.
+            // Match both the exact event and its projection before recognizing
+            // a lost acknowledgement. A similar outcome alone is insufficient.
+            let recorded: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM main.runs WHERE id=?1 AND outcome='local_scope_empty' AND exit_code IS NULL AND linux_binding=?2 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND json_extract(local_scope,'$.id')=?3 AND EXISTS(SELECT 1 FROM main.event_log WHERE payload=?4))",
+                params![id, serde_json::to_string(binding)?, scope.to_string(), json],
+                |row| row.get(0),
+            )?;
+            if recorded {
+                return Err(Error::ScopeAlreadyRetired);
+            }
+        }
         tx.execute("INSERT INTO main.event_log(payload) VALUES(?1)", [json])?;
         let recorded_at: String = tx.query_row(
             "SELECT recorded_at FROM main.event_log WHERE sequence=last_insert_rowid()",
@@ -669,6 +686,12 @@ impl Store {
         // Reading data_version after commit could cache an unverified peer write.
         let verified = journal::StateStamp::read(&tx)?;
         tx.commit()?;
+        #[cfg(test)]
+        if self.fail_after_scope_commit && matches!(event, Event::LinuxScopeRetired { .. }) {
+            self.fail_after_scope_commit = false;
+            self.verified = None;
+            return Err(std::io::Error::other("injected lost scope commit acknowledgement").into());
+        }
         self.verified = Some(verified);
         Ok(())
     }

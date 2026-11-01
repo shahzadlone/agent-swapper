@@ -149,6 +149,30 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
         .unwrap();
     drop(store.lease(profile).unwrap());
 
+    let (profile, run, original, prepared) = pending(&mut store, "lost-commit-ack", &prefix);
+    let receipt = prepared.close().retire().unwrap().into_service();
+    let before = store.verify().unwrap().events;
+    store.fail_after_scope_commit = true;
+    let failure = store.retire_linux_scope(&original, receipt).unwrap_err();
+    assert!(matches!(failure.error, Error::Io(error)
+        if error.to_string() == "injected lost scope commit acknowledgement"));
+    assert_eq!(store.verify().unwrap().events, before + 1);
+    assert_eq!(
+        store.run(&run).unwrap().custody,
+        ProcessCustody::LocalScopeEmpty
+    );
+    let failure = store
+        .retire_linux_scope(&original, failure.retired)
+        .unwrap_err();
+    assert!(matches!(failure.error, Error::ScopeAlreadyRetired));
+    assert_eq!(store.verify().unwrap().events, before + 1);
+    assert_eq!(store.run(&run).unwrap().exit_code, None);
+    // Even an already-committed diagnostic returns, rather than fabricates or
+    // silently discards, the original opaque observation.
+    assert!(failure.retired.matches(original.key()));
+    drop(failure.retired);
+    drop(store.lease(profile).unwrap());
+
     let (profile, run, original, prepared) = pending(&mut store, "retired-unknown-exit", &prefix);
     let identity = prepared.identity();
     let writer = prepared.pid();

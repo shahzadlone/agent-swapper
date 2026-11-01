@@ -172,6 +172,28 @@ verifies all projections, and commits atomically. A failed upgrade rolls back it
 the backup available. Pending runs stay pending. No vendor profile files are
 opened or backed up by this migration.
 
+Schema 8 adds durable Linux binding diagnostics and retirement events for the
+qualification consumer. Its unfinished-run index uses absent `outcome`, allowing
+a proved local retirement to leave the target exit code unknown. Schema 9 makes
+each manager invocation unique across runs, even after retirement. Upgrades from
+either earlier schema preserve pending work, verify the original DDL and events,
+and retain a private pre-migration backup. Older executables refuse newer schemas;
+there is no automatic downgrade.
+
+In history JSON, `exitCode: null` means no authenticated target status is stored.
+Use `outcome: null` for unresolved journal work. A record with
+`outcome: "local_scope_empty"`, `custody: "local_scope_empty"` and a null exit code
+reports local scope retirement with unknown target status. It does not report
+success or completion of externally delegated work. CLI text prints `exit=unknown`
+for that case. Gents resume separately requires an observed process, exit 0 and
+the `external_client_exited` outcome.
+
+A retry carrying the original live retirement receipt can return
+`scope_already_retired` when the verified event and projection already match.
+No second event is appended; the error retains the receipt. Corruption and
+mismatched associations remain separate errors. This does not provide recovery
+after loss of the original handles or enable the normal managed Linux launcher.
+
 Keep all AgentSwapper processes on the same build during an upgrade. Current
 writers recheck the schema in every event transaction and refuse a changed or
 newer schema. A schema-6 supervisor still running during the schema-7 upgrade
