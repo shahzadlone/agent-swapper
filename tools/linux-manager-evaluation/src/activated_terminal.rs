@@ -247,7 +247,7 @@ pub(crate) fn target(
         std::process::id()
     )?;
     output.flush()?;
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(55);
     let mut descendant = None;
     loop {
         match line(io::stdin().as_fd(), deadline)?.as_slice() {

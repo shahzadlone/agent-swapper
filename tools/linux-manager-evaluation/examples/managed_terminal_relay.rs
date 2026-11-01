@@ -106,7 +106,7 @@ fn relay(
     let mut draining = None;
     let mut high_water = [0_usize; 2];
     let mut backpressured = false;
-    let until = Instant::now() + Duration::from_secs(25);
+    let until = Instant::now() + Duration::from_secs(55);
     loop {
         require(
             Instant::now() < until,

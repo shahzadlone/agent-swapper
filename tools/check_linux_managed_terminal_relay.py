@@ -284,10 +284,58 @@ def failures(binary, scenario, env, owned_parent=False):
             owned.close()
 
 
+def long_session(binary, env):
+    with tempfile.TemporaryDirectory(prefix='aswp-managed-long-') as path:
+        root = Path(path)
+        owned = OwnedPty(binary, root, shell=True, environment=env)
+        try:
+            prompt = b'__ASWP_OUTER_PROMPT__ '
+            owned.wait(lambda: prompt in owned.output)
+            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} --owned-parent {shlex.quote(str(root))}\n'.encode())
+            data = owned.ready(greeting=b'\x1b[0m\r\n')
+            exec_observed(root, data, env)
+            started = time.monotonic()
+            # Cross the old absolute admission deadline while still active.
+            owned.wait(lambda: time.monotonic() - started >= 15, seconds=18)
+            assert owned.poll() is None and not (root / 'retired').exists()
+            target_command(owned, b'size', b'SIZE:24:80\r\n')
+            offset = len(owned.output)
+            owned.send(b'\x1a')
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'owner-restored-stop').exists())
+            assert state(data['pid']) == state(data['child']) == state(data['target']) == 'T'
+            offset = len(owned.output)
+            owned.send(b'bg\n')
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'continued').exists())
+            # Cross the old 25/30/35-second fixture lifetimes while paused.
+            owned.wait(lambda: time.monotonic() - started >= 38, seconds=27)
+            assert state(data['target']) == 'T' and not (root / 'resumed-foreground').exists()
+            assert not (root / 'retired').exists() and os.tcgetpgrp(owned.master) == owned.pid
+            owned.send(b'/usr/bin/stty -g > during-long-stop\n')
+            owned.wait(lambda: (root / 'during-long-stop').exists())
+            assert (root / 'during-long-stop').read_text() == (root / 'before').read_text()
+            owned.send(b'fg\n')
+            owned.wait(lambda: (root / 'resumed-foreground').exists() and state(data['target']) != 'T')
+            target_command(owned, b'size', b'SIZE:24:80\r\n')
+            offset = len(owned.output)
+            target_command(owned, b'finish', 'FINAL:\x1b[34m→\x1b[0m\r\n'.encode())
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'retired').exists())
+            owned.send(b'/usr/bin/stty -g > after\n')
+            owned.wait(lambda: (root / 'after').exists())
+            retired(owned, root)
+            assert (root / 'observed-exit').read_text() == 'Code { code: 0 }'
+            assert time.monotonic() - started >= 38
+            print('exec-managed-long-session: pass (active after admission timeout, resumed after 38 seconds, original modes and scope retired)', flush=True)
+        finally:
+            owned.close()
+
+
 def main():
-    assert sys.platform == 'linux' and len(sys.argv) == 2
+    assert sys.platform == 'linux' and (len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] == '--long-session'))
     binary = Path(sys.argv[1]).resolve(strict=True)
     env = environment()
+    if len(sys.argv) == 3:
+        long_session(binary, dict(env, ASWP_CI_EXEC_GATE='1'))
+        return
     for owned_parent in (False, True):
         for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
             direct(binary, scenario, env, owned_parent)

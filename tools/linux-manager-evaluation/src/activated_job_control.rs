@@ -173,7 +173,7 @@ pub(crate) fn serve(
         )?;
         child.release_exec()?;
     }
-    let until = Instant::now() + Duration::from_secs(35);
+    let until = Instant::now() + Duration::from_secs(55);
     let mut sequence = 0_u64;
     let mut stopped = false;
     activated_guardian::wait_until(until, || {

@@ -109,3 +109,20 @@ loss, relay SIGKILL, blocked drain and stopped-parent loss are exercised with
 the composed protocol. These ten cases await hosted evidence; the original
 19 remain independently tested. The real Store exec/exit suites remain separate
 from this relay's synced fixture records. Neither record completes a journal.
+
+A further lifetime regression separates the absolute startup budget from active
+observation budgets. The client previously reused its 12-second admission
+deadline for later stop/resume rechecks. Active sessions now get an eight-second
+manager-observation window per recheck while preserving the original binding.
+The admission deadline still covers prepared GO and the entire held-exec journal
+and release phase; no startup failure receives an active-session extension.
+
+The hosted long case stays active for 15 seconds, stops through the shell,
+remains in the background with the inner target stopped until at least 38
+seconds, then resumes and checks working input, authenticated final exit,
+complete terminal restoration and original-scope retirement. It deliberately
+crosses the former 25/30/35-second relay/target/guardian fixture lifetimes.
+Those component fixture limits are now 55 seconds, below the unchanged
+60-second root-manager lifetime; cleanup and external harness bounds remain.
+This fixed-duration regression awaits hosted results and does not claim an
+unbounded production session or qualify arbitrary provider runtimes.
