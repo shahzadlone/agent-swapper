@@ -11,6 +11,26 @@ const START: &[u8] = b"ASWP-FIXTURE-GO-1";
 // Eight-byte versioned tag + nonce + sequence fits the shared 32-byte frame.
 const RESUME: &[u8] = b"ASWPRSM1";
 const EXEC_RELEASE: &[u8] = b"ASWPEXE1";
+
+/// A direct target's wait status, never a statement about remaining writers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TargetExit {
+    Code { code: u8 },
+    Signal { signal: u8, core_dumped: bool },
+}
+
+impl TargetExit {
+    pub(crate) fn validate(self) -> io::Result<Self> {
+        if let Self::Signal { signal, .. } = self {
+            require(
+                (1..=64).contains(&signal),
+                "invalid target termination signal",
+            )?;
+        }
+        Ok(self)
+    }
+}
 pub(crate) fn start_packet(nonce: &[u8; 16]) -> Vec<u8> {
     [START, nonce].concat()
 }

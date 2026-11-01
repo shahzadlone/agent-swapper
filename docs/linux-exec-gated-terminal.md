@@ -56,3 +56,7 @@ The source and hosted behavior still require independent review. Provider sandbo
 compatibility, external signal behavior during the trace phase, final exit
 receipts, production protocol/install design and real-provider qualification
 remain separate gates. The guardian never reads target memory or registers.
+
+The subsequent [target-exit experiment](linux-target-exit-observation.md) adds
+an authenticated direct-child status after exec release. Its status and scope
+retirement remain separate observations, with no journal completion authority.

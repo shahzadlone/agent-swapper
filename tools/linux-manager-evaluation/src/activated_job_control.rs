@@ -207,10 +207,37 @@ pub(crate) fn serve(
             WaitStatus::Continued(_) => require(!stopped, "job resumed outside its control grant")?,
             WaitStatus::Exited(_, code) => {
                 record_exit(directory, Some(code), None)?;
+                if exec_gate {
+                    report_exit(
+                        channel,
+                        invocation,
+                        child.pid.as_raw() as u32,
+                        &nonce,
+                        sequence,
+                        journal_protocol::TargetExit::Code {
+                            code: u8::try_from(code).map_err(io::Error::other)?,
+                        },
+                        until,
+                    )?;
+                }
                 return Ok(true);
             }
-            WaitStatus::Signaled(_, signal, _) => {
+            WaitStatus::Signaled(_, signal, core_dumped) => {
                 record_exit(directory, None, Some(signal as i32))?;
+                if exec_gate {
+                    report_exit(
+                        channel,
+                        invocation,
+                        child.pid.as_raw() as u32,
+                        &nonce,
+                        sequence,
+                        journal_protocol::TargetExit::Signal {
+                            signal: signal as u8,
+                            core_dumped,
+                        },
+                        until,
+                    )?;
+                }
                 return Ok(true);
             }
             _ => return Err(io::Error::other("unexpected traced job state")),
@@ -242,6 +269,31 @@ pub(crate) fn serve(
     })?;
     // Scope cleanup remains manager-owned; no journal completion is emitted.
     Ok(())
+}
+
+fn report_exit(
+    channel: &OwnedFd,
+    invocation: &str,
+    child: u32,
+    nonce: &[u8; 16],
+    sequence: u64,
+    status: journal_protocol::TargetExit,
+    until: Instant,
+) -> io::Result<()> {
+    let status = status.validate()?;
+    let packet = serde_json::to_vec(&serde_json::json!({
+        "kind": "aswp-fixture-exit-1", "invocation": invocation, "child": child,
+        "nonce": journal_protocol::encoded(nonce), "sequence": sequence, "status": status,
+    }))
+    .map_err(io::Error::other)?;
+    // No PID operation follows reaping. Sending the already observed status
+    // does not wait for a client acknowledgement or postpone scope cleanup.
+    transport::send_until(
+        channel,
+        &packet,
+        &[],
+        until.min(Instant::now() + Duration::from_secs(1)),
+    )
 }
 
 fn record_exit(directory: &Path, code: Option<i32>, signal: Option<i32>) -> io::Result<()> {

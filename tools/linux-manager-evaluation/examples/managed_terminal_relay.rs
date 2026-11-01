@@ -131,6 +131,13 @@ fn relay(
                     control_closed = true;
                     draining = Some(Instant::now() + Duration::from_secs(2));
                 }
+                JobEvent::Exited(status) => {
+                    marker(directory, "observed-exit", &format!("{status:?}"))?;
+                    // Still drain terminal bytes and independently retire the
+                    // original scope. A target exit is not all-writer custody.
+                    control_closed = true;
+                    draining = Some(Instant::now() + Duration::from_secs(2));
+                }
                 JobEvent::Stopped(signal) => {
                     require(!stopped, "duplicate pending inner stop")?;
                     stopped = true;
