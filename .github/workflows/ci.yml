@@ -258,7 +258,9 @@ jobs:
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_event
       - name: Qualify signals after job completion
         timeout-minutes: 1
-        run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example completed_signals
+        run: |
+          cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example completed_signals
+          cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example queued_stop
       - name: Qualify advisory signals before held exec
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_advisory_signals

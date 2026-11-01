@@ -552,7 +552,8 @@ def admission(binary, phase, scenario, env, owned_parent):
             owned.close()
 
 
-def startup_stop(binary, phase, env, expire=False, background=False):
+def startup_stop(binary, phase, env, expire=False, background=False, restop=False):
+    assert not restop or (background and not expire)
     with tempfile.TemporaryDirectory(prefix='aswp-managed-startup-stop-') as path:
         root = Path(path)
         owned = OwnedPty(binary, root, shell=True, environment=dict(env, ASWP_CI_ADMISSION_HOLD=phase))
@@ -605,6 +606,18 @@ def startup_stop(binary, phase, env, expire=False, background=False):
                 time.sleep(0.4)
                 assert not (root / 'retired').exists() and not (marker_root / 'final-exec').exists(), 'background continuation released admission'
                 assert os.tcgetpgrp(owned.master) == owned.pid
+                if restop:
+                    offset = len(owned.output)
+                    owned.send(b'kill -TSTP %1\n')
+                    def stopped_again():
+                        assert not select.select([owned.probe_fd], [], [], 0)[0], 'background re-stop killed the original owner'
+                        return prompt in owned.output[offset:] and state(parent) == state(data['pid']) == 'T'
+                    owned.wait(stopped_again)
+                    assert (root / 'owner-background-stop').exists()
+                    assert not (root / 'retired').exists() and not (marker_root / 'final-exec').exists()
+                    owned.send(b'/usr/bin/stty -g > restopped-mode.tmp && mv restopped-mode.tmp restopped-mode\n')
+                    snapshot_matches(owned, root, 'restopped-mode')
+                    assert os.tcgetpgrp(owned.master) == owned.pid
             if expire and not background:
                 # The client remains stopped; the guardian's own original
                 # admission deadline must retire the scope without client help.
@@ -658,7 +671,7 @@ def startup_stop(binary, phase, env, expire=False, background=False):
             owned.send(b'exit\n')
             owned.wait(lambda: owned.poll() is not None)
             assert os.waitstatus_to_exitcode(owned.status) == 0
-            print(f'exec-managed-startup-stop-{phase}-{"background-" if background else ""}{"expired" if expire else "resumed"}: pass', flush=True)
+            print(f'{"exec" if env.get("ASWP_CI_EXEC_GATE") == "1" else "job"}-managed-startup-stop-{phase}-{"background-" if background else ""}{"restopped-" if restop else ""}{"expired" if expire else "resumed"}: pass', flush=True)
         finally:
             for fd in descriptors:
                 os.close(fd)
@@ -747,10 +760,11 @@ def main():
                     admission(binary, phase, scenario, exec_env, True)
             for phase, scenario in (('go', 'intent-error'), ('release', 'spawn-error'), ('release', 'ready-error')):
                 admission(binary, phase, scenario, exec_env, True)
-            for phase in ('go-send', 'release-send'):
+            for phase in ('go-send', 'release-send', 'raw-entry'):
                 startup_stop(binary, phase, exec_env)
                 startup_stop(binary, phase, exec_env, background=True)
-            print('::notice::real Store terminal composition: 27 cases passed with actual profile leases and durable run observations; retirement preserves unresolved journal policy', flush=True)
+            startup_stop(binary, 'release-send', exec_env, background=True, restop=True)
+            print('::notice::real Store terminal composition: 30 cases passed with actual profile leases and durable run observations; retirement preserves unresolved journal policy', flush=True)
         return
     for owned_parent in (False, True):
         for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
@@ -785,10 +799,12 @@ def main():
         admission(binary, phase, scenario, exec_env, owned_parent)
     direct(binary, 'bytes-resize-tail', exec_env, True, fresh=True)
     shell_job(binary, False, exec_env, True, fresh=True)
-    for phase in ('go-send', 'release-send'):
+    for phase in ('go-send', 'release-send', 'raw-entry'):
         startup_stop(binary, phase, exec_env)
         startup_stop(binary, phase, exec_env, background=True)
-    print('::notice::managed two-terminal relay: sixty-four owned-PTY cases passed, including admission withdrawal, stopped death and bounded final output; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
+    startup_stop(binary, 'release-send', exec_env, background=True, restop=True)
+    startup_stop(binary, 'raw-entry', env)
+    print('::notice::managed two-terminal relay: sixty-eight owned-PTY cases passed, including admission withdrawal, stopped death and bounded final output; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

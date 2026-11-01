@@ -138,3 +138,7 @@ This is a shared observation building block, not production managed execution.
 The reduced evaluation suite passes all 54 tests after moving the duplicated
 kernel cases. Strict core Clippy also passes with the Store qualification feature,
 and the dependency-boundary check confirms identical pinned graphs.
+
+Cooked foreground admission and final raw entry now share this runtime too.
+The [suspension review](linux-suspension-review.md) records the three corrected
+job-control defects, actual negative control and completed native/pipeline evidence.
