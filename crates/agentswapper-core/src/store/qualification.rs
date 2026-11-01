@@ -92,6 +92,12 @@ impl FixtureJournal {
         self.service = Some(self.store.bind_linux_scope(&self.run, lease, key)?);
         Ok(())
     }
+    pub fn bound_key(&self) -> Result<&agentswapper_linux_manager::ServiceKey> {
+        self.service
+            .as_ref()
+            .map(|pending| pending.key())
+            .ok_or(Error::Busy)
+    }
     pub fn confirm_intent(&mut self, pid: u32) -> Result<()> {
         let record = self.store.run(&self.run)?;
         require(

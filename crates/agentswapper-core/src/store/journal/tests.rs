@@ -1058,7 +1058,7 @@ fn migrated_pending_gents_run_requires_reconciliation_and_retains_unknown_sessio
 }
 
 fn restore_pre_binding_schema(db: &Connection, version: i64) {
-    db.execute_batch("ALTER TABLE runs DROP COLUMN linux_binding; DROP INDEX one_unfinished_run; CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE exit_code IS NULL;").unwrap();
+    db.execute_batch("DROP INDEX unique_linux_invocation; ALTER TABLE runs DROP COLUMN linux_binding; DROP INDEX one_unfinished_run; CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE exit_code IS NULL;").unwrap();
     db.pragma_update(None, "user_version", version).unwrap();
 }
 fn v7_dump(db: &Connection) -> Vec<Vec<Vec<Value>>> {

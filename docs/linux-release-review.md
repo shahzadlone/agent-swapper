@@ -1,0 +1,68 @@
+# Linux release review follow-up
+
+These are source-review findings and qualification tasks, not a claim that the
+managed Linux launcher is ready for release. Normal CLI execution still uses
+the explicitly acknowledged uncontained preview. Provider checks remain deferred
+until the provider-free release work is complete.
+
+Two tool-disabled Opus 5.5 reviews examined the durable scope journal and
+installation policy: `17f74e3` with `5f3469c`, then `541f06c`. The reviews found
+no demonstrated retirement-authority or fixture-root execution bypass in the
+supplied sources. They identified composition risks and missing evidence that
+must be checked against code and native behavior.
+
+## Addressed in the association checkpoint
+
+- A service key can be claimed once and cannot be cloned by consumers.
+- Preparation requires the exact key retained by the journal before sending
+  launch data or transferring its lease.
+- Schema 9 gives each manager invocation one durable run association, retained
+  after completion, with migration and rollback checks.
+- Wrong-run and reopened-Store refusal controls subsequently commit the same
+  returned retirement value to the original association.
+- Binding JSON has a pinned serialization test; run lookup supplies the
+  canonical recorded ID.
+- Raw-path service policies are available only with qualification enabled.
+
+The local checks and the native result for each revision must be recorded
+separately. These changes do not supply restart recovery or target-exit evidence.
+
+## Remaining review work
+
+| Area | Required follow-up |
+| --- | --- |
+| Journal evidence | Require ordered intent/binding/spawn/retirement events and matching fixture identity, rather than accepting a projection and markers alone. |
+| Internal authority | Prevent ordinary event-recording callers from emitting scope transitions using only serialized diagnostics. |
+| Commit ambiguity | Distinguish a matching already-committed retirement from corruption while preserving failed-commit receipts. |
+| Consumer compatibility | Audit unknown exit status versus unfinished work in JSON/session consumers; retain explicit completion semantics. |
+| Migration fixtures | Supplement synthetic downgrade tests with databases produced by actual historical schema-5/6/7 revisions. |
+| Protected path reopening | Add ancestor replacement and private bind-mount controls that leave the retained leaf inode unchanged. |
+| Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
+| Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
+| systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
+| Installed inode lifetime | Specify no hardlink deduplication or metadata rewrites of live generations, then enforce and test the chosen host/installer prerequisites. |
+| Policy API | Guard admitted policies from reuse; test production path derivation and narrow caller-selected generation/layout APIs. |
+| Privileged fixture Python | Isolate root Python imports and verify absence of all owned assets before reporting cleanup success. |
+| Build features | Verify shipped CLI feature graphs exclude qualification APIs. |
+
+Source review suggested that selector admission ends at successful `bind`.
+That is the current implementation: already-bound services retain their original
+generation even if launch preparation happens later. A selector change does not
+terminate existing work. This needs a real-service control and a documented
+upgrade/revocation policy before installer integration.
+
+## Native evidence
+
+- `17f74e3`: full durable-journal CI passed (`41297948160`).
+- `db9220a`: full selector and Python-3.10 boundary CI passed (`41300192166`).
+- `0a3167e`: full installed-policy CI passed (`41300687178`).
+- `541f06c`: activation and all eleven journal controls passed on both native
+  runners; the combined terminal step exceeded its six-minute deadline.
+- `71ab9af`: optimizing the pinned SHA-256 dependency resolved that timeout on
+  both native runners (`41302398455`); independent release rebuilds are pending.
+
+The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
+content, production helper identities after exec, installer/update/removal,
+restart recovery and production launch integration remain separate open gates.
+The journal does not isolate mutually hostile programs running as the same UID,
+and local scope retirement does not attest to externally delegated work.

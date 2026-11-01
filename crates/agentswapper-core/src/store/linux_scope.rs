@@ -58,6 +58,11 @@ mod live {
         scope: Uuid,
         binding: LinuxBinding,
     }
+    impl PendingLinuxScope {
+        pub(crate) fn key(&self) -> &ServiceKey {
+            &self.key
+        }
+    }
     #[must_use = "failed completion retains its original retirement value for retry"]
     pub(crate) struct ScopeRetireFailure {
         pub error: Error,
@@ -98,13 +103,13 @@ mod live {
                 inode,
             };
             self.record_lifecycle(Event::LinuxScopeBound {
-                id: run.to_owned(),
+                id: record.id.clone(),
                 binding: binding.clone(),
             })?;
             Ok(PendingLinuxScope {
                 store: Arc::clone(&self.scope_instance),
                 key,
-                run: run.to_owned(),
+                run: record.id,
                 scope,
                 binding,
             })
@@ -172,6 +177,130 @@ mod tests {
             device: 25,
             inode: 128,
         }
+    }
+
+    #[test]
+    fn binding_encoding_is_a_pinned_durable_contract() {
+        assert_eq!(
+            serde_json::to_string(&binding()).unwrap(),
+            r#"{"unit":"aswp@1-42-1000.service","invocation":[7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7],"user":1000,"guardian":42,"device":25,"inode":128}"#
+        );
+    }
+
+    #[test]
+    fn one_invocation_cannot_bind_another_run_even_after_retirement() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let mut runs = Vec::new();
+        for alias in ["first", "second"] {
+            let profile = store
+                .register(Harness::Codex, alias.parse().unwrap())
+                .unwrap();
+            let lease = store.lease(profile.id).unwrap();
+            let scope = Uuid::new_v4();
+            let run = store
+                .begin_run_with_scope(
+                    &lease,
+                    "run",
+                    None,
+                    Some(LocalScope::LinuxCgroup { id: scope }),
+                )
+                .unwrap();
+            runs.push((run, scope));
+        }
+        store
+            .record(Event::LinuxScopeBound {
+                id: runs[0].0.clone(),
+                binding: binding(),
+            })
+            .unwrap();
+        let before = store.verify().unwrap().events;
+        let attempt = Event::LinuxScopeBound {
+            id: runs[1].0.clone(),
+            binding: binding(),
+        };
+        assert!(store.record(attempt.clone()).is_err());
+        assert_eq!(store.verify().unwrap().events, before);
+        assert!(
+            store
+                .db
+                .query_row::<Option<String>, _, _>(
+                    "SELECT linux_binding FROM runs WHERE id=?1",
+                    [&runs[1].0],
+                    |r| r.get(0)
+                )
+                .unwrap()
+                .is_none()
+        );
+        store
+            .record(Event::LinuxScopeRetired {
+                id: runs[0].0.clone(),
+                scope: runs[0].1,
+                binding: binding(),
+            })
+            .unwrap();
+        assert!(store.record(attempt).is_err());
+        assert_eq!(store.verify().unwrap().events, before + 1);
+        assert_eq!(
+            store.run(&runs[1].0).unwrap().custody,
+            ProcessCustody::Unknown
+        );
+    }
+
+    #[test]
+    fn schema_eight_migration_preserves_unknown_exit_and_retirement() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let mut store = Store::open(&root).unwrap();
+        let profile = store
+            .register(Harness::Codex, "legacy".parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let scope = Uuid::new_v4();
+        let run = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: scope }),
+            )
+            .unwrap();
+        drop(lease);
+        store
+            .record(Event::LinuxScopeBound {
+                id: run.clone(),
+                binding: binding(),
+            })
+            .unwrap();
+        store
+            .record(Event::LinuxScopeRetired {
+                id: run.clone(),
+                scope,
+                binding: binding(),
+            })
+            .unwrap();
+        store
+            .db
+            .execute_batch("DROP INDEX unique_linux_invocation; PRAGMA user_version=8;")
+            .unwrap();
+        drop(store);
+        let upgraded = Store::open(&root).unwrap();
+        assert_eq!(upgraded.verify().unwrap().schema_version, 9);
+        assert_eq!(
+            upgraded.run(&run).unwrap().custody,
+            ProcessCustody::LocalScopeEmpty
+        );
+        assert_eq!(upgraded.run(&run).unwrap().exit_code, None);
+        assert!(
+            std::fs::read_dir(root.join("registry-backups"))
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("schema-8-"))
+        );
+        drop(upgraded.lease(profile.id).unwrap());
     }
 
     #[test]

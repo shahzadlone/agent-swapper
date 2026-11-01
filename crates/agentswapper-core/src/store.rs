@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 8;
+const SCHEMA: i64 = 9;
 // Initialization is serialized across connections and may include durable
 // schema setup or migration. Allow queued openers to outlast one connection's
 // SQLite busy window, while still refusing an indefinitely held bootstrap lock.
@@ -219,7 +219,7 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if matches!(current, 1..=7) {
+        if matches!(current, 1..=8) {
             journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);

@@ -30,7 +30,8 @@ CREATE TABLE runs (
 );
 CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE outcome IS NULL;
 CREATE UNIQUE INDEX unique_local_scope ON runs(json_extract(local_scope,'$.id')) WHERE local_scope IS NOT NULL;
+CREATE UNIQUE INDEX unique_linux_invocation ON runs(json_extract(linux_binding,'$.invocation')) WHERE linux_binding IS NOT NULL;
 CREATE TABLE mappings (
     directory TEXT PRIMARY KEY, profile TEXT NOT NULL REFERENCES profiles(id)
 );
-PRAGMA user_version=8;
+PRAGMA user_version=9;

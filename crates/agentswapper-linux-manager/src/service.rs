@@ -13,18 +13,29 @@ use std::{io, os::fd::OwnedFd, path::Path, sync::Arc};
 use zbus::OwnedObjectPath;
 
 /// Protected assets at caller-authorized fixed locations in a trusted namespace.
-/// The installed constructor retains a verified selection; the explicit-path
-/// constructor requires independent authorization of those fixed locations.
+/// The installed constructor retains a verified selection. Explicit paths are
+/// available only to qualification consumers.
+///
+/// ```
+/// use agentswapper_linux_manager::ServicePolicy;
+/// fn accepts_policy(_: &ServicePolicy) {}
+/// ```
+#[cfg_attr(
+    not(feature = "qualification"),
+    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_manager::ServicePolicy;\nfn raw_paths() { let _ = ServicePolicy::open; }\n```"
+)]
 pub struct ServicePolicy {
     template_path: String,
     assets: Assets,
     credentials: OrdinaryCredentials,
 }
 enum Assets {
+    #[cfg(feature = "qualification")]
     Explicit(Box<ExplicitAssets>),
     Selected(Box<SelectedInstallation>),
     Admitted(Box<InstalledArtifacts>),
 }
+#[cfg(feature = "qualification")]
 struct ExplicitAssets {
     template: ProtectedConfig,
     image: ProtectedImage,
@@ -49,6 +60,7 @@ impl ServicePolicy {
             credentials,
         })
     }
+    #[cfg(feature = "qualification")]
     pub fn open(
         template: &Path,
         image: &Path,
@@ -91,6 +103,7 @@ impl ServicePolicy {
     }
     fn image(&self) -> &ProtectedImage {
         match &self.assets {
+            #[cfg(feature = "qualification")]
             Assets::Explicit(assets) => &assets.image,
             Assets::Selected(selection) => selection.artifacts().guardian(),
             Assets::Admitted(artifacts) => artifacts.guardian(),
@@ -100,6 +113,7 @@ impl ServicePolicy {
     /// work. This does not observe a manager or admit a process.
     pub fn require_current(&self) -> io::Result<()> {
         match &self.assets {
+            #[cfg(feature = "qualification")]
             Assets::Explicit(assets) => assets
                 .template
                 .require_current(Path::new(&self.template_path)),
@@ -133,9 +147,17 @@ pub struct ServiceIdentity {
     pub main_pid: u32,
 }
 
-/// Opaque in-memory identity for one binding. Copies can select an expected
-/// binding, but cannot prove retirement or be reconstructed after a crash.
-#[derive(Clone)]
+/// One claimed in-memory identity for one binding. It cannot be duplicated,
+/// serialized or reconstructed after a crash, and does not prove retirement.
+///
+/// ```
+/// use agentswapper_linux_manager::ServiceKey;
+/// fn accepts_key(_: &ServiceKey) {}
+/// ```
+/// ```compile_fail,E0599
+/// use agentswapper_linux_manager::ServiceKey;
+/// fn duplicate(key: ServiceKey) { let _ = key.clone(); }
+/// ```
 pub struct ServiceKey(Arc<ServiceOrigin>);
 struct ServiceOrigin {
     identity: ServiceIdentity,
@@ -143,6 +165,9 @@ struct ServiceOrigin {
     inode: u64,
 }
 impl ServiceKey {
+    fn duplicate(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
     /// Diagnostics associated with this key at original admission.
     pub fn identity(&self) -> ServiceIdentity {
         self.0.identity.clone()
@@ -328,6 +353,7 @@ pub struct BoundService {
     policy: ServicePolicy,
     key: ServiceKey,
     retirement_issued: bool,
+    key_claimed: bool,
 }
 impl BoundService {
     pub async fn bind(
@@ -390,6 +416,7 @@ impl BoundService {
             policy,
             key,
             retirement_issued: false,
+            key_claimed: false,
         };
         value.recheck(manager).await?;
         // End selection admission only after the original manager/process and
@@ -403,8 +430,22 @@ impl BoundService {
         self.identity.clone()
     }
 
-    pub fn key(&self) -> ServiceKey {
-        self.key.clone()
+    pub fn claim_key(&mut self) -> io::Result<ServiceKey> {
+        require(
+            !self.key_claimed && !self.retirement_issued,
+            "service binding key is no longer claimable",
+        )?;
+        self.key_claimed = true;
+        Ok(self.key.duplicate())
+    }
+
+    /// Check the exact key retained by the launch's journal association. A key
+    /// from another binding, including a fresh witness, cannot prepare this one.
+    pub fn require_claimed_key(&self, key: &ServiceKey) -> io::Result<()> {
+        require(
+            self.key_claimed && !self.retirement_issued && Arc::ptr_eq(&self.key.0, &key.0),
+            "launch key does not match the claimed original service binding",
+        )
     }
 
     /// Observe original kernel removal, original guardian death and authenticated
@@ -451,7 +492,7 @@ impl BoundService {
         // No await between revocation and returning the one-use value.
         self.retirement_issued = true;
         Ok(RetiredService {
-            key: self.key.clone(),
+            key: self.key.duplicate(),
             identity: self.identity(),
             observation,
         })

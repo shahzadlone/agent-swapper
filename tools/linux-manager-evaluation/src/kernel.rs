@@ -53,9 +53,20 @@ enum Backend {
     Activated(Box<agentswapper_linux_manager::BoundService>),
 }
 impl Binding {
-    pub(crate) fn key(&self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
+    pub(crate) fn claim_key(&mut self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
+        match &mut self.0 {
+            Backend::Activated(binding) => binding.claim_key(),
+            Backend::Transient(_) => Err(io::Error::other(
+                "transient measurement has no activated binding key",
+            )),
+        }
+    }
+    pub(crate) fn require_claimed_key(
+        &self,
+        key: &agentswapper_linux_manager::ServiceKey,
+    ) -> io::Result<()> {
         match &self.0 {
-            Backend::Activated(binding) => Ok(binding.key()),
+            Backend::Activated(binding) => binding.require_claimed_key(key),
             Backend::Transient(_) => Err(io::Error::other(
                 "transient measurement has no activated binding key",
             )),

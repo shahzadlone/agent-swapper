@@ -1,7 +1,8 @@
 # Linux scope retirement and journal completion
 
-Status: implemented behind `linux-journal-qualification`. Native qualification
-of the durable completion change is pending. Normal Linux launching remains the
+Status: implemented behind `linux-journal-qualification`. The initial durable
+completion checkpoint (`17f74e3`) passed full CI, including both native Ubuntu
+runners. The association changes below require their own native result. Normal Linux launching remains the
 explicit uncontained preview; this is not a production managed launcher or a
 provider-isolation qualification.
 
@@ -16,6 +17,14 @@ guardian UID/PID and original cgroup device/inode. These fields are diagnostics.
 A private pending association additionally retains the original `ServiceKey`,
 run/scope identity and an allocation identity for this exact Store instance.
 Neither that association nor a retirement value can be reconstructed from JSON.
+
+Each binding permits one claim of its non-cloneable service key. The journal
+owns that key and lends it back to target preparation, which checks the exact
+original binding before sending launch data or transferring the lease. A key
+from an independent witness cannot prepare the original target. Schema 9 also
+prevents one manager invocation from being associated with multiple runs,
+including after the original run retires. The Store records the canonical run
+identity returned by lookup rather than retaining a caller's spelling.
 
 ```mermaid
 sequenceDiagram
@@ -45,7 +54,7 @@ its unresolved durable record continues to block reuse.
 
 ## Durable state
 
-Schema 8 adds `linux_binding` metadata and indexes unfinished runs by absent
+Schema 8 added `linux_binding` metadata and indexes unfinished runs by absent
 outcome rather than absent exit code. `LinuxScopeBound` commits before target
 preparation. `LinuxScopeRetired` atomically appends its event and updates the
 projection to `local_scope_empty`, leaving `exit_code` null. A child exit alone,
@@ -74,3 +83,20 @@ own implementations and qualification. Lost original handles stay unresolved;
 this mechanism does not provide restart recovery, remote-work custody or vendor
 credential isolation. Real-provider checks remain deferred until the final
 validation stage requested by the user.
+
+## Association review follow-up
+
+A source-only Opus 5.5 review identified that cloneable keys and repeated key
+retrieval made incorrect consumer composition possible. The one-claim key,
+preparation check and unique invocation index address that finding together.
+The raw-path `ServicePolicy` constructor is now qualification-only; ordinary
+consumers must supply a protected selected installation.
+
+Local controls pin the serialized binding format, reject duplicate invocation
+association before and after retirement, and migrate a schema-8 registry while
+preserving unknown exit status and its verified backup. Native controls exercise
+wrong-key preparation and then successfully prepare the original service with
+the same lease and key. Wrong-run and reopened-Store refusals return their
+retirement values; the original Store subsequently commits those same values.
+This revision's native results are pending. Additional review findings and
+production gates are tracked in [the follow-up](linux-release-review.md).

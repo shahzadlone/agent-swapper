@@ -353,7 +353,7 @@ fn valid_timestamp(value: &str) -> bool {
 pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != from || !matches!(from, 1..=7) {
+    if version != from || !matches!(from, 1..=8) {
         return Err(Error::RegistrySchemaChanged);
     }
     // VACUUM INTO includes committed WAL contents and creates a consistent
@@ -402,7 +402,7 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
     let future_scope_event: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM main.event_log WHERE json_extract(payload,'$.type') IN ('linux_scope_bound','linux_scope_retired'))", [], |row| row.get(0),
     )?;
-    if future_scope_event {
+    if from < 8 && future_scope_event {
         return Err(Error::CorruptRegistry);
     }
     // Validate every event before changing the live projection. The envelope
@@ -424,8 +424,10 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         let legacy_schema = Connection::open_in_memory()?;
         legacy_schema.execute_batch(if from == 6 {
             include_str!("schema_v6.sql")
-        } else {
+        } else if from == 7 {
             include_str!("schema_v7.sql")
+        } else {
+            include_str!("schema_v8.sql")
         })?;
         if schema_dump(&tx)? != schema_dump(&legacy_schema)? {
             return Err(Error::ProjectionMismatch);
@@ -468,8 +470,11 @@ pub(super) fn migrate(db: &mut Connection, root: &Path, from: i64) -> Result<()>
         DROP TABLE temp.migration_profiles; DROP TABLE temp.migration_runs; DROP TABLE temp.migration_mappings;
 ")?;
     }
-    if from >= 4 {
+    if (4..8).contains(&from) {
         tx.execute_batch("ALTER TABLE runs ADD COLUMN linux_binding TEXT CHECK(linux_binding IS NULL OR json_valid(linux_binding)); DROP INDEX one_unfinished_run; CREATE UNIQUE INDEX one_unfinished_run ON runs(profile) WHERE outcome IS NULL;")?;
+    }
+    if from >= 4 {
+        tx.execute_batch("CREATE UNIQUE INDEX unique_linux_invocation ON runs(json_extract(linux_binding,'$.invocation')) WHERE linux_binding IS NOT NULL;")?;
     }
     tx.pragma_update(None, "user_version", SCHEMA)?;
     if !verify_snapshot(&tx)?.consistent {

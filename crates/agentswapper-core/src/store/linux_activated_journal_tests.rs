@@ -44,11 +44,11 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
                 Some(LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
             )
             .unwrap();
-        let bound = Bound::connect(prefix).unwrap();
+        let mut bound = Bound::connect(prefix).unwrap();
         let pending = store
-            .bind_linux_scope(&run, &lease, bound.service_key().unwrap())
+            .bind_linux_scope(&run, &lease, bound.claim_service_key().unwrap())
             .unwrap();
-        let prepared = bound.prepare(lease.as_fd()).unwrap();
+        let prepared = bound.prepare(lease.as_fd(), pending.key()).unwrap();
         drop(lease);
         (profile.id, run, pending, prepared)
     }
@@ -57,20 +57,52 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     let root = temp.path().join("state");
     let mut store = Store::open(&root).unwrap();
 
+    // Exercise prepare itself, before any GO/lease transfer. Checking only the
+    // manager key method would miss a consumer that forgot to call that method.
+    for claim_candidate in [false, true] {
+        let lease = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        lease.as_file().try_lock().unwrap();
+        let mut original = Bound::connect(&prefix).unwrap();
+        let key = original.claim_service_key().unwrap();
+        assert!(original.claim_service_key().is_err());
+        let mut candidate = Bound::connect(&prefix).unwrap();
+        let _candidate_key = claim_candidate.then(|| candidate.claim_service_key().unwrap());
+        let failure = match candidate.prepare(lease.as_fd(), &key) {
+            Ok(_) => panic!("another binding's key prepared this target"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error.to_string(),
+            "launch key does not match the claimed original service binding"
+        );
+        failure.closed.retire().unwrap();
+        // The same key and unchanged lease still prepare their original service.
+        original
+            .prepare(lease.as_fd(), &key)
+            .unwrap()
+            .close()
+            .retire()
+            .unwrap();
+    }
+
     let (a_profile, a_run, a_pending, a) = pending(&mut store, "receipt-a", &prefix);
     let (b_profile, b_run, b_pending, b) = pending(&mut store, "receipt-b", &prefix);
     let a_receipt = a.close().retire().unwrap().into_service();
     let b_receipt = b.close().retire().unwrap().into_service();
-    assert!(matches!(
-        store.retire_linux_scope(&b_pending, a_receipt),
-        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
-    ));
-    assert!(matches!(
-        store.retire_linux_scope(&a_pending, b_receipt),
-        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
-    ));
+    let a_failure = store.retire_linux_scope(&b_pending, a_receipt).unwrap_err();
+    let b_failure = store.retire_linux_scope(&a_pending, b_receipt).unwrap_err();
+    assert!(matches!(a_failure.error, Error::ScopeReceiptMismatch));
+    assert!(matches!(b_failure.error, Error::ScopeReceiptMismatch));
     unresolved(&store, a_profile, &a_run);
     unresolved(&store, b_profile, &b_run);
+    store
+        .retire_linux_scope(&a_pending, a_failure.retired)
+        .unwrap();
+    store
+        .retire_linux_scope(&b_pending, b_failure.retired)
+        .unwrap();
+    drop(store.lease(a_profile).unwrap());
+    drop(store.lease(b_profile).unwrap());
 
     let (profile, run, original, prepared) = pending(&mut store, "original-witness", &prefix);
     let identity = prepared.identity();
@@ -108,12 +140,14 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     let (profile, run, original, prepared) = pending(&mut store, "reopened-store", &prefix);
     let receipt = prepared.close().retire().unwrap().into_service();
     let mut reopened = Store::open(&root).unwrap();
-    assert!(matches!(
-        reopened.retire_linux_scope(&original, receipt),
-        Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
-    ));
+    let failure = reopened.retire_linux_scope(&original, receipt).unwrap_err();
+    assert!(matches!(failure.error, Error::ScopeReceiptMismatch));
     unresolved(&store, profile, &run);
     drop(reopened);
+    store
+        .retire_linux_scope(&original, failure.retired)
+        .unwrap();
+    drop(store.lease(profile).unwrap());
 
     let (profile, run, original, prepared) = pending(&mut store, "retired-unknown-exit", &prefix);
     let identity = prepared.identity();
@@ -181,7 +215,7 @@ fn prepare_using(
         .register(Harness::Claude, alias.parse().unwrap())
         .unwrap();
     let lease = store.lease(profile.id).unwrap();
-    let bound = connect(prefix).unwrap();
+    let mut bound = connect(prefix).unwrap();
     let logical = Uuid::new_v4();
     assert_ne!(logical.simple().to_string(), bound.identity().invocation);
     let run = store
@@ -192,7 +226,8 @@ fn prepare_using(
             Some(LocalScope::LinuxCgroup { id: logical }),
         )
         .unwrap();
-    let prepared = bound.prepare(lease.as_fd()).unwrap();
+    let key = bound.claim_service_key().unwrap();
+    let prepared = bound.prepare(lease.as_fd(), &key).unwrap();
     // Only the guardian's received copy now retains this lock.
     drop(lease);
     assert!(matches!(store.acquire_lease(profile.id), Err(Error::Busy)));
@@ -1578,7 +1613,7 @@ fn invalid_or_independently_locked_lease_never_spawns_writer() {
             .register(Harness::Claude, format!("lease-{reason}").parse().unwrap())
             .unwrap();
         let lease = store.lease(profile.id).unwrap();
-        let bound = Bound::connect(&prefix).unwrap();
+        let mut bound = Bound::connect(&prefix).unwrap();
         let id = bound.identity();
         let run = store
             .begin_run_with_scope(
@@ -1598,7 +1633,8 @@ fn invalid_or_independently_locked_lease_never_spawns_writer() {
             wrong.as_file().try_lock().unwrap();
         }
         let independent = File::open(wrong.path()).unwrap();
-        let failure = match bound.prepare(independent.as_fd()) {
+        let key = bound.claim_service_key().unwrap();
+        let failure = match bound.prepare(independent.as_fd(), &key) {
             Err(failure) => failure,
             Ok(_) => panic!("invalid lease spawned a writer"),
         };
