@@ -2,6 +2,7 @@
 """Fixed-user activation experiment; disposable hosted CI only, never installation."""
 import errno
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,11 @@ import sys
 import tempfile
 import time
 
-from check_linux_managed_scope import check_controls, private_directory, wait_for
+_scope_spec = importlib.util.spec_from_file_location(
+    'aswp_fixture_scope', Path(__file__).resolve().with_name('check_linux_managed_scope.py'))
+_scope = importlib.util.module_from_spec(_scope_spec)
+_scope_spec.loader.exec_module(_scope)
+check_controls, private_directory, wait_for = _scope.check_controls, _scope.private_directory, _scope.wait_for
 
 PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_SOCKET_ACTIVATION,ASWP_MANAGED_OBSERVER,ASWP_CI_INSTALLATION_VERSION'
 
@@ -520,6 +525,17 @@ def live_before_disconnect(directory, report):
             'activation scope was not populated before disconnect')
 
 
+def verify_cleanup(prefix):
+    paths = [Path('/run') / (prefix + suffix)
+             for suffix in ('.owner', '.selection.json', '.installation.json')]
+    paths += [guardian_image(prefix), endpoint(prefix)]
+    paths += [Path('/run/systemd/system') / (prefix + suffix)
+              for suffix in ('@.service', '.socket')]
+    for path in paths:
+        # lexists also detects dangling symlinks, which are not clean removal.
+        require(not os.path.lexists(path), 'owned activation asset survived cleanup: ' + path.name)
+
+
 def suite():
     prefix = fixture_prefix()
     require(os.geteuid() != 0, 'activation suite requires an ordinary runner')
@@ -535,7 +551,7 @@ def suite():
     with tempfile.TemporaryDirectory(prefix='aswp-activation-') as temporary:
         directory = Path(temporary)
         admin_args = ['sudo', '-n', '--preserve-env=' + PRESERVE,
-                      '/usr/bin/timeout', '--kill-after=3s', '40s', '/usr/bin/python3', script,
+                      '/usr/bin/timeout', '--kill-after=3s', '40s', '/usr/bin/python3', '-I', '-B', '-S', script,
                       '--admin']
         identity_args = [str(directory), str(os.getuid()), str(os.getgid())]
         try:
@@ -636,7 +652,7 @@ def suite():
             descriptors.append(second_fd)
             require(first_report['invocation'] != second_report['invocation']
                     and first_report['unit'] != second_report['unit'], 'connections share an activation invocation')
-            subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE, '/usr/bin/python3', script, '--deny-other-user'],
+            subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE, '/usr/bin/python3', '-I', '-B', '-S', script, '--deny-other-user'],
                            check=True, timeout=8)
             live_before_disconnect(directory, first_report)
             first.close()
@@ -723,6 +739,7 @@ def suite():
             for descriptor in descriptors:
                 os.close(descriptor)
             subprocess.run(admin_args + ['cleanup'] + identity_args, env=environment, check=True, timeout=50)
+            verify_cleanup(prefix)
     print('::notice title=Linux fixed-user activation cleanup::temporary socket, template units, root-owned Rust guardian image, service instances and fixture files removed', flush=True)
 
 

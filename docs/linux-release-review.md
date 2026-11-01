@@ -39,7 +39,6 @@ separately. These changes do not supply restart recovery or target-exit evidence
 | systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
 | Installed inode lifetime | Specify no hardlink deduplication or metadata rewrites of live generations, then enforce and test the chosen host/installer prerequisites. |
 | Policy API | Guard admitted policies from reuse; test production path derivation and narrow caller-selected generation/layout APIs. |
-| Privileged fixture Python | Isolate root Python imports and verify absence of all owned assets before reporting cleanup success. |
 | Build features | Verify shipped CLI feature graphs exclude qualification APIs. |
 
 Source review suggested that selector admission ends at successful `bind`.
@@ -94,6 +93,23 @@ tmpfs; a leaf overlay is unmounted before its parent.
 
 Local runtime tests, strict Clippy and the ordinary-file ancestor control pass.
 The four new privileged cases require native CI; none ran on the developer host.
+
+## Privileged fixture isolation
+
+Activation administrator and separate-user controls, managed-scope helper roles,
+and manager-refusal namespace roles now launch Python with `-I -B -S`. Standard
+modules cannot be shadowed by the checkout, working directory or `PYTHONPATH`;
+site customization is disabled and no bytecode is written into the checkout.
+The two required sibling helpers load through explicit source paths without
+adding their directory to the import search path.
+
+An ordinary-user subprocess control copies the scripts into an owned directory
+with a shadow `json.py`: isolated invocations reach the intended early refusal,
+do not execute the shadow and leave no bytecode. The same owned canary executes
+without isolation, proving the negative control is meaningful. Cleanup reporting
+also requires all seven owned filesystem names to be absent, including dangling
+symlinks; the administrator separately checks its units and scope teardown.
+All 46 local Linux harness controls pass. Native qualification is pending.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
