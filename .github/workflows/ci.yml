@@ -266,6 +266,7 @@ jobs:
         timeout-minutes: 2
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example outer_terminal
+          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example managed_terminal_relay
           python3 tools/check_linux_outer_terminal.py tools/linux-manager-evaluation/target/debug/examples/outer_terminal
       - name: Qualify root-owned service cleanup
         env:
