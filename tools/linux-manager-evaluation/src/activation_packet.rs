@@ -35,8 +35,9 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
     receive_files(socket, deadline, false).map(|(packet, _)| packet)
 }
 
-/// One terminal capability accompanies the authenticated prepared packet.
+/// One untrusted capability accompanies a credential-bearing prepared packet.
 /// This never accepts a missing descriptor, a batch, or an uncredentialed packet.
+/// The caller must authenticate the sender before inspecting the descriptor.
 pub(crate) fn receive_terminal(
     socket: &OwnedFd,
     deadline: Instant,
@@ -45,7 +46,6 @@ pub(crate) fn receive_terminal(
     let terminal = files
         .pop()
         .ok_or_else(|| io::Error::other("terminal absent"))?;
-    crate::terminal::validate_master(&terminal)?;
     Ok((packet, terminal))
 }
 
@@ -176,7 +176,10 @@ mod tests {
             let (master, _slave) = crate::terminal::pair()?;
             let rights = vec![master.as_fd(); count];
             crate::admission_transport::send_until(&sender, b"prepared", &rights, deadline())?;
-            let result = receive_terminal(&receiver, deadline());
+            let result = receive_terminal(&receiver, deadline()).and_then(|(packet, fd)| {
+                crate::terminal::validate_master(&fd)?;
+                Ok((packet, fd))
+            });
             assert_eq!(result.is_ok(), count == 1);
             if let Ok((packet, master)) = result {
                 assert_eq!(packet.bytes, b"prepared");
@@ -194,7 +197,11 @@ mod tests {
                 deadline(),
             )?;
             drop(capability);
-            assert!(receive_terminal(&receiver, deadline()).is_err());
+            assert!(
+                receive_terminal(&receiver, deadline())
+                    .and_then(|(_, fd)| crate::terminal::validate_master(&fd))
+                    .is_err()
+            );
             let mut ready = [PollFd::new(&witness, PollFlags::RDHUP)];
             let timeout = Timespec::try_from(Duration::from_secs(1)).map_err(io::Error::other)?;
             assert_eq!(poll(&mut ready, Some(&timeout))?, 1);

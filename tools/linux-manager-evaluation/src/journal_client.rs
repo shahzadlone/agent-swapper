@@ -348,13 +348,15 @@ impl Bound {
         let result = (|| {
             self.0.recheck()?;
             transport::send_until(self.0.socket()?, transport::GO, &[lease], self.0.deadline)?;
-            let packet = if self.0.terminal_requested {
+            let (packet, terminal) = if self.0.terminal_requested {
                 let (packet, terminal) =
                     activation_packet::receive_terminal(self.0.socket()?, self.0.deadline)?;
-                self.0.terminal = Some(terminal);
-                packet
+                (packet, Some(terminal))
             } else {
-                activation_packet::receive(self.0.socket()?, self.0.deadline)?
+                (
+                    activation_packet::receive(self.0.socket()?, self.0.deadline)?,
+                    None,
+                )
             };
             let child_pid = validate_prepared(
                 &packet,
@@ -363,8 +365,12 @@ impl Bound {
                 rustix::process::getgid().as_raw(),
                 &self.0.unit.invocation,
             )?;
+            if let Some(terminal) = &terminal {
+                crate::terminal::validate_master(terminal)?;
+            }
             self.0.child = Some(self.0.binding.child(child_pid, self.0.unit.pid)?);
             self.0.recheck()?;
+            self.0.terminal = terminal;
             Ok(child_pid)
         })();
         match result {

@@ -136,8 +136,12 @@ pub(crate) fn serve(
             require(terminal_requested, "gated writer exited before disconnect")?;
             use std::os::unix::process::ExitStatusExt;
             fs::write(
-                directory.join("target-exit"),
+                directory.join("target-exit.tmp"),
                 format!("{:?}:{:?}", status.code(), status.signal()),
+            )?;
+            fs::rename(
+                directory.join("target-exit.tmp"),
+                directory.join("target-exit"),
             )?;
             return Ok(true);
         }
