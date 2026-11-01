@@ -5,6 +5,14 @@ This fixed-target experiment connects the already qualified guardian-session
 inner PTY to a newly created outer PTY. The Python harness owns both the outer
 terminal and its shell. It never attaches to the terminal running the harness.
 
+The first hosted run (`bf8db03`, run `41273807410`) exposed two harness errors:
+the relay's foreground/resume-request marker was incorrectly treated as an
+acknowledgement of kernel continuation, and a Python signal enum's string
+format differed between runner versions. The harness now waits for the original
+child to leave its stopped state and then verifies working input. It compares
+the numeric signal value explicitly. Neither correction weakens the protocol
+or permits a resume-request marker to stand in for observed target execution.
+
 The relay passes bytes unchanged in both directions, with separate 16 KiB
 queues. Initial dimensions and resize events reach the inner PTY. Typed signal
 and flow-control bytes remain subject to the inner terminal's current mode.

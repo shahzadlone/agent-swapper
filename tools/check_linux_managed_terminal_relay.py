@@ -74,7 +74,7 @@ def direct(binary, scenario, env):
                 owned.send(b'\x1a')
                 owned.wait(lambda: (root / 'resumed-foreground').exists())
                 assert (root / 'discarded-stop').exists() and not (root / 'continued').exists()
-                assert state(data['target']) != 'T'
+                owned.wait(lambda: state(data['target']) != 'T')
                 target_command(owned, b'size', b'SIZE:24:80\r\n')
                 owned.send(b'\x03')
                 owned.finish()
@@ -114,7 +114,7 @@ def shell_job(binary, raw_stop, env):
             offset = len(owned.output)
             owned.send(b'suspend\n' if raw_stop else b'\x1a')
             owned.wait(lambda: prompt in owned.output[offset:] and os.tcgetpgrp(owned.master) == owned.pid)
-            assert (root / 'restored-before-stop').read_text() == str(signal.SIGTSTP)
+            assert (root / 'restored-before-stop').read_text() == str(int(signal.SIGTSTP))
             assert state(data['pid']) == state(data['target']) == 'T'
             offset = len(owned.output)
             owned.send(b'bg\n')
@@ -126,7 +126,8 @@ def shell_job(binary, raw_stop, env):
             fcntl.ioctl(owned.master, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 111, 0, 0))
             owned.send(b'fg\n')
             owned.wait(lambda: (root / 'resumed-foreground').exists())
-            assert os.tcgetpgrp(owned.master) == data['group'] and state(data['target']) != 'T'
+            assert os.tcgetpgrp(owned.master) == data['group']
+            owned.wait(lambda: state(data['target']) != 'T')
             if raw_stop:
                 owned.wait(lambda: b'RESUMED\r\n' in owned.output)
             target_command(owned, b'size', b'SIZE:42:111\r\n')
