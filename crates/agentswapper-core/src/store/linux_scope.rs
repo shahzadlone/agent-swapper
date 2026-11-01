@@ -3,6 +3,21 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
+/// Only this module can construct the permission to record scope transitions.
+/// Serialized diagnostics and the Store's general event writer cannot supply it.
+pub(super) struct ScopeAuthority {
+    _private: (),
+}
+
+#[cfg(test)]
+impl super::Store {
+    // Projection and migration tests deliberately bypass live observation. This
+    // constructor is absent from application and qualification library builds.
+    pub(super) fn record_scope_fixture(&mut self, event: super::Event) -> Result<()> {
+        self.record_with_scope(event, Some(&ScopeAuthority { _private: () }))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct LinuxBinding {
@@ -102,10 +117,13 @@ mod live {
                 device,
                 inode,
             };
-            self.record_lifecycle(Event::LinuxScopeBound {
-                id: record.id.clone(),
-                binding: binding.clone(),
-            })?;
+            self.record_lifecycle_with_scope(
+                Event::LinuxScopeBound {
+                    id: record.id.clone(),
+                    binding: binding.clone(),
+                },
+                Some(&ScopeAuthority { _private: () }),
+            )?;
             Ok(PendingLinuxScope {
                 store: Arc::clone(&self.scope_instance),
                 key,
@@ -144,11 +162,14 @@ mod live {
                 }
                 // The event and its projection commit atomically. Unknown target
                 // exit remains NULL; only the independently observed scope closes.
-                self.record_lifecycle(Event::LinuxScopeRetired {
-                    id: pending.run.clone(),
-                    scope: pending.scope,
-                    binding,
-                })
+                self.record_lifecycle_with_scope(
+                    Event::LinuxScopeRetired {
+                        id: pending.run.clone(),
+                        scope: pending.scope,
+                        binding,
+                    },
+                    Some(&ScopeAuthority { _private: () }),
+                )
             })();
             match result {
                 Ok(()) => Ok(()),
@@ -188,6 +209,60 @@ mod tests {
     }
 
     #[test]
+    fn copied_diagnostics_cannot_authorize_general_event_writers() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let scope = Uuid::new_v4();
+        let run = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: scope }),
+            )
+            .unwrap();
+        let events = [
+            Event::LinuxScopeBound {
+                id: run.clone(),
+                binding: binding(),
+            },
+            Event::LinuxScopeRetired {
+                id: run.clone(),
+                scope,
+                binding: binding(),
+            },
+        ];
+        for event in events {
+            let before = store.verify().unwrap().events;
+            // Exercise both general paths with a deserialized copy, then prove
+            // that the otherwise identical event is valid with test authority.
+            let copied: Event =
+                serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+            assert!(matches!(
+                store.record(copied.clone()),
+                Err(Error::ScopeReceiptMismatch)
+            ));
+            assert!(matches!(
+                store.record_lifecycle(copied),
+                Err(Error::ScopeReceiptMismatch)
+            ));
+            assert_eq!(store.verify().unwrap().events, before);
+            assert_eq!(store.run(&run).unwrap().custody, ProcessCustody::Unknown);
+            store.record_scope_fixture(event).unwrap();
+            assert_eq!(store.verify().unwrap().events, before + 1);
+        }
+        assert_eq!(
+            store.run(&run).unwrap().custody,
+            ProcessCustody::LocalScopeEmpty
+        );
+        assert_eq!(store.run(&run).unwrap().exit_code, None);
+    }
+
+    #[test]
     fn one_invocation_cannot_bind_another_run_even_after_retirement() {
         let temp = tempfile::tempdir().unwrap();
         let mut store = Store::open(&temp.path().join("state")).unwrap();
@@ -209,7 +284,7 @@ mod tests {
             runs.push((run, scope));
         }
         store
-            .record(Event::LinuxScopeBound {
+            .record_scope_fixture(Event::LinuxScopeBound {
                 id: runs[0].0.clone(),
                 binding: binding(),
             })
@@ -219,7 +294,7 @@ mod tests {
             id: runs[1].0.clone(),
             binding: binding(),
         };
-        assert!(store.record(attempt.clone()).is_err());
+        assert!(store.record_scope_fixture(attempt.clone()).is_err());
         assert_eq!(store.verify().unwrap().events, before);
         assert!(
             store
@@ -233,13 +308,13 @@ mod tests {
                 .is_none()
         );
         store
-            .record(Event::LinuxScopeRetired {
+            .record_scope_fixture(Event::LinuxScopeRetired {
                 id: runs[0].0.clone(),
                 scope: runs[0].1,
                 binding: binding(),
             })
             .unwrap();
-        assert!(store.record(attempt).is_err());
+        assert!(store.record_scope_fixture(attempt).is_err());
         assert_eq!(store.verify().unwrap().events, before + 1);
         assert_eq!(
             store.run(&runs[1].0).unwrap().custody,
@@ -267,13 +342,13 @@ mod tests {
             .unwrap();
         drop(lease);
         store
-            .record(Event::LinuxScopeBound {
+            .record_scope_fixture(Event::LinuxScopeBound {
                 id: run.clone(),
                 binding: binding(),
             })
             .unwrap();
         store
-            .record(Event::LinuxScopeRetired {
+            .record_scope_fixture(Event::LinuxScopeRetired {
                 id: run.clone(),
                 scope,
                 binding: binding(),
@@ -325,9 +400,9 @@ mod tests {
             scope,
             binding: binding(),
         };
-        assert!(store.record(finish.clone()).is_err());
+        assert!(store.record_scope_fixture(finish.clone()).is_err());
         store
-            .record(Event::LinuxScopeBound {
+            .record_scope_fixture(Event::LinuxScopeBound {
                 id: run.clone(),
                 binding: binding(),
             })
@@ -338,7 +413,7 @@ mod tests {
                 .finish_run(run.clone(), RunCompletion::ChildExited(0))
                 .is_err()
         );
-        store.record(finish.clone()).unwrap();
+        store.record_scope_fixture(finish.clone()).unwrap();
         let record = store.run(&run).unwrap();
         assert_eq!(record.custody, ProcessCustody::LocalScopeEmpty);
         assert_eq!(record.exit_code, None);
@@ -348,7 +423,7 @@ mod tests {
         assert!(store.unfinished().unwrap().is_empty());
         let lease = store.lease(profile.id).unwrap();
         let next = store.begin_run(&lease, "run").unwrap();
-        assert!(store.record(finish).is_err());
+        assert!(store.record_scope_fixture(finish).is_err());
         assert!(store.observe_spawn(&run, 44).is_err());
         assert!(store.attest_stopped(&run).is_err());
         assert_eq!(store.run(&next).unwrap().custody, ProcessCustody::Unknown);
@@ -373,7 +448,7 @@ mod tests {
             )
             .unwrap();
         store
-            .record(Event::LinuxScopeBound {
+            .record_scope_fixture(Event::LinuxScopeBound {
                 id: run.clone(),
                 binding: binding(),
             })
@@ -394,7 +469,7 @@ mod tests {
             }
             assert!(
                 store
-                    .record(Event::LinuxScopeRetired {
+                    .record_scope_fixture(Event::LinuxScopeRetired {
                         id: run.clone(),
                         scope: claimed_scope,
                         binding: wrong
@@ -407,7 +482,7 @@ mod tests {
         // Retirement before a target was observed also preserves an unknown
         // target outcome. Scope emptiness does not imply successful execution.
         store
-            .record(Event::LinuxScopeRetired {
+            .record_scope_fixture(Event::LinuxScopeRetired {
                 id: run.clone(),
                 scope,
                 binding: binding(),

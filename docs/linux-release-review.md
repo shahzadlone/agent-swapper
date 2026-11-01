@@ -31,8 +31,6 @@ separately. These changes do not supply restart recovery or target-exit evidence
 
 | Area | Required follow-up |
 | --- | --- |
-| Journal evidence | Require ordered intent/binding/spawn/retirement events and matching fixture identity, rather than accepting a projection and markers alone. |
-| Internal authority | Prevent ordinary event-recording callers from emitting scope transitions using only serialized diagnostics. |
 | Commit ambiguity | Distinguish a matching already-committed retirement from corruption while preserving failed-commit receipts. |
 | Consumer compatibility | Audit unknown exit status versus unfinished work in JSON/session consumers; retain explicit completion semantics. |
 | Migration fixtures | Supplement synthetic downgrade tests with databases produced by actual historical schema-5/6/7 revisions. |
@@ -59,7 +57,30 @@ upgrade/revocation policy before installer integration.
 - `541f06c`: activation and all eleven journal controls passed on both native
   runners; the combined terminal step exceeded its six-minute deadline.
 - `71ab9af`: optimizing the pinned SHA-256 dependency resolved that timeout on
-  both native runners (`41302398455`); independent release rebuilds are pending.
+  both native runners; full CI and independent release rebuilds passed (`41302398455`).
+
+## Journal authority and independent observation
+
+The follow-up guards the Store's general event writers against scope events.
+Only the scope module can construct their internal authorization, after matching
+the original live key or retirement receipt. Serialized copies are refused
+before any transaction. Projection and migration tests use an explicitly named,
+test-only constructor that is absent from qualification library builds too.
+This is an internal API boundary, not protection from a hostile same-UID program
+editing its own registry.
+
+The native terminal observer now reads projection and ordered events in one
+read-only SQLite snapshot. It requires exactly the applicable planned, bound,
+spawned and retired events; matches scope, binding and target PID; validates the
+binding fields; and compares guardian/invocation and client identity against the
+prepared-session markers and expected fixture unit prefix. It accepts pending
+work after client loss and retirement with an unknown target exit. Projection-only
+retirement, empty bindings, missing/reordered/duplicate events and coherent but
+foreign invocation metadata are negative controls. These checks corroborate
+qualification evidence and never grant the runtime a completion capability.
+
+Local default and qualification strict Clippy, all 75 Store tests, and all 43
+Linux Python controls pass. This revision's native result is pending.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,

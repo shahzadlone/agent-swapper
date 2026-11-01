@@ -52,6 +52,11 @@ retirement value for an in-place retry. A retry cannot append a second completio
 event. The fixed command-line qualification fixture aborts on a commit error;
 its unresolved durable record continues to block reuse.
 
+The general Store event writers reject scope transitions even when their JSON
+is otherwise valid. Only this module can authorize recording after live-key or
+receipt validation. An explicitly named test-only path exercises projection and
+migration rules without manufacturing runtime authority.
+
 ## Durable state
 
 Schema 8 added `linux_binding` metadata and indexes unfinished runs by absent

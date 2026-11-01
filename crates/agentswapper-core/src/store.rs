@@ -519,8 +519,16 @@ impl Store {
     }
 
     fn record_lifecycle(&mut self, event: Event) -> Result<()> {
+        self.record_lifecycle_with_scope(event, None)
+    }
+
+    fn record_lifecycle_with_scope(
+        &mut self,
+        event: Event,
+        authority: Option<&linux_scope::ScopeAuthority>,
+    ) -> Result<()> {
         for attempt in 0..3 {
-            match self.record(event.clone()) {
+            match self.record_with_scope(event.clone(), authority) {
                 Err(Error::Database(rusqlite::Error::SqliteFailure(ref code, _)))
                     if attempt < 2
                         && matches!(
@@ -610,6 +618,21 @@ impl Store {
     }
 
     fn record(&mut self, event: Event) -> Result<()> {
+        self.record_with_scope(event, None)
+    }
+
+    fn record_with_scope(
+        &mut self,
+        event: Event,
+        authority: Option<&linux_scope::ScopeAuthority>,
+    ) -> Result<()> {
+        if matches!(
+            event,
+            Event::LinuxScopeBound { .. } | Event::LinuxScopeRetired { .. }
+        ) && authority.is_none()
+        {
+            return Err(Error::ScopeReceiptMismatch);
+        }
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
