@@ -208,3 +208,25 @@ The first Ubuntu-latest run exposed a test portability assumption: its coreutils
 its protected target, and separately requires refusal of the original symlink.
 Production image admission keeps its no-symlink policy. The corrected pipeline
 is pending; the earlier test failure is not an image-admission bypass.
+
+## Manager invocation retirement query
+
+The existing authenticated `GetUnitByInvocationID` retirement query now lives
+in `agentswapper-linux-manager` and is consumed by the same bounded watcher.
+It accepts only a unique bus destination and validates bounded unit/invocation
+inputs before decoding. An authenticated exact-invocation absence or matching
+inactive/failed observation is the manager half of retirement. A property
+collection race still requires a new authenticated lookup; access denial,
+service absence, timeout and wrong-sender errors never become successful absence.
+
+The outer consumer retains its original 20-second limit, manager-owner checks
+before and after, and original cgroup/guardian handles. The shared query's boolean
+is expressly not a scope receipt, target outcome or permission for Store to
+finish a run. This extraction adds no dependencies and does not expose manager
+mutations. Its two reply/error regressions moved with the code; a new input test
+rejects malformed, zero, Unicode and oversized invocation values before indexing.
+All five manager tests, strict manager/consumer Clippy and the dependency-boundary
+check pass locally. Native composition evidence remains pending.
+
+All 51 remaining evaluation tests and strict core Clippy with the Store
+qualification feature also pass after moving the retirement-query tests.

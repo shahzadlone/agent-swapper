@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 use zbus::{Connection, Message, OwnedObjectPath, OwnedVariant, connection::AuthMechanism};
-fn require(ok: bool, message: &str) -> io::Result<()> {
+pub(crate) fn require(ok: bool, message: &str) -> io::Result<()> {
     if ok {
         Ok(())
     } else {

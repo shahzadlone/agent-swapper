@@ -24,11 +24,11 @@ use std::{
     io::{self, Write},
     time::Duration,
 };
-use zbus::{Connection, Message, OwnedObjectPath};
+use zbus::Connection;
 
 use agentswapper_linux_manager::{
-    self as manager, MANAGER_PATH, PathFact, SERVICE_INTERFACE, UNIT_INTERFACE, checked_reply,
-    owner, prerequisites, property, unit_path,
+    self as manager, PathFact, SERVICE_INTERFACE, UNIT_INTERFACE, owner, prerequisites, property,
+    unit_path,
 };
 
 #[derive(Debug)]

@@ -5,3 +5,8 @@
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::*;
+
+#[cfg(target_os = "linux")]
+mod invocation;
+#[cfg(target_os = "linux")]
+pub use invocation::retired as invocation_retired;
