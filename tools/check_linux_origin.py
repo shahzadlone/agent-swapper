@@ -158,11 +158,12 @@ def inside(case, binary, backend, uid, gid):
                 source.chmod(0o644)
                 destination = f'{thread_view}/status'
             if destination:
+                source_metadata = os.stat(source)
                 subprocess.run(['/usr/bin/mount', '--bind', str(source), destination],
                                check=True, capture_output=True, timeout=5)
                 mounted = destination
-                require(os.stat(source).st_dev == os.stat(destination).st_dev
-                        and os.stat(source).st_ino == os.stat(destination).st_ino,
+                require(source_metadata.st_dev == os.stat(destination).st_dev
+                        and source_metadata.st_ino == os.stat(destination).st_ino,
                         'origin overlay does not name the installed source inode')
             stdout, stderr = target.communicate(input=b'GO', timeout=10)
             expected(subprocess.CompletedProcess([], target.returncode, stdout.decode(), stderr.decode()), CASES[case])
