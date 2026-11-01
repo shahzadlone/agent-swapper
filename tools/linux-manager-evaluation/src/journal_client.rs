@@ -67,6 +67,7 @@ struct JobState {
     nonce: [u8; 16],
     sequence: u64,
     stopped: bool,
+    exec_pending: bool,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -181,6 +182,9 @@ pub struct Prepared {
     pid: u32,
 }
 pub struct Running(Session);
+/// Exact kernel exec event held by the original guardian, before detach.
+/// This is not application readiness or a production custody receipt.
+pub struct ExecStopped(Session);
 /// Fixed-fixture control observations. Closed is transport loss, not a target
 /// exit receipt, successful exec observation, or permission to reuse a profile.
 #[derive(Debug, PartialEq, Eq)]
@@ -351,31 +355,64 @@ fn validate_stopped(
     Ok(stop.signal)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Writer,
+    Terminal,
+    Job,
+    Exec,
+}
+
+fn validate_exec(packet: &activation_packet::Packet, expected: &StopContext<'_>) -> io::Result<()> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Held {
+        kind: String,
+        child: u32,
+        invocation: String,
+        nonce: String,
+    }
+    let held: Held = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
+    require(
+        packet.sender.pid() == expected.guardian as i32
+            && packet.sender.uid() == expected.uid
+            && packet.sender.gid() == expected.gid
+            && held.kind == "aswp-fixture-exec-held-1"
+            && held.child == expected.child
+            && held.invocation == expected.invocation
+            && held.nonce == journal_protocol::encoded(expected.nonce),
+        "exec notice sender or launch binding differs",
+    )
+}
+
 impl Bound {
     pub fn connect(prefix: &str) -> io::Result<Self> {
-        Self::connect_mode(prefix, false, false)
+        Self::connect_mode(prefix, Mode::Writer)
     }
     /// Fixed pre-exec/inner-PTY qualification, never a provider launch API.
     pub fn connect_terminal(prefix: &str) -> io::Result<Self> {
-        Self::connect_mode(prefix, true, false)
+        Self::connect_mode(prefix, Mode::Terminal)
     }
     /// Fixed guardian-session qualification; never an arbitrary provider API.
     pub fn connect_job_control(prefix: &str) -> io::Result<Self> {
-        Self::connect_mode(prefix, true, true)
+        Self::connect_mode(prefix, Mode::Job)
     }
-    fn connect_mode(prefix: &str, terminal_requested: bool, job_control: bool) -> io::Result<Self> {
+    /// Fixed target held at kernel exec before durable spawn observation.
+    pub fn connect_exec_control(prefix: &str) -> io::Result<Self> {
+        Self::connect_mode(prefix, Mode::Exec)
+    }
+    fn connect_mode(prefix: &str, mode: Mode) -> io::Result<Self> {
         outside_runtime()?;
         fixture_policy::gate(prefix)?;
         let paths = crate::prerequisites()?;
         let deadline = Instant::now() + Duration::from_secs(12);
         let (socket, _, offer) = activation::connect(
             prefix,
-            if job_control {
-                b"PTY2\n"
-            } else if terminal_requested {
-                b"PTY1\n"
-            } else {
-                b"ADMIT\n"
+            match mode {
+                Mode::Writer => b"ADMIT\n",
+                Mode::Terminal => b"PTY1\n",
+                Mode::Job => b"PTY2\n",
+                Mode::Exec => b"PTY3\n",
             },
         )?;
         let control = Control(Some(socket));
@@ -410,9 +447,12 @@ impl Bound {
         };
         Ok(Self(Session {
             control,
-            terminal_requested,
+            terminal_requested: mode != Mode::Writer,
             terminal: None,
-            job: job_control.then(JobState::default),
+            job: matches!(mode, Mode::Job | Mode::Exec).then(|| JobState {
+                exec_pending: mode == Mode::Exec,
+                ..JobState::default()
+            }),
             connection: Some(connection),
             owner,
             unit,
@@ -572,7 +612,8 @@ impl Prepared {
     }
 
     /// The callback runs synchronously, outside any entered async runtime.
-    /// Only a successful durable journal write may release GO. A transport
+    /// The callback must establish durable journal intent before GO (including
+    /// confirming an earlier committed intent in exec-gated mode). A transport
     /// failure afterwards must be treated as GO possibly having been delivered.
     pub fn start_after<E>(
         mut self,
@@ -630,10 +671,45 @@ impl Prepared {
     }
 }
 impl Running {
+    pub fn hold_exec(self) -> Result<ExecStopped, TransitionFailure> {
+        let result = (|| {
+            self.0.recheck()?;
+            let job = self
+                .0
+                .job
+                .as_ref()
+                .filter(|job| job.exec_pending && !job.stopped)
+                .ok_or_else(|| io::Error::other("session is not awaiting exec"))?;
+            let packet = activation_packet::receive(self.0.socket()?, self.0.deadline)?;
+            validate_exec(
+                &packet,
+                &StopContext {
+                    guardian: self.0.unit.pid,
+                    uid: self.0.unit.user,
+                    gid: rustix::process::getgid().as_raw(),
+                    invocation: &self.0.unit.invocation,
+                    child: job.child,
+                    nonce: &job.nonce,
+                    sequence: 0,
+                },
+            )?;
+            self.0.recheck()
+        })();
+        match result {
+            Ok(()) => Ok(ExecStopped(self.0)),
+            Err(error) => Err(TransitionFailure {
+                error,
+                closed: Box::new(self.0.close()),
+            }),
+        }
+    }
     /// Nonblocking control readiness for the terminal relay. Stop packets still
     /// pass the complete credential, invocation, sequence and live-child checks.
     pub fn poll_job(&mut self) -> io::Result<JobEvent> {
-        require(self.0.job.is_some(), "session has no job-control protocol")?;
+        require(
+            self.0.job.as_ref().is_some_and(|job| !job.exec_pending),
+            "session is not ready for job control",
+        )?;
         match control_readiness(self.0.socket()?)? {
             ControlReadiness::Closed => Ok(JobEvent::Closed),
             ControlReadiness::Packet => self.wait_stopped().map(JobEvent::Stopped),
@@ -661,7 +737,10 @@ impl Running {
             .job
             .as_ref()
             .ok_or_else(|| io::Error::other("session has no job-control protocol"))?;
-        require(!job.stopped, "a stop already awaits resume or close")?;
+        require(
+            !job.exec_pending && !job.stopped,
+            "session is not ready for another job stop",
+        )?;
         let packet =
             activation_packet::receive(self.0.socket()?, Instant::now() + Duration::from_secs(4))?;
         let next = job
@@ -699,7 +778,10 @@ impl Running {
             .job
             .as_ref()
             .ok_or_else(|| io::Error::other("session has no job-control protocol"))?;
-        require(job.stopped, "resume requires a pending authenticated stop")?;
+        require(
+            !job.exec_pending && job.stopped,
+            "resume requires a pending authenticated job stop",
+        )?;
         transport::send_until(
             self.0.socket()?,
             &journal_protocol::resume_packet(&job.nonce, job.sequence),
@@ -737,6 +819,83 @@ impl Running {
             Ok(()) => Ok(self.0.close()),
             Err(error) => Err(TransitionFailure {
                 error,
+                closed: Box::new(self.0.close()),
+            }),
+        }
+    }
+}
+impl ExecStopped {
+    pub fn identity(&self) -> Identity {
+        identity(&self.0)
+    }
+    pub fn terminal(&self) -> Option<BorrowedFd<'_>> {
+        self.0.terminal.as_ref().map(AsFd::as_fd)
+    }
+    pub fn close(self) -> Closed {
+        self.0.close()
+    }
+    pub fn observe_held(&self) -> io::Result<()> {
+        self.0.recheck()
+    }
+    pub fn crash_guardian(self) -> Result<Closed, TransitionFailure> {
+        Running(self.0).crash_guardian()
+    }
+
+    /// Commit the spawn observation while the kernel exec stop is held. Any
+    /// send failure afterwards leaves release uncertain, never safe to retry.
+    pub fn release_after<E>(
+        mut self,
+        journal: impl FnOnce(u32) -> Result<(), E>,
+    ) -> Result<Running, StartFailure<E>> {
+        let before = self.0.recheck().and_then(|()| {
+            self.0
+                .job
+                .as_ref()
+                .filter(|job| job.exec_pending)
+                .map(|job| job.child)
+                .ok_or_else(|| io::Error::other("exec hold state absent"))
+        });
+        let pid = match before {
+            Ok(pid) => pid,
+            Err(error) => {
+                return Err(StartFailure {
+                    cause: StartCause::Transport(error),
+                    live_at_refusal: None,
+                    closed: Box::new(self.0.close()),
+                });
+            }
+        };
+        if let Err(error) = journal(pid) {
+            let live_at_refusal = Some(self.0.recheck());
+            return Err(StartFailure {
+                cause: StartCause::Journal(error),
+                live_at_refusal,
+                closed: Box::new(self.0.close()),
+            });
+        }
+        let result = self.0.recheck().and_then(|()| {
+            let job = self
+                .0
+                .job
+                .as_ref()
+                .ok_or_else(|| io::Error::other("exec state absent"))?;
+            transport::send_until(
+                self.0.socket()?,
+                &journal_protocol::exec_release_packet(&job.nonce, job.child),
+                &[],
+                self.0.deadline,
+            )
+        });
+        match result {
+            Ok(()) => {
+                if let Some(job) = &mut self.0.job {
+                    job.exec_pending = false;
+                }
+                Ok(Running(self.0))
+            }
+            Err(error) => Err(StartFailure {
+                cause: StartCause::Transport(error),
+                live_at_refusal: None,
                 closed: Box::new(self.0.close()),
             }),
         }
@@ -793,6 +952,63 @@ impl Closed {
 mod tests {
     use super::*;
     use std::os::fd::AsFd;
+
+    #[test]
+    fn exec_notice_binds_original_sender_invocation_child_and_nonce() -> io::Result<()> {
+        let invocation = "0123456789abcdef0123456789abcdef";
+        let nonce = [7; 16];
+        let expected = StopContext {
+            guardian: 4000,
+            uid: 1000,
+            gid: 1001,
+            invocation,
+            child: 4001,
+            nonce: &nonce,
+            sequence: 0,
+        };
+        let sender = unix_ancillary::ScmCredentials::new(4000, 1000, 1001);
+        let value = serde_json::json!({"kind":"aswp-fixture-exec-held-1", "child":4001, "invocation":invocation, "nonce":journal_protocol::encoded(&nonce)});
+        let packet = |value: &serde_json::Value, sender| -> io::Result<activation_packet::Packet> {
+            Ok(activation_packet::Packet {
+                bytes: serde_json::to_vec(value).map_err(io::Error::other)?,
+                sender,
+            })
+        };
+        validate_exec(&packet(&value, sender)?, &expected)?;
+        for (field, wrong) in [
+            ("kind", serde_json::json!("aswp-fixture-stopped-1")),
+            ("child", serde_json::json!(4002)),
+            (
+                "invocation",
+                serde_json::json!("ffffffffffffffffffffffffffffffff"),
+            ),
+            (
+                "nonce",
+                serde_json::json!(journal_protocol::encoded(&[8; 16])),
+            ),
+            ("sequence", serde_json::json!(1)),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = wrong;
+            assert!(validate_exec(&packet(&changed, sender)?, &expected).is_err());
+        }
+        for field in ["kind", "child", "invocation", "nonce"] {
+            let mut changed = value.clone();
+            changed
+                .as_object_mut()
+                .ok_or_else(|| io::Error::other("missing test object"))?
+                .remove(field);
+            assert!(validate_exec(&packet(&changed, sender)?, &expected).is_err());
+        }
+        for sender in [
+            unix_ancillary::ScmCredentials::new(4002, 1000, 1001),
+            unix_ancillary::ScmCredentials::new(4000, 1002, 1001),
+            unix_ancillary::ScmCredentials::new(4000, 1000, 1002),
+        ] {
+            assert!(validate_exec(&packet(&value, sender)?, &expected).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn relay_readiness_preserves_the_packet_before_reporting_shutdown() -> io::Result<()> {

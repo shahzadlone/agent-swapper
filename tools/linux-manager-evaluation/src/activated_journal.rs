@@ -187,7 +187,7 @@ fn refused_lease(directory: &Path, invocation: &str, reason: &str) -> io::Result
     fs::write(parent.join(format!("{invocation}.lease-refused")), reason)
 }
 
-pub(crate) fn gated_ready(prefix: &str, directory: &Path) -> io::Result<()> {
+pub(crate) fn gated_check(prefix: &str, directory: &Path) -> io::Result<()> {
     activated_guardian::writer_check(prefix, directory)?;
     let peer = crate::activation_packet::peer(io::stdin())?;
     require(
@@ -205,6 +205,11 @@ pub(crate) fn gated_ready(prefix: &str, directory: &Path) -> io::Result<()> {
             "writer output is not the null device",
         )?;
     }
+    Ok(())
+}
+
+pub(crate) fn gated_ready(prefix: &str, directory: &Path) -> io::Result<()> {
+    gated_check(prefix, directory)?;
     fs::write(directory.join("ready.tmp"), std::process::id().to_string())?;
     fs::rename(directory.join("ready.tmp"), directory.join("ready"))?;
     Ok(())

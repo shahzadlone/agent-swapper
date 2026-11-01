@@ -3,6 +3,7 @@
 use crate::require;
 use nix::{
     sys::{
+        ptrace,
         signal::{SigSet, SigmaskHow, Signal, killpg, pthread_sigmask},
         wait::{WaitPidFlag, WaitStatus, waitpid},
     },
@@ -72,7 +73,15 @@ pub(crate) struct OwnedChild {
     child: Child,
     pub(crate) pid: Pid,
     reaped: bool,
+    trace: TracePhase,
     _thread: PhantomData<Rc<()>>,
+}
+#[derive(PartialEq, Eq)]
+enum TracePhase {
+    None,
+    Armed,
+    Held,
+    Detached,
 }
 impl OwnedChild {
     pub(crate) fn new(child: Child) -> io::Result<Self> {
@@ -80,6 +89,7 @@ impl OwnedChild {
             pid: Pid::from_raw(i32::try_from(child.id()).map_err(io::Error::other)?),
             child,
             reaped: false,
+            trace: TracePhase::None,
             _thread: PhantomData,
         })
     }
@@ -123,12 +133,59 @@ impl OwnedChild {
     pub(crate) fn resume(&self) -> io::Result<()> {
         require(!self.reaped, "cannot signal a reaped group leader")?;
         require(
+            matches!(self.trace, TracePhase::None | TracePhase::Detached),
+            "job resume cannot release an exec trace",
+        )?;
+        require(
             nix::unistd::getpgid(Some(self.pid))? == self.pid,
             "fixed child left its owned process group",
         )?;
         // Only the fixed direct child creates this group and never leaves it.
         // Its unreaped PID reserves the group ID. Not an arbitrary-job API.
         killpg(self.pid, Signal::SIGCONT)?;
+        Ok(())
+    }
+
+    #[allow(dead_code, reason = "only the exec-gated guardian uses tracing")]
+    pub(crate) fn arm_exec(&mut self, until: Instant) -> io::Result<()> {
+        require(
+            self.trace == TracePhase::None,
+            "exec trace already configured",
+        )?;
+        require(
+            self.next(until)? == WaitStatus::Stopped(self.pid, Signal::SIGSTOP),
+            "exec shim did not reach its initial trace stop",
+        )?;
+        ptrace::setoptions(
+            self.pid,
+            ptrace::Options::PTRACE_O_TRACEEXEC | ptrace::Options::PTRACE_O_EXITKILL,
+        )?;
+        ptrace::cont(self.pid, None)?;
+        self.trace = TracePhase::Armed;
+        Ok(())
+    }
+
+    #[allow(dead_code, reason = "only the exec-gated guardian uses tracing")]
+    pub(crate) fn hold_exec(&mut self, until: Instant) -> io::Result<()> {
+        require(self.trace == TracePhase::Armed, "exec trace is not armed")?;
+        require(
+            self.next(until)?
+                == WaitStatus::PtraceEvent(self.pid, Signal::SIGTRAP, nix::libc::PTRACE_EVENT_EXEC),
+            "original child did not report the exact exec event",
+        )?;
+        self.trace = TracePhase::Held;
+        Ok(())
+    }
+
+    #[allow(dead_code, reason = "only the exec-gated guardian uses tracing")]
+    pub(crate) fn release_exec(&mut self) -> io::Result<()> {
+        require(self.trace == TracePhase::Held, "exec stop is not held")?;
+        require(
+            self.poll()? == WaitStatus::StillAlive,
+            "exec-held child changed state",
+        )?;
+        ptrace::detach(self.pid, None)?;
+        self.trace = TracePhase::Detached;
         Ok(())
     }
 }

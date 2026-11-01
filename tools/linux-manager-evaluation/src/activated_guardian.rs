@@ -49,6 +49,7 @@ enum Request {
     Admit,
     Terminal,
     JobControl,
+    ExecControl,
 }
 
 fn request(channel: &OwnedFd) -> io::Result<Request> {
@@ -78,7 +79,7 @@ fn request(channel: &OwnedFd) -> io::Result<Request> {
             && Instant::now() < deadline
             && matches!(
                 packet,
-                b"GO\n" | b"BIND\n" | b"ADMIT\n" | b"PTY1\n" | b"PTY2\n"
+                b"GO\n" | b"BIND\n" | b"ADMIT\n" | b"PTY1\n" | b"PTY2\n" | b"PTY3\n"
             ),
         "invalid fixture activation request",
     )?;
@@ -87,6 +88,7 @@ fn request(channel: &OwnedFd) -> io::Result<Request> {
         b"ADMIT\n" => Request::Admit,
         b"PTY1\n" => Request::Terminal,
         b"PTY2\n" => Request::JobControl,
+        b"PTY3\n" => Request::ExecControl,
         _ => Request::Run,
     })
 }
@@ -192,8 +194,14 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
         net::send(&channel, &bytes, SendFlags::NOSIGNAL)? == bytes.len(),
         "incomplete activation offer",
     )?;
-    if request == Request::JobControl {
-        return crate::activated_job_control::serve(&channel, prefix, &run, &invocation);
+    if matches!(request, Request::JobControl | Request::ExecControl) {
+        return crate::activated_job_control::serve(
+            &channel,
+            prefix,
+            &run,
+            &invocation,
+            request == Request::ExecControl,
+        );
     }
     if matches!(request, Request::Admit | Request::Terminal) {
         return crate::activated_journal::serve(
@@ -327,17 +335,20 @@ pub(crate) fn dispatch() -> Option<io::Result<()>> {
             )?;
             crate::activated_journal::writer(&args[1], Path::new(&args[2]))
         })()),
-        Some("--activation-terminal-shim" | "--activation-job-shim") => Some((|| {
-            require(
-                args.len() == 3,
-                "terminal shim requires prefix and directory",
-            )?;
-            crate::activated_terminal::shim(
-                &args[1],
-                Path::new(&args[2]),
-                args[0] == "--activation-job-shim",
-            )
-        })()),
+        Some("--activation-terminal-shim" | "--activation-job-shim" | "--activation-exec-shim") => {
+            Some((|| {
+                require(
+                    args.len() == 3,
+                    "terminal shim requires prefix and directory",
+                )?;
+                crate::activated_terminal::shim(
+                    &args[1],
+                    Path::new(&args[2]),
+                    args[0] != "--activation-terminal-shim",
+                    args[0] == "--activation-exec-shim",
+                )
+            })())
+        }
         Some("--activation-terminal-target" | "--activation-job-target") => Some((|| {
             require(
                 args.len() == 4,
@@ -386,6 +397,9 @@ mod tests {
             (b"ADMIT\n".as_slice(), false, true),
             (b"PTY1\n".as_slice(), false, true),
             (b"PTY2\n".as_slice(), false, true),
+            (b"PTY3\n".as_slice(), false, true),
+            (b"PTY3\nX".as_slice(), false, false),
+            (b"PTY3\n".as_slice(), true, false),
             (b"PTY2\nX".as_slice(), false, false),
             (b"PTY2\n".as_slice(), true, false),
             (b"PTY1\nX".as_slice(), false, false),

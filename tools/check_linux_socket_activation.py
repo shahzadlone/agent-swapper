@@ -545,7 +545,8 @@ def suite():
                              'guardian_sigkill_retires_writer_without_clearing_journal',
                              'client_sigkill_retires_writer_without_running_client_cleanup',
                              'inner_terminal_exec_is_journal_gated_and_retires_with_master_open',
-                             'guardian_session_stops_resume_and_retire_without_releasing_journal_policy'):
+                             'guardian_session_stops_resume_and_retire_without_releasing_journal_policy',
+                             'exec_stop_precedes_spawn_journal_and_release_or_retirement'):
                     result = owned_fixture(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
                                     '--lib', 'store::linux_activated_journal_tests::' + test,
                                     '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],

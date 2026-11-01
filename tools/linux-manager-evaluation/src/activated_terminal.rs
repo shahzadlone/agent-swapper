@@ -20,7 +20,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) fn shim(prefix: &str, directory: &Path, guardian_session: bool) -> io::Result<()> {
+pub(crate) fn shim(
+    prefix: &str,
+    directory: &Path,
+    guardian_session: bool,
+    exec_gate: bool,
+) -> io::Result<()> {
+    if exec_gate {
+        require(
+            guardian_session,
+            "exec gate requires guardian job ownership",
+        )?;
+        activated_journal::gated_check(prefix, directory)?;
+        require(
+            fs::read_dir("/proc/self/task")?
+                .collect::<io::Result<Vec<_>>>()?
+                .len()
+                == 1,
+            "exec shim is not single-threaded",
+        )?;
+        nix::sys::ptrace::traceme()?;
+        nix::sys::signal::raise(nix::sys::signal::Signal::SIGSTOP)?;
+    }
     if guardian_session {
         crate::job_control::dispositions()?;
         let mask = nix::sys::signal::SigSet::thread_get_mask()?;
@@ -167,6 +188,14 @@ pub(crate) fn target(
     guardian_session: bool,
 ) -> io::Result<()> {
     activated_guardian::writer_check(prefix, directory)?;
+    require(
+        fs::read_to_string("/proc/self/status")?
+            .lines()
+            .find_map(|line| line.strip_prefix("TracerPid:"))
+            .map(str::trim)
+            == Some("0"),
+        "target started with a tracer attached",
+    )?;
     require(
         nonce.len() == 32
             && nonce

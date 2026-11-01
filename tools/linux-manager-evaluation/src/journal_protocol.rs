@@ -10,6 +10,7 @@ use std::{
 const START: &[u8] = b"ASWP-FIXTURE-GO-1";
 // Eight-byte versioned tag + nonce + sequence fits the shared 32-byte frame.
 const RESUME: &[u8] = b"ASWPRSM1";
+const EXEC_RELEASE: &[u8] = b"ASWPEXE1";
 pub(crate) fn start_packet(nonce: &[u8; 16]) -> Vec<u8> {
     [START, nonce].concat()
 }
@@ -18,34 +19,48 @@ pub(crate) fn resume_packet(nonce: &[u8; 16], sequence: u64) -> Vec<u8> {
     [RESUME, nonce, &sequence.to_be_bytes()].concat()
 }
 
+pub(crate) fn exec_release_packet(nonce: &[u8; 16], child: u32) -> Vec<u8> {
+    [EXEC_RELEASE, nonce, &u64::from(child).to_be_bytes()].concat()
+}
+
+pub(crate) fn receive_exec_release(
+    channel: impl AsFd,
+    nonce: &[u8; 16],
+    child: u32,
+    deadline: Instant,
+) -> io::Result<()> {
+    require(child > 1, "exec release requires an original child")?;
+    receive_frame(channel, &exec_release_packet(nonce, child), deadline)
+}
+
 pub(crate) fn receive_resume(
     channel: impl AsFd,
     nonce: &[u8; 16],
     sequence: u64,
     deadline: Instant,
 ) -> io::Result<()> {
+    require(sequence > 0, "resume requires a stop sequence")?;
+    receive_frame(channel, &resume_packet(nonce, sequence), deadline)
+}
+
+fn receive_frame(channel: impl AsFd, expected: &[u8], deadline: Instant) -> io::Result<()> {
     require(
-        sequence > 0
-            && net::sockopt::socket_type(&channel)? == net::SocketType::SEQPACKET
+        net::sockopt::socket_type(&channel)? == net::SocketType::SEQPACKET
             && !net::sockopt::socket_passcred(&channel)?
             && !rustix::fs::fcntl_getfl(&channel)?.contains(rustix::fs::OFlags::NONBLOCK),
-        "fixture resume requires a blocking credential-disabled channel and stop sequence",
+        "fixture gate requires a blocking credential-disabled channel",
     )?;
     let remaining = deadline
         .checked_duration_since(Instant::now())
         .filter(|value| !value.is_zero())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "fixture resume expired"))?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "fixture release gate expired"))?;
     let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
     net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
     let result = (|| {
         if withdrawn(&channel)? {
             return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
         }
-        crate::admission_transport::receive_control_until(
-            &channel,
-            &resume_packet(nonce, sequence),
-            deadline,
-        )
+        crate::admission_transport::receive_control_until(&channel, expected, deadline)
     })();
     let restored =
         net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, previous)
@@ -170,6 +185,91 @@ mod tests {
     use super::*;
     use crate::admission_transport as transport;
     use std::{os::fd::AsFd, thread, time::Duration};
+
+    #[test]
+    fn exec_release_refuses_resume_wrong_launch_rights_empty_and_overlong_frames() -> io::Result<()>
+    {
+        for (bytes, rights, accepted) in [
+            (exec_release_packet(&[4; 16], 4001), false, true),
+            (exec_release_packet(&[4; 16], 4002), false, false),
+            (exec_release_packet(&[5; 16], 4001), false, false),
+            (resume_packet(&[4; 16], 4001), false, false),
+            (start_packet(&[4; 16]), false, false),
+            (exec_release_packet(&[4; 16], 4001), true, false),
+            (Vec::new(), false, false),
+            (
+                [exec_release_packet(&[4; 16], 4001).as_slice(), b"X"].concat(),
+                false,
+                false,
+            ),
+        ] {
+            let (sender, receiver) = transport::pair()?;
+            let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
+            let (capability, witness) = transport::pair()?;
+            transport::send(
+                &sender,
+                &bytes,
+                &if rights {
+                    vec![capability.as_fd()]
+                } else {
+                    vec![]
+                },
+            )?;
+            drop(capability);
+            net::shutdown(&sender, net::Shutdown::Write)?;
+            let result = receive_exec_release(
+                &receiver,
+                &[4; 16],
+                4001,
+                Instant::now() + Duration::from_secs(1),
+            );
+            assert_eq!(result.is_ok(), accepted, "exec release result: {result:?}");
+            if let Err(error) = result {
+                assert!(!is_withdrawal(&error));
+            }
+            assert!(!net::sockopt::socket_passcred(&receiver)?);
+            assert_eq!(
+                net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+                previous
+            );
+            let until = Instant::now() + Duration::from_secs(1);
+            while !transport::eof(&witness)? {
+                require(
+                    Instant::now() < until,
+                    "refused exec release retained a transferred capability",
+                )?;
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let (sender, receiver) = transport::pair()?;
+        drop(sender);
+        let error = receive_exec_release(
+            &receiver,
+            &[4; 16],
+            4001,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .err()
+        .ok_or_else(|| io::Error::other("closure released exec"))?;
+        assert!(is_withdrawal(&error));
+        let (_held, receiver) = transport::pair()?;
+        let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
+        assert!(
+            receive_exec_release(
+                &receiver,
+                &[4; 16],
+                4001,
+                Instant::now() + Duration::from_millis(20)
+            )
+            .is_err()
+        );
+        assert!(!net::sockopt::socket_passcred(&receiver)?);
+        assert_eq!(
+            net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+            previous
+        );
+        Ok(())
+    }
 
     #[test]
     fn resume_refuses_replays_foreign_nonces_rights_and_empty_records() -> io::Result<()> {
