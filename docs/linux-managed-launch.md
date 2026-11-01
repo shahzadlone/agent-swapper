@@ -338,6 +338,17 @@ run continues to block reuse after cleanup and reopening. They will use a
 cooperating gated writer, not claim provider exec confirmation. Existing
 operator-attestation behavior need not change to complete this checkpoint.
 
+### Integrated Rust activation evidence
+
+The complete `4cda3ed` checkpoint passed
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539):
+Linux, macOS and Windows tests; both Ubuntu manager suites; namespace evidence;
+dependency policies; candidate builds and independent reproducibility on all
+three platforms. Branch provenance attestation was skipped by policy. The
+checkpoint is integrated into main; main's provenance run is a separate gate.
+No provider login, normal managed launch, public release or signing was enabled.
+The subsequent real lease/journal work remains under qualification separately.
+
 ### Activated journal checkpoint under qualification
 
 The client library now owns bound, prepared, running and closed states. Its
@@ -366,8 +377,8 @@ Local protocol, wrong-parent/group, duplicate-socket and runtime-boundary
 regressions pass. Both native manager jobs passed the initial activated journal
 checkpoint at `9ca328e` in
 [run 41263488760](https://github.com/shahzadlone/agent-swapper/actions/runs/41263488760).
-Focused Opus review and the remaining platform/packaging checks are pending. The library is a Linux-only core dev
-dependency; CI checks matching audited transport/runtime pins in both lockfiles
+Focused Opus review and the remaining platform/packaging checks are pending.
+The library is a Linux-only core dev dependency; CI checks matching audited transport/runtime pins in both lockfiles
 and excludes the evaluation library, zbus and Tokio from normal/build graphs.
 
 ### Next: abrupt loss, then terminal integration
