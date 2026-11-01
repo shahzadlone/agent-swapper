@@ -54,7 +54,9 @@ def retired(owned, root):
         # Bash readline changes terminal modes while displaying its prompt.
         # Compare the complete command-time snapshots on either side of the
         # relay; direct probes compare every original termios field instead.
-        assert (root / 'after').read_text() == (root / 'before').read_text()
+        owned.wait(lambda: (root / 'after').exists() and (root / 'after').stat().st_size > 0)
+        before, after = (root / 'before').read_text(), (root / 'after').read_text()
+        assert after == before, f'terminal snapshots differ: before={before!r}; after={after!r}'
     else:
         assert termios.tcgetattr(owned.master) == owned.original
 
