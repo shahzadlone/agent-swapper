@@ -11,7 +11,10 @@ use rustix::{
 use std::{
     fs,
     io::{self, Write},
-    os::{fd::AsFd, unix::process::CommandExt},
+    os::{
+        fd::{AsFd, BorrowedFd},
+        unix::process::CommandExt,
+    },
     path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -22,7 +25,7 @@ pub(crate) fn shim(prefix: &str, directory: &Path) -> io::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(18);
     let slave = transport::receive_until(io::stdin().as_fd(), deadline)?;
     let nonce = journal_protocol::receive_start(io::stdin().as_fd(), deadline)?;
-    require(termios::isatty(&slave), "shim descriptor is not a terminal")?;
+    crate::terminal::validate_slave(&slave)?;
     rustix::process::setsid()?;
     // The safe ioctl uses argument zero: never steal a controlling terminal.
     rustix::process::ioctl_tiocsctty(&slave)?;
@@ -42,22 +45,23 @@ pub(crate) fn shim(prefix: &str, directory: &Path) -> io::Result<()> {
     Err(command.exec())
 }
 
-fn line(deadline: Instant) -> io::Result<Vec<u8>> {
+fn line(input: BorrowedFd<'_>, deadline: Instant) -> io::Result<Vec<u8>> {
     let mut result = Vec::new();
     while result.len() < 256 {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "terminal input expired"))?;
         let timeout = Timespec::try_from(remaining).map_err(io::Error::other)?;
-        let stdin = io::stdin();
-        let mut ready = [PollFd::new(&stdin, PollFlags::IN)];
-        require(
-            poll(&mut ready, Some(&timeout))? == 1,
-            "terminal input deadline expired",
-        )?;
+        let mut ready = [PollFd::new(&input, PollFlags::IN)];
+        if poll(&mut ready, Some(&timeout))? != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "terminal input deadline expired",
+            ));
+        }
         let mut byte = [0_u8];
         require(
-            rustix::io::read(&stdin, &mut byte)? == 1,
+            rustix::io::read(input, &mut byte)? == 1,
             "terminal input ended",
         )?;
         if byte[0] == b'\n' {
@@ -66,6 +70,50 @@ fn line(deadline: Instant) -> io::Result<Vec<u8>> {
         result.push(byte[0]);
     }
     Err(io::Error::other("terminal fixture input exceeds bounds"))
+}
+
+struct ModeGuard<'a> {
+    input: BorrowedFd<'a>,
+    saved: Option<termios::Termios>,
+}
+impl<'a> ModeGuard<'a> {
+    fn apply(input: BorrowedFd<'a>, mode: &termios::Termios) -> io::Result<Self> {
+        let saved = termios::tcgetattr(input)?;
+        termios::tcsetattr(input, termios::OptionalActions::Now, mode)?;
+        Ok(Self {
+            input,
+            saved: Some(saved),
+        })
+    }
+    fn restore(mut self) -> io::Result<()> {
+        if let Some(saved) = &self.saved {
+            termios::tcsetattr(self.input, termios::OptionalActions::Now, saved)?;
+        }
+        self.saved = None;
+        Ok(())
+    }
+}
+impl Drop for ModeGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(saved) = &self.saved {
+            let _ = termios::tcsetattr(self.input, termios::OptionalActions::Now, saved);
+        }
+    }
+}
+
+fn mode_line(
+    input: BorrowedFd<'_>,
+    output: &mut impl Write,
+    mode: &termios::Termios,
+    prompt: &[u8],
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    let guard = ModeGuard::apply(input, mode)?;
+    output.write_all(prompt)?;
+    output.flush()?;
+    let result = line(input, deadline);
+    guard.restore()?;
+    result
 }
 
 pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<()> {
@@ -78,13 +126,18 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
         "invalid terminal nonce",
     )?;
     let pid = rustix::process::getpid();
+    let input_stat = rustix::fs::fstat(io::stdin())?;
     for stream in [
         io::stdin().as_fd(),
         io::stdout().as_fd(),
         io::stderr().as_fd(),
     ] {
+        crate::terminal::validate_slave(stream)?;
+        let stat = rustix::fs::fstat(stream)?;
         require(
-            termios::isatty(stream)
+            stat.st_dev == input_stat.st_dev
+                && stat.st_ino == input_stat.st_ino
+                && stat.st_rdev == input_stat.st_rdev
                 && termios::tcgetsid(stream)? == pid
                 && termios::tcgetpgrp(stream)? == pid,
             "target does not own its controlling terminal",
@@ -112,7 +165,7 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
     output.flush()?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        match line(deadline)?.as_slice() {
+        match line(io::stdin().as_fd(), deadline)?.as_slice() {
             b"size" => {
                 let size = termios::tcgetwinsize(io::stdin())?;
                 writeln!(output, "SIZE:{}:{}", size.ws_row, size.ws_col)?;
@@ -122,27 +175,88 @@ pub(crate) fn target(prefix: &str, directory: &Path, nonce: &str) -> io::Result<
                 hidden
                     .local_modes
                     .remove(termios::LocalModes::ECHO | termios::LocalModes::ECHONL);
-                termios::tcsetattr(io::stdin(), termios::OptionalActions::Now, &hidden)?;
-                write!(output, "SECRET>")?;
-                output.flush()?;
-                let input = line(deadline);
-                termios::tcsetattr(io::stdin(), termios::OptionalActions::Now, &saved)?;
-                require(!input?.is_empty(), "empty fixture secret")?;
+                let input = mode_line(
+                    io::stdin().as_fd(),
+                    &mut output,
+                    &hidden,
+                    b"SECRET>",
+                    deadline,
+                )?;
+                require(!input.is_empty(), "empty fixture secret")?;
                 writeln!(output, "SECRET-OK")?;
             }
             b"raw" => {
                 let mut raw = saved.clone();
                 raw.make_raw();
-                termios::tcsetattr(io::stdin(), termios::OptionalActions::Now, &raw)?;
-                write!(output, "RAW>")?;
-                output.flush()?;
-                let input = line(deadline);
-                termios::tcsetattr(io::stdin(), termios::OptionalActions::Now, &saved)?;
-                let encoded: String = input?.iter().map(|b| format!("{b:02x}")).collect();
+                let input = mode_line(io::stdin().as_fd(), &mut output, &raw, b"RAW>", deadline)?;
+                let encoded: String = input.iter().map(|b| format!("{b:02x}")).collect();
                 writeln!(output, "RAW:{encoded}")?;
             }
             _ => return Err(io::Error::other("unknown fixed terminal command")),
         }
         output.flush()?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn same_mode(actual: termios::Termios, expected: &termios::Termios) {
+        assert_eq!(actual.input_modes, expected.input_modes);
+        assert_eq!(actual.output_modes, expected.output_modes);
+        assert_eq!(actual.control_modes, expected.control_modes);
+        assert_eq!(actual.local_modes, expected.local_modes);
+        assert_eq!(
+            format!("{:?}", actual.special_codes),
+            format!("{:?}", expected.special_codes)
+        );
+        assert_eq!(actual.input_speed(), expected.input_speed());
+        assert_eq!(actual.output_speed(), expected.output_speed());
+    }
+    #[test]
+    fn bounded_input_restores_modes_on_timeout_overflow_and_prompt_failure() -> io::Result<()> {
+        let (master, slave) = crate::terminal::pair()?;
+        let original = termios::tcgetattr(&slave)?;
+        let mut raw = original.clone();
+        raw.make_raw();
+        let error = mode_line(
+            slave.as_fd(),
+            &mut Vec::new(),
+            &raw,
+            b"RAW>",
+            Instant::now() + Duration::from_millis(20),
+        )
+        .err()
+        .ok_or_else(|| io::Error::other("timeout accepted"))?;
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        same_mode(termios::tcgetattr(&slave)?, &original);
+        // A read-only regular file fails the prompt write after mode entry.
+        let path = tempfile::NamedTempFile::new()?;
+        assert!(
+            mode_line(
+                slave.as_fd(),
+                &mut fs::File::open(path.path())?,
+                &raw,
+                b"RAW>",
+                Instant::now() + Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        same_mode(termios::tcgetattr(&slave)?, &original);
+        rustix::io::write(&master, &[b'x'; 256])?;
+        let error = mode_line(
+            slave.as_fd(),
+            &mut Vec::new(),
+            &raw,
+            b"RAW>",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .err()
+        .ok_or_else(|| io::Error::other("oversized input accepted"))?;
+        assert_eq!(error.to_string(), "terminal fixture input exceeds bounds");
+        same_mode(termios::tcgetattr(&slave)?, &original);
+        drop(master);
+        assert!(line(slave.as_fd(), Instant::now() + Duration::from_secs(1)).is_err());
+        Ok(())
     }
 }

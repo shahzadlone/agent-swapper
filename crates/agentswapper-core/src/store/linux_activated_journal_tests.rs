@@ -121,8 +121,12 @@ fn terminal_output(master: impl AsFd, suffix: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
     while !output.ends_with(suffix) {
         assert!(output.len() < 4096, "terminal output exceeds fixture bound");
-        let timeout =
-            Timespec::try_from(deadline.checked_duration_since(Instant::now()).unwrap()).unwrap();
+        let timeout = Timespec::try_from(
+            deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| panic!("terminal output expired: {output:?}")),
+        )
+        .unwrap();
         let mut ready = [PollFd::new(&master, PollFlags::IN)];
         assert_eq!(
             poll(&mut ready, Some(&timeout)).unwrap(),
@@ -130,7 +134,8 @@ fn terminal_output(master: impl AsFd, suffix: &[u8]) -> Vec<u8> {
             "terminal output timed out: {output:?}"
         );
         let mut bytes = [0; 512];
-        let read = rustix::io::read(&master, &mut bytes).unwrap();
+        let read = rustix::io::read(&master, &mut bytes)
+            .unwrap_or_else(|error| panic!("terminal read failed: {error}; output: {output:?}"));
         assert!(
             read > 0,
             "terminal closed before expected output: {output:?}"
@@ -144,11 +149,61 @@ fn terminal_input(master: impl AsFd, input: &[u8]) {
     assert_eq!(rustix::io::write(master, input).unwrap(), input.len());
 }
 
+fn terminal_gated(master: impl AsFd, pid: u32) {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    assert_eq!(
+        rustix::termios::tcgetsid(&master).err(),
+        Some(rustix::io::Errno::NOTTY)
+    );
+    let args = fs::read(format!("/proc/{pid}/cmdline")).unwrap();
+    assert_eq!(
+        args.split(|b| *b == 0).nth(1),
+        Some(b"--activation-terminal-shim".as_slice())
+    );
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let fields: Vec<_> = stat
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .collect();
+    assert_ne!(fields[3], pid.to_string());
+    assert_eq!(fields[4], "0");
+    let mut ready = [PollFd::new(&master, PollFlags::IN)];
+    let timeout = Timespec::try_from(Duration::from_millis(200)).unwrap();
+    assert_eq!(poll(&mut ready, Some(&timeout)).unwrap(), 0);
+}
+
+fn terminal_retired(master: impl AsFd) {
+    assert_eq!(
+        rustix::termios::tcgetsid(&master).err(),
+        Some(rustix::io::Errno::NOTTY)
+    );
+    // A pending Ctrl-C echo can remain after the last slave closes; drain it
+    // within a small bound before requiring the kernel's final EIO.
+    let mut drained = Vec::new();
+    loop {
+        let mut bytes = [0; 64];
+        match rustix::io::read(&master, &mut bytes) {
+            Ok(n) if n > 0 => {
+                drained.extend_from_slice(&bytes[..n]);
+                assert!(drained.len() < 256);
+            }
+            Err(rustix::io::Errno::IO) => break,
+            result => panic!("retired PTY did not reach EIO: {result:?}"),
+        }
+    }
+    assert!(
+        drained.is_empty() || drained == b"^C",
+        "unexpected terminal tail: {drained:?}"
+    );
+}
+
 #[test]
 #[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
 fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
     let (prefix, directory) = environment();
-    for finish in ["disconnect", "interrupt", "journal"] {
+    for finish in ["disconnect", "interrupt", "journal", "guardian"] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");
         let mut store = Store::open(&root).unwrap();
@@ -160,6 +215,7 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
         // cannot masquerade as successful control-channel cleanup.
         let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
         quiescent(&prepared, &directory);
+        terminal_gated(&master, pid);
         assert!(!scope.join("final-exec").exists());
         let blocker = Connection::open(root.join("registry.sqlite3")).unwrap();
         if finish == "journal" {
@@ -170,7 +226,13 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
         let start = prepared.start_after(nonce, |child| {
             assert_eq!(child, pid);
             journal_while_gated(&mut store, &run, child, &directory, &id)?;
+            terminal_gated(&master, child);
             assert!(!scope.join("final-exec").exists());
+            if finish == "disconnect" {
+                terminal_input(&master, b"size\n");
+                assert_eq!(terminal_output(&master, b"size\r\n"), b"size\r\n");
+                terminal_gated(&master, child);
+            }
             Ok::<(), Error>(())
         });
         if finish == "journal" {
@@ -198,16 +260,37 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
             blocker.execute_batch("ROLLBACK").unwrap();
         } else {
             let running = start.unwrap();
+            // This independent observer owns no activation control descriptor.
             let nonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
-            let output = terminal_output(&master, b"\x1b[0m\r\n");
-            assert_eq!(
-                output,
-                format!("\x1b[32mREADY:{pid}:{nonce}:→\x1b[0m\r\n").as_bytes()
-            );
+            let mut expected = format!("\x1b[32mREADY:{pid}:{nonce}:→\x1b[0m\r\n");
+            let suffix = if finish == "disconnect" {
+                expected.push_str("SIZE:24:80\r\n");
+                b"SIZE:24:80\r\n".as_slice()
+            } else {
+                b"\x1b[0m\r\n".as_slice()
+            };
+            assert_eq!(terminal_output(&master, suffix), expected.as_bytes());
             assert_eq!(
                 fs::read_to_string(scope.join("final-exec")).unwrap(),
                 format!("{pid}:{nonce}")
             );
+            let witness =
+                aswp_linux_manager_evaluation::journal_client::Witness::bind(&prefix, &id, pid)
+                    .unwrap();
+            assert_eq!(
+                rustix::termios::tcgetsid(&master).unwrap().as_raw_pid(),
+                pid as i32
+            );
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+            let fields: Vec<_> = stat
+                .rsplit_once(") ")
+                .unwrap()
+                .1
+                .split_whitespace()
+                .collect();
+            assert_eq!(fields[3], pid.to_string());
+            assert_ne!(fields[4], "0");
+            assert_eq!(fields[5], pid.to_string());
             rustix::termios::tcsetwinsize(
                 &master,
                 rustix::termios::Winsize {
@@ -219,19 +302,27 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
             )
             .unwrap();
             terminal_input(&master, b"size\n");
-            terminal_output(&master, b"SIZE:41:113\r\n");
+            assert_eq!(
+                terminal_output(&master, b"SIZE:41:113\r\n"),
+                b"size\r\nSIZE:41:113\r\n"
+            );
             terminal_input(&master, b"secret\n");
             terminal_output(&master, b"SECRET>");
             terminal_input(&master, b"fake-password-123\n");
             assert_eq!(terminal_output(&master, b"SECRET-OK\r\n"), b"SECRET-OK\r\n");
             terminal_input(&master, b"raw\n");
-            terminal_output(&master, b"RAW>");
-            let bytes = "é→\x1b[A\x03".as_bytes();
+            assert_eq!(terminal_output(&master, b"RAW>"), b"raw\r\nRAW>");
+            let bytes = "é→\x1b[A\x03\r\x7f\x15\x17\x04\x16\x13\x11\x1c\x1a".as_bytes();
             terminal_input(&master, &[bytes, b"\n"].concat());
             let encoded: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(
                 terminal_output(&master, b"\r\n"),
                 format!("RAW:{encoded}\r\n").as_bytes()
+            );
+            terminal_input(&master, b"size\n");
+            assert_eq!(
+                terminal_output(&master, b"SIZE:41:113\r\n"),
+                b"size\r\nSIZE:41:113\r\n"
             );
             assert!(matches!(store.acquire_lease(profile), Err(Error::Busy)));
             if finish == "interrupt" {
@@ -249,22 +340,29 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
                     "None:Some(2)"
                 );
             }
-            assert!(
-                running
-                    .close()
-                    .retire()
-                    .unwrap()
-                    .connection_close_error
-                    .is_none()
-            );
+            let closed = if finish == "guardian" {
+                terminal_input(&master, b"raw\n");
+                assert_eq!(terminal_output(&master, b"RAW>"), b"raw\r\nRAW>");
+                running.crash_guardian().unwrap()
+            } else {
+                running.close()
+            };
+            assert!(closed.retire().unwrap().connection_close_error.is_none());
+            assert!(witness.retire().unwrap().connection_close_error.is_none());
             if finish == "disconnect" {
                 assert_eq!(
                     fs::read_to_string(scope.join("guardian-clean-eof")).unwrap(),
                     id.invocation
                 );
                 assert!(!scope.join("target-exit").exists());
+            } else {
+                assert!(!scope.join("guardian-clean-eof").exists());
+                if finish == "guardian" {
+                    assert!(!scope.join("target-exit").exists());
+                }
             }
         }
+        terminal_retired(&master);
         unresolved(&store, profile, &run);
         drop(blocker);
         drop(store);

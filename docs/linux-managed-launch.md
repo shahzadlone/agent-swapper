@@ -567,3 +567,43 @@ These checks do not qualify a caller-terminal relay, SIGWINCH handling,
 suspend/resume, shell foreground restoration, long sessions, arbitrary exec
 failure reporting or provider login/refresh behavior. Normal Linux launches
 remain uncontained.
+
+### Terminal source-review follow-up
+
+The complete base terminal pipeline at `720372b` passed in
+[run 41266991013](https://github.com/shahzadlone/agent-swapper/actions/runs/41266991013).
+Opus 5.5 xhigh then found a possible torn read of the exit marker and several
+tests that did not fully establish their stated terminal behavior. The marker
+now uses atomic rename. The received capability stays local until sender,
+invocation, descriptor and kernel child checks pass; it is never inspected as
+a terminal before message authentication or retained on a refused prepare.
+
+Master-negative tests now reach the actual ioctl with valid descriptor flags.
+Slave checks require a devpts character TTY that refuses the master-only
+TIOCGPTN operation; all standard streams must identify the same slave inode.
+This avoids relying on an assumed device-major range. A mode guard restores
+the inner terminal on prompt-write failure, read timeout and oversized input;
+these failure paths now have local tests.
+
+The hosted test independently observes no controlling session, a shim argv,
+no controlling device and no terminal output during the successful journal
+callback. After GO it observes the new session and foreground group through
+kernel/procfs data and binds a separate manager/process witness. Echo must be
+present before hiding input and after both hidden and raw input. The raw
+payload includes line-editing, signal, newline-translation and flow-control
+bytes. One case queues typeahead before GO, observes its line-discipline echo
+while the shim remains gated, and requires the command response only after
+the target starts. No implicit flush is added that could lose input racing GO.
+
+A fourth ending kills the original guardian through its retained pidfd while
+the target is in raw mode. All endings require master EIO after retirement;
+that is evidence of no remaining slave holder, not by itself evidence that
+the target never executed. Scope and child retirement still leave the journal
+unresolved. Normal target writes can block until the guardian's bounded
+lifetime and manager cleanup; this fixed fixture is not a general relay.
+
+The strengthened revision passes 37 library tests, 26 binary tests and strict
+Clippy locally. Its revised hosted terminal case remains pending. Separately,
+the prior crash/wake-up checkpoint `9fb76b0` passed the full platform/package
+pipeline in [run 41266261801](https://github.com/shahzadlone/agent-swapper/actions/runs/41266261801)
+and was integrated into main as `2e90693`.
