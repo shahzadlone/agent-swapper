@@ -35,7 +35,7 @@ The terminal-guard branch's Ubuntu 24.04 job in
 [run 41280763165](https://github.com/shahzadlone/agent-swapper/actions/runs/41280763165)
 refused installation because that runner's `/run` mount was noexec. Its local
 terminal cases and Ubuntu 22.04 manager job passed. The disposable fixture now
-puts its executable image under protected `/opt`; its socket, unit files and
+puts its executable image under protected `/usr/lib`; its socket, unit files and
 ownership marker stay under `/run`. Both the installer and Rust guardian check
 the new root-owned, non-writable parent. Installation still refuses a noexec
 image filesystem; no host mount is changed. Exclusive creation, recorded image
@@ -68,3 +68,9 @@ The checks do not make cancellation atomic with a later successful send.
 All 65 isolated Rust tests, 14 coordinator tests and strict qualification Clippy
 pass locally for the admission correction. The expanded 45-case native manager
 suite is pending; this remains qualification code, not a production launcher.
+
+The first alternate-path run, 41281817958, refused `/opt` on both hosted
+runners because that directory did not meet the root-owned/non-writable
+requirement. The correction uses `/usr/lib` and validates every ancestor,
+including `/usr`; it does not loosen ownership or mode policy. Each refusal
+still occurs before installation. Native qualification of this revision is pending.
