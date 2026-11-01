@@ -188,3 +188,14 @@ opaque-retirement tests. Mutable-template refusal still requires no accepted
 connection and restores the original mode. The complete native activation suite
 must qualify this new path; local controls do not substitute for that result.
 No local root service, provider account or production installer is used.
+
+The first complete installed-policy run at `541f06c` passed activation and all
+eleven journal/receipt controls on both native runners, then exceeded the
+six-minute aggregate activation/terminal step limit. Repeated full-image hashing
+was running in an unoptimized dependency build. A local ordinary-user read-only
+measurement of the same protected 63,398,224-byte system file took 1.28–1.42
+seconds per digest before optimizing `sha2 0.10.9`, and 0.080–0.097 seconds after.
+The image was never executed. Both development workspaces now optimize that
+pinned dependency; release hashing already uses the optimized release profile.
+All file checks, digest bounds and fixture deadlines remain in effect. The
+complete native rerun must establish whether the aggregate timeout is resolved.
