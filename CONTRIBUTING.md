@@ -38,7 +38,10 @@ identifiers. The core and CLI forbid unsafe Rust. The experimental Windows
 security crate has one explicit FFI exception, with ownership/safety comments
 and unsafe-block linting; its parser still forbids unsafe Rust. Read the
 [boundary decision and qualification gates](docs/windows-acl.md) before changing
-it or adding any dependency on it. Do not commit test
+it or adding any dependency on it. The Linux origin candidate has a separate,
+small read-only FFI boundary for fixed namespace and credential queries; review
+its [contract and qualification gates](docs/linux-origin.md) before integration.
+Do not commit test
 credentials, private state, or recorded production sessions.
 
 Review snapshot diffs before accepting them. Commit proptest regression seeds;

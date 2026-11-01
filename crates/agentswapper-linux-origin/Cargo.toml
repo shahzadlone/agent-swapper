@@ -1,0 +1,26 @@
+[package]
+name = "agentswapper-linux-origin"
+description = "Read-only, thread-bound Linux namespace origin observations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+qualification = []
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "=0.2.191"
+rustix = { version = "=1.1.6", features = ["fs", "process", "thread"] }
+
+# Only ffi.rs may call the fixed, read-only native operations. No namespace,
+# credential, mount or capability mutation API is exposed by this crate.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+undocumented_unsafe_blocks = "deny"

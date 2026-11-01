@@ -331,3 +331,12 @@ graphs and from the helper runtime's dependencies. The boundary check also refus
 application, encryption, database and fixture-only transport dependencies in the
 new manager crate. Production integration still needs a separate policy/launch
 consumer and its own package and platform evidence.
+
+The Linux origin candidate reuses pinned libc 0.2.191 and rustix 1.1.6, adding
+Rustix's `thread` feature for safe current-TID and capability queries. Registry
+versions are unchanged. A small module owns the fixed namespace-query ioctls and
+credential queries not exposed by Rustix; unsafe code is denied elsewhere in
+the crate and each native operation documents its ownership and safety contract.
+It does not expose namespace/credential mutation or arbitrary ioctl calls and is
+not consumed by the production launcher yet. See [namespace origin](linux-origin.md)
+for the primary kernel contracts, review and pending native qualification.

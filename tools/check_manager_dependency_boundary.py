@@ -52,12 +52,13 @@ def check():
     present = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
     if {'aswp-linux-manager-evaluation', 'agentswapper-core', 'agentswapper-cli', 'rusqlite', 'age', 'unix-ancillary', 'fuxix'} & present:
         raise RuntimeError('Read-only manager transport acquired application or fixture dependencies')
-    for package in ('agentswapper-core', 'agentswapper-cli', 'agentswapper-linux-runtime', 'agentswapper-linux-manager'):
+    for package in ('agentswapper-core', 'agentswapper-cli', 'agentswapper-linux-runtime', 'agentswapper-linux-manager',
+                    'agentswapper-linux-origin'):
         result = subprocess.run(['cargo', '+1.98.0', 'tree', '--locked', '-p', package,
                                  '--edges', 'normal,build', '--prefix', 'none', '--format', '{p} features=[{f}]'],
                                 cwd=root, capture_output=True, text=True, check=True, timeout=60)
         for line in result.stdout.splitlines():
-            if line.startswith(('agentswapper-linux-runtime ', 'agentswapper-linux-manager ')):
+            if line.startswith(('agentswapper-linux-runtime ', 'agentswapper-linux-manager ', 'agentswapper-linux-origin ')):
                 features = line.split('features=[', 1)[1].split(']', 1)[0].split(',')
                 if 'qualification' in features:
                     raise RuntimeError(f'{package} enables qualification-only kernel capabilities')

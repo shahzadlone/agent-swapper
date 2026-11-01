@@ -124,6 +124,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentswapper-linux-origin"
+version = "0.1.0-dev"
+dependencies = [
+ "libc",
+ "rustix",
+]
+
+[[package]]
 name = "agentswapper-linux-runtime"
 version = "0.1.0-dev"
 dependencies = [
