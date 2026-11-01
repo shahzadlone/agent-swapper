@@ -204,3 +204,10 @@ admission and authenticated stop/resume messages. It adds stopped-target crash
 and terminal-hangup cases while preserving unresolved journal policy after
 retirement. Its qualification status is recorded in the same report; this
 does not expose production provider execution.
+
+The separate `outer_terminal` example is driven only by
+`tools/check_linux_outer_terminal.py`, which creates disposable PTYs. It checks
+raw-mode restoration, shell stop/bg/fg, orphaned-stop fallback and cancellation
+with a nonwritable output queue. See the
+[outer-terminal experiment](../../docs/linux-outer-terminal.md); it is not yet
+connected to an inner terminal or provider.
