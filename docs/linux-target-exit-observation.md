@@ -29,9 +29,9 @@ No numeric process operation follows reaping. Target exit, all-writer scope
 retirement, lease release and durable journal completion remain separate facts.
 
 The hosted real-Store test runs a target with a descendant that blocks SIGHUP.
-It covers exits 0 and 125, Ctrl-C, and guardian SIGKILL. It deliberately waits
+It covers exits 0 and 125, Ctrl-C, real-time termination, and guardian SIGKILL. It deliberately waits
 for independently observed original-scope retirement before reading control:
-the first three cases must preserve their queued target status, while guardian
+the first four cases must preserve their queued target status, while guardian
 loss must yield EOF with no invented status. The original descendant pidfd must
 report death, its heartbeat must stop without voluntary exit, and the real
 journal must remain unresolved after reopening. A separate job-control case
@@ -41,7 +41,14 @@ Parser tests reject substituted senders, stale launch/sequence data, missing or
 extra fields, mixed code/signal forms, negative or overflowing codes and invalid
 signals. These tests do not qualify provider behavior, production installation,
 exit receipts after client restart or durable recovery. Independent review of
-the exec-gate and report composition remains open. The pinned signal decoder
-still cannot report real-time termination: the [wait-ownership fix](linux-wait-ownership.md)
-revokes PID authority before that decoding failure, and no target status is
-invented for it.
+the exec-gate and report composition remains open.
+
+The guardian now processes raw terminal status before named-signal decoding,
+preserving real-time signal numbers and the core-dump bit. The exclusive owner
+still revokes numeric PID authority first, as required by the
+[wait-ownership fix](linux-wait-ownership.md). A fixed sender receives the
+original target pidfd as stdin and sends SIGRTMIN through that capability only;
+the target creates no extra process for the fault. The report must preserve the
+actual signal number after guardian retirement and descendant cleanup. Local
+raw-wait regression checks separately require both exact real-time status and
+refusal of any later numeric operation. This extension awaits hosted results.

@@ -27,7 +27,9 @@ a reaped numeric PID owned,” then passed after the ordering correction. The
 negative-control harness explicitly revokes ownership before a failing assertion
 so its own unwind cannot signal an already-reaped PID.
 
-This correction establishes cleanup ownership; full real-time signal reporting
-is a separate follow-up. No numeric PID is used as a retained process identity.
+This correction establishes cleanup ownership. The subsequent
+[exit-report candidate](linux-target-exit-observation.md) consumes raw terminal
+status in the guardian to preserve real-time signal outcomes as well. No
+numeric PID is used as a retained process identity.
 The underlying distinction between waiting and inspecting its returned status
 is described by [waitpid(2)](https://man7.org/linux/man-pages/man2/waitpid.2.html).

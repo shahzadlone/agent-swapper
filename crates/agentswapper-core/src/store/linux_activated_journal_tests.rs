@@ -352,7 +352,7 @@ fn exec_stop_precedes_spawn_journal_and_release_or_retirement() {
 #[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
 fn authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown() {
     let (prefix, directory) = environment();
-    for finish in ["zero", "125", "interrupt", "guardian-loss"] {
+    for finish in ["zero", "125", "interrupt", "realtime", "guardian-loss"] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("state");
         let mut store = Store::open(&root).unwrap();
@@ -366,6 +366,12 @@ fn authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown
         let pid = prepared.pid();
         let scope = directory.join(&id.invocation);
         let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
+        let target_fd = rustix::process::pidfd_open(
+            rustix::process::Pid::from_raw(pid as i32).unwrap(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .unwrap();
+        prepared.observe_ready().unwrap();
         let awaiting = prepared
             .start_after(*Uuid::new_v4().as_bytes(), |_| {
                 assert!(store.run(&run)?.observed_pid.is_none());
@@ -414,6 +420,26 @@ fn authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown
                 terminal_input(&master, b"\x03");
                 Some(TargetExit::Signal {
                     signal: 2,
+                    core_dumped: false,
+                })
+            }
+            "realtime" => {
+                // The fixed sender receives the original target capability as
+                // stdin. It never looks up a numeric PID or accepts a command.
+                let sent = std::process::Command::new("/usr/bin/python3")
+                    .args(["-I", "-S", "-c", "import signal; signal.pidfd_send_signal(0, signal.SIGRTMIN); print(int(signal.SIGRTMIN))"])
+                    .env_clear()
+                    .stdin(std::process::Stdio::from(target_fd))
+                    .output().unwrap();
+                assert!(sent.status.success(), "fixed realtime sender failed");
+                let signal: u8 = std::str::from_utf8(&sent.stdout)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                assert!((34..=64).contains(&signal));
+                Some(TargetExit::Signal {
+                    signal,
                     core_dumped: false,
                 })
             }
