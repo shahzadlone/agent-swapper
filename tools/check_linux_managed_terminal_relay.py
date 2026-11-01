@@ -27,6 +27,16 @@ def environment():
     return values
 
 
+def exec_observed(root, data, env):
+    if env.get('ASWP_CI_EXEC_GATE') == '1':
+        assert (root / 'exec-held').read_text() == str(data['target'])
+        assert (root / 'spawn-observed').read_text() == f"fixed target PID: {data['target']}; outcome unresolved\n"
+        status = Path(f"/proc/{data['target']}/status").read_text()
+        assert re.search(r'^TracerPid:\s*0$', status, re.M)
+    else:
+        assert not (root / 'exec-held').exists() and not (root / 'spawn-observed').exists()
+
+
 def state(pid):
     return Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()[0]
 
@@ -58,6 +68,7 @@ def direct(binary, scenario, env, owned_parent=False):
         owned = OwnedPty(binary, root, environment=env, arguments=('--owned-parent',) if owned_parent else ())
         try:
             data = owned.ready(greeting=b'\x1b[0m\r\n')
+            exec_observed(root, data, env)
             assert (root / 'relay-ready').is_file() and (root / 'intent').is_file()
             target_command(owned, b'size', b'SIZE:24:80\r\n')
             if scenario == 'bytes-resize-tail':
@@ -75,6 +86,8 @@ def direct(binary, scenario, env, owned_parent=False):
                 target_command(owned, b'finish', 'FINAL:\x1b[34m→\x1b[0m\r\n'.encode())
                 owned.finish()
                 assert (root / 'drained').is_file()
+                if env.get('ASWP_CI_EXEC_GATE') == '1':
+                    assert (root / 'observed-exit').read_text() == 'Code { code: 0 }'
                 assert all(0 < int(value) <= 16384 for value in (root / 'buffers').read_text().split(':'))
             elif scenario == 'orphan-stop':
                 owned.send(b'\x1a')
@@ -103,7 +116,7 @@ def direct(binary, scenario, env, owned_parent=False):
             else:
                 raise AssertionError('unknown managed relay scenario')
             retired(owned, root)
-            print(f'managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass', flush=True)
+            print(f'{"exec-" if env.get("ASWP_CI_EXEC_GATE") == "1" else ""}managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass', flush=True)
         finally:
             owned.close()
 
@@ -118,6 +131,7 @@ def shell_job(binary, raw_stop, env, owned_parent=False):
             role = '--owned-parent ' if owned_parent else ''
             owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {role}{shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'\x1b[0m\r\n')
+            exec_observed(root, data, env)
             offset = len(owned.output)
             owned.send(b'suspend\n' if raw_stop else b'\x1a')
             owned.wait(lambda: prompt in owned.output[offset:] and os.tcgetpgrp(owned.master) == owned.pid)
@@ -147,7 +161,7 @@ def shell_job(binary, raw_stop, env, owned_parent=False):
             owned.wait(lambda: (root / 'after').exists())
             assert (root / 'after').read_text() == (root / 'before').read_text()
             retired(owned, root)
-            print(f'managed-{"owned-" if owned_parent else ""}relay-shell-{"raw-self-stop" if raw_stop else "typed-ctrl-z"}: pass', flush=True)
+            print(f'{"exec-" if env.get("ASWP_CI_EXEC_GATE") == "1" else ""}managed-{"owned-" if owned_parent else ""}relay-shell-{"raw-self-stop" if raw_stop else "typed-ctrl-z"}: pass', flush=True)
         finally:
             owned.close()
 
@@ -167,6 +181,7 @@ def failures(binary, scenario, env, owned_parent=False):
                 assert (root / 'subreaper-shell').read_text() == str(owned.pid)
                 owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} --owned-parent {shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'\x1b[0m\r\n')
+            exec_observed(root, data, env)
             relay_fd = None
             if owned_parent:
                 relay_fd = os.pidfd_open(data['child'])
@@ -262,7 +277,7 @@ def failures(binary, scenario, env, owned_parent=False):
             assert heartbeat.read_text() == before and not (marker_root / 'descendant-voluntary-exit').exists()
             with (root / 'lease').open('rb+') as lease:
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            print(f'managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass (scope cleanup; restoration requires surviving owner)', flush=True)
+            print(f'{"exec-" if env.get("ASWP_CI_EXEC_GATE") == "1" else ""}managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass (scope cleanup; restoration requires surviving owner)', flush=True)
         finally:
             for descriptor in descriptors:
                 os.close(descriptor)
@@ -281,7 +296,14 @@ def main():
         for scenario in ('outer-hangup', 'client-kill', 'blocked-drain'):
             failures(binary, scenario, env, owned_parent)
     failures(binary, 'stopped-parent-loss', env, owned_parent=True)
-    print('::notice::managed two-terminal relay: nineteen owned-PTY cases passed; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
+    exec_env = dict(env, ASWP_CI_EXEC_GATE='1')
+    for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
+        direct(binary, scenario, exec_env, True)
+    for raw_stop in (False, True):
+        shell_job(binary, raw_stop, exec_env, True)
+    for scenario in ('outer-hangup', 'client-kill', 'blocked-drain', 'stopped-parent-loss'):
+        failures(binary, scenario, exec_env, True)
+    print('::notice::managed two-terminal relay: twenty-nine owned-PTY cases passed, including ten exec-gated surviving-owner cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

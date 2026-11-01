@@ -571,8 +571,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 19,
-                        'managed relay did not pass all nineteen owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 29,
+                        'managed relay did not pass all twenty-nine owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
 
         finally:

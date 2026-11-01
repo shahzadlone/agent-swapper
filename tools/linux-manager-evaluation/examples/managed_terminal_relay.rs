@@ -36,11 +36,15 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
 fn durable_intent(directory: &Path, pid: u32) -> io::Result<()> {
     // This component uses a synced fixture intent. The separate real Store
     // tests qualify SQLite policy; this file never completes a production run.
+    durable_record(directory, "intent", pid)
+}
+
+fn durable_record(directory: &Path, name: &str, pid: u32) -> io::Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(directory.join("intent"))?;
+        .open(directory.join(name))?;
     writeln!(file, "fixed target PID: {pid}; outcome unresolved")?;
     file.sync_all()?;
     File::open(directory)?.sync_all()
@@ -307,7 +311,16 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> 
         .mode(0o600)
         .open(directory.join("lease"))?;
     lease.try_lock().map_err(io::Error::other)?;
-    let bound = Bound::connect_job_control(&prefix)?;
+    let exec_gate = match std::env::var("ASWP_CI_EXEC_GATE") {
+        Ok(value) if value == "1" => true,
+        Err(std::env::VarError::NotPresent) => false,
+        _ => return Err(io::Error::other("invalid fixed exec-gate mode")),
+    };
+    let bound = if exec_gate {
+        Bound::connect_exec_control(&prefix)?
+    } else {
+        Bound::connect_job_control(&prefix)?
+    };
     let prepared = bound
         .prepare(lease.as_fd())
         .map_err(|failure| failure.error)?;
@@ -337,6 +350,14 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> 
     let mut running = prepared
         .start_after([0x41; 16], |pid| durable_intent(directory, pid))
         .map_err(|failure| io::Error::other(format!("{failure:?}")))?;
+    if exec_gate {
+        let held = running.hold_exec().map_err(|failure| failure.error)?;
+        held.observe_held()?;
+        marker(directory, "exec-held", &target.to_string())?;
+        running = held
+            .release_after(|pid| durable_record(directory, "spawn-observed", pid))
+            .map_err(|failure| io::Error::other(format!("{failure:?}")))?;
+    }
     terminal.enter()?;
     marker(directory, "relay-ready", "raw")?;
     if owner.is_some() {
