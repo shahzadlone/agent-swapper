@@ -217,3 +217,9 @@ fixed hosted guardian. It adds bounded byte relay, resize, authenticated inner
 stops and foreground-only resume. See the
 [combined relay experiment](../../docs/linux-managed-terminal-relay.md) for
 qualification results and the remaining production integration gates.
+
+The `terminal_owner` example separately keeps a parent alive to restore outer
+modes after its fixed child is killed. Its owned-PTY tests also cover shell
+stop/background/foreground transitions. See the
+[surviving-owner experiment](../../docs/linux-terminal-owner.md); combining it
+with managed sessions remains a separate gate.

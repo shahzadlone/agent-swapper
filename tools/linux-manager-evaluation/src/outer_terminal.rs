@@ -136,6 +136,16 @@ pub(crate) struct Terminal {
 }
 impl Terminal {
     pub(crate) fn capture(directory: &Path) -> io::Result<Self> {
+        Self::capture_for_group(directory, rustix::process::getpid())
+    }
+    pub(crate) fn capture_for_group(
+        directory: &Path,
+        owner: rustix::process::Pid,
+    ) -> io::Result<Self> {
+        require(
+            owner == rustix::process::getpid() || rustix::process::getppid() == Some(owner),
+            "terminal group owner is not this process or its direct parent",
+        )?;
         require(
             std::env::var("ASWP_OWNED_OUTER_PTY").as_deref() == Ok("1"),
             "requires owned outer-PTY fixture",
@@ -180,7 +190,7 @@ impl Terminal {
         )?;
         let group = rustix::process::getpgrp();
         require(
-            group == rustix::process::getpid() && termios::tcgetpgrp(&fd)? == group,
+            group == owner && termios::tcgetpgrp(&fd)? == group,
             "outer probe is not its foreground job leader",
         )?;
         Ok(Self {
@@ -206,13 +216,19 @@ impl Terminal {
     }
     pub(crate) fn restore(&mut self) -> io::Result<()> {
         if self.raw {
-            require(
-                self.foreground()?,
-                "cannot restore another foreground job's terminal",
-            )?;
-            termios::tcsetattr(&self.fd, termios::OptionalActions::Now, &self.saved)?;
-            self.raw = false;
+            self.restore_saved()?;
         }
+        Ok(())
+    }
+    /// The surviving owner calls this only after its exclusive child waiter
+    /// observes stop or exit. It never restores another foreground group's mode.
+    pub(crate) fn restore_saved(&mut self) -> io::Result<()> {
+        require(
+            self.foreground()?,
+            "cannot restore another foreground job's terminal",
+        )?;
+        termios::tcsetattr(&self.fd, termios::OptionalActions::Now, &self.saved)?;
+        self.raw = false;
         Ok(())
     }
 }

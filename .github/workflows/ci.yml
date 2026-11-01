@@ -268,6 +268,11 @@ jobs:
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example outer_terminal
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example managed_terminal_relay
           python3 tools/check_linux_outer_terminal.py tools/linux-manager-evaluation/target/debug/examples/outer_terminal
+      - name: Evaluate surviving outer-terminal owner
+        timeout-minutes: 1
+        run: |
+          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example terminal_owner
+          python3 tools/check_linux_terminal_owner.py tools/linux-manager-evaluation/target/debug/examples/terminal_owner
       - name: Qualify root-owned service cleanup
         env:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe
