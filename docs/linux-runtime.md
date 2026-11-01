@@ -285,9 +285,9 @@ strict manager/consumer/core Clippy and the dependency-boundary check locally.
 
 The [manager/image source review](linux-manager-image-review.md) records the
 subsequent destination, label-encoding, mount-policy, file-capability and test
-corrections, including the independent deadline negative control. The combined
-revision still requires native qualification; earlier individual runs do not
-establish the merged result.
+corrections, including the independent deadline negative control. Combined revision `4fb4abf` passed the complete pipeline in
+[41290326745](https://github.com/shahzadlone/agent-swapper/actions/runs/41290326745),
+including all seven original mount controls on Ubuntu 22.04 and 24.04.
 
 Individual extraction checkpoints passed complete pipelines: manager transport
 `16277f9` in [41288395690](https://github.com/shahzadlone/agent-swapper/actions/runs/41288395690),
@@ -295,8 +295,7 @@ protected images before the new mount/capability checks at `1787a26` in
 [41288859678](https://github.com/shahzadlone/agent-swapper/actions/runs/41288859678),
 and the child waiter at `a719604` in
 [41288872078](https://github.com/shahzadlone/agent-swapper/actions/runs/41288872078).
-These close their earlier pending extraction results. The current combined
-manager-handle and review-correction revision still requires its own run.
+These close their earlier pending extraction results. The combined manager-handle and review-correction run above also passed.
 
 ## Client corroboration of the guardian image
 
@@ -321,7 +320,8 @@ Canonical test assets accommodate multicall coreutils; the different image is
 Python, not another applet that might share the same inode. Local runtime tests
 pass 33 cases plus five compile-fail doctests, with the receiver role exercised
 by its cross-process test. Strict runtime and consumer Clippy pass. Native
-activation and combined qualification remain pending.
+activation and the complete pipeline passed at `7ca3650` in
+[41290629942](https://github.com/shahzadlone/agent-swapper/actions/runs/41290629942).
 
 All 49 evaluation tests, strict core Clippy with the Store qualification feature
 and the dependency-boundary check also pass for the client image comparison.

@@ -482,6 +482,7 @@ impl Bound {
             invocation: Some(offer.invocation),
             kind: UnitKind::Activated {
                 fragment: format!("/run/systemd/system/{prefix}@.service"),
+                image: format!("/usr/lib/{prefix}.guardian"),
             },
         };
         let runtime = RuntimeGuard::new()?;
@@ -599,6 +600,7 @@ impl Witness {
             invocation: Some(claimed.invocation.clone()),
             kind: UnitKind::Activated {
                 fragment: format!("/run/systemd/system/{prefix}@.service"),
+                image: format!("/usr/lib/{prefix}.guardian"),
             },
         };
         let runtime = RuntimeGuard::new()?;

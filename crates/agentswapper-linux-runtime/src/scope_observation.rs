@@ -113,6 +113,8 @@ fn own_process(root: &OwnedFd) -> io::Result<OwnedFd> {
     Ok(own)
 }
 
+/// Check identity maps and the visible PID 1's init.scope. This is an admission
+/// prerequisite, not proof of membership in the host's initial namespaces.
 pub fn initial_namespace() -> io::Result<()> {
     let root = proc_root()?;
     let own = own_process(&root)?;

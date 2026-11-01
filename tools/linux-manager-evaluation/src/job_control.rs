@@ -204,6 +204,18 @@ mod tests {
         assert_eq!(error.raw_os_error(), Some(nix::libc::EINVAL));
         let revoked = child.waiter.is_reaped();
         assert!(revoked, "decoder failure left a reaped numeric PID owned");
+        let raw = child
+            .waiter
+            .final_status()
+            .ok_or_else(|| io::Error::other("decoder discarded exit"))?;
+        assert!(raw.signaled());
+        let status = <std::process::ExitStatus as std::os::unix::process::ExitStatusExt>::from_raw(
+            raw.as_raw(),
+        );
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&status),
+            Some(nix::libc::SIGRTMIN())
+        );
         assert!(child.resume().is_err());
         assert!(child.poll().is_err());
         Ok(())

@@ -43,6 +43,15 @@ def private_namespace():
     require(os.geteuid() == 0
             and os.readlink('/proc/self/ns/mnt') != os.readlink('/proc/1/ns/mnt'),
             'fixture requires its own root mount namespace')
+    # A separate namespace may still propagate mounts to a shared peer. The
+    # outer command requests recursive private propagation; verify that fact
+    # independently before creating a fixture, including direct --inside use.
+    mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    require(bool(mounts) and all(' - ' in line for line in mounts),
+            'mount propagation metadata unavailable')
+    require(not any(field.startswith('shared:') for line in mounts
+                    for field in line.split(' - ', 1)[0].split()[6:]),
+            'fixture mount namespace still has shared propagation')
 
 
 def identity(uid, gid):

@@ -124,7 +124,7 @@ async fn driver_call<T: serde::Serialize + zbus::DynamicType>(
     checked_reply(reply, DRIVER)
 }
 
-fn destination(owner: &str) -> io::Result<zbus::names::UniqueName<'_>> {
+pub(crate) fn destination(owner: &str) -> io::Result<zbus::names::UniqueName<'_>> {
     require(
         owner.starts_with(':'),
         "manager destination is not a peer unique name",

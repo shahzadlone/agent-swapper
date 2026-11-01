@@ -1,6 +1,6 @@
 //! Authenticated invocation-retirement reads, separate from kernel custody.
 use crate::linux::Manager;
-use crate::linux::{MANAGER_PATH, UNIT_INTERFACE, checked_reply, property, require};
+use crate::linux::{MANAGER_PATH, UNIT_INTERFACE, checked_reply, destination, property, require};
 use std::io;
 use zbus::{Message, OwnedObjectPath};
 
@@ -46,11 +46,12 @@ async fn lookup(
     sender: &str,
     invocation: &[u8],
 ) -> io::Result<Option<OwnedObjectPath>> {
+    connection.require_sender(sender)?;
     lookup_result(
         connection
             .connection
             .call_method(
-                Some(sender),
+                Some(destination(sender)?),
                 MANAGER_PATH,
                 Some("org.freedesktop.systemd1.Manager"),
                 "GetUnitByInvocationID",
@@ -107,14 +108,22 @@ pub async fn retired(
             // A unit may be collected between lookup and property reads. Only
             // a fresh, authenticated absence for this invocation can resolve
             // that race; the original property error supplies no authority.
-            if collection_race(&error, sender)?
-                && lookup(connection, sender, &invocation).await?.is_none()
-            {
-                Ok(true)
-            } else {
-                Err(error)
-            }
+            resolve_race(error, sender, || lookup(connection, sender, &invocation)).await
         }
+    }
+}
+
+async fn resolve_race<F, Fut>(error: io::Error, sender: &str, recheck: F) -> io::Result<bool>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = io::Result<Option<OwnedObjectPath>>>,
+{
+    if !collection_race(&error, sender)? {
+        return Err(error);
+    }
+    match recheck().await? {
+        None => Ok(true),
+        Some(_) => Err(error),
     }
 }
 
@@ -141,6 +150,68 @@ fn collection_race(error: &io::Error, sender: &str) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collection_race_requires_fresh_absence_and_never_rechecks_other_errors()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = Message::method_call(MANAGER_PATH, "Get").build(&())?;
+        let original = || -> Result<io::Error, Box<dyn std::error::Error>> {
+            let name = "org.freedesktop.DBus.Error.UnknownObject";
+            let reply = Message::error(&request.header(), name)
+                .sender(":1.42")
+                .build(&"collected")?;
+            Ok(io::Error::other(zbus::Error::MethodError(
+                name.to_owned().try_into()?,
+                None,
+                reply,
+            )))
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+        assert!(runtime.block_on(resolve_race(original()?, ":1.42", || async { Ok(None) }))?);
+        let still_present = runtime
+            .block_on(resolve_race(original()?, ":1.42", || async {
+                Ok(Some(
+                    OwnedObjectPath::try_from("/still_present").map_err(io::Error::other)?,
+                ))
+            }))
+            .err()
+            .ok_or_else(|| io::Error::other("continued presence cannot retire an invocation"))?;
+        assert!(
+            still_present
+                .get_ref()
+                .is_some_and(|error| error.is::<zbus::Error>())
+        );
+        let failed = runtime
+            .block_on(resolve_race(original()?, ":1.42", || async {
+                Err(io::Error::new(io::ErrorKind::TimedOut, "recheck expired"))
+            }))
+            .err()
+            .ok_or_else(|| io::Error::other("failed recheck cannot retire an invocation"))?;
+        assert_eq!(failed.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(failed.to_string(), "recheck expired");
+        let called = std::cell::Cell::new(false);
+        let denied = runtime
+            .block_on(resolve_race(
+                io::Error::new(io::ErrorKind::PermissionDenied, "original refusal"),
+                ":1.42",
+                || {
+                    called.set(true);
+                    async { Ok(None) }
+                },
+            ))
+            .err()
+            .ok_or_else(|| io::Error::other("non-race errors must retain their refusal"))?;
+        assert!(!called.get());
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(denied.to_string(), "original refusal");
+        let wrong_owner = runtime.block_on(resolve_race(original()?, ":1.43", || {
+            called.set(true);
+            async { Ok(None) }
+        }));
+        assert!(wrong_owner.is_err());
+        assert!(!called.get());
+        Ok(())
+    }
 
     #[test]
     fn retirement_invocations_are_bounded_before_decoding() -> io::Result<()> {

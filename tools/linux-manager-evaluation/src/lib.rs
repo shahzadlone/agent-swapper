@@ -43,7 +43,7 @@ struct Expected {
 #[derive(Debug)]
 enum UnitKind {
     Transient,
-    Activated { fragment: String },
+    Activated { fragment: String, image: String },
 }
 
 impl Expected {
@@ -173,7 +173,7 @@ async fn snapshot(
             .map_err(io::Error::other)?;
     match &expected.kind {
         UnitKind::Transient => require(transient, "expected a transient fixture unit")?,
-        UnitKind::Activated { fragment } => {
+        UnitKind::Activated { fragment, .. } => {
             let actual = String::try_from(
                 property(connection, owner, &path, UNIT_INTERFACE, "FragmentPath").await?,
             )
@@ -266,18 +266,9 @@ async fn snapshot(
         "unit snapshot disagrees with expected fixture",
     )?;
     let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
-    if matches!(&expected.kind, UnitKind::Activated { .. }) {
-        let (prefix, _) = expected
-            .unit
-            .split_once('@')
-            .ok_or_else(|| io::Error::other("activation image lacks its fixed prefix"))?;
-        require(
-            fixture_policy::valid_prefix(prefix),
-            "invalid activation image prefix",
-        )?;
-        let path = format!("/usr/lib/{prefix}.guardian");
+    if let UnitKind::Activated { image, .. } = &expected.kind {
         let image = agentswapper_linux_runtime::installed_image::ProtectedImage::open(
-            std::path::Path::new(&path),
+            std::path::Path::new(image),
         )?;
         kernel.require_main_image(&image)?;
     }

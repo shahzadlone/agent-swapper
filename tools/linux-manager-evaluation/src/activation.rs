@@ -120,6 +120,7 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
         invocation: Some(offer.invocation),
         kind: UnitKind::Activated {
             fragment: format!("/run/systemd/system/{prefix}@.service"),
+            image: format!("/usr/lib/{prefix}.guardian"),
         },
     };
     let (connection, owner, mut report, binding) =
