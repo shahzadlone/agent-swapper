@@ -1,11 +1,12 @@
 # Managed two-terminal relay qualification
 
-Status: all nine cases passed on both Ubuntu images, and the full platform,
-candidate-package and reproducible-build pipeline passed at `f79f800` in
+Status: all 19 managed cases passed on Ubuntu 22.04 and 24.04 at `150dd2c`
+in [run 41275848735](https://github.com/shahzadlone/agent-swapper/actions/runs/41275848735).
+The complete platform, candidate-package and reproducible-build pipeline passed.
+The earlier nine direct cases passed their full pipeline at `f79f800` in
 [run 41274299505](https://github.com/shahzadlone/agent-swapper/actions/runs/41274299505).
-The preceding six-case checkpoint at `62d732d` also passed its full pipeline in
-[run 41274287867](https://github.com/shahzadlone/agent-swapper/actions/runs/41274287867).
 Independent source review and production integration remain separate gates.
+
 This fixed-target experiment connects the already qualified guardian-session
 inner PTY to a newly created outer PTY. The Python harness owns both the outer
 terminal and its shell. It never attaches to the terminal running the harness.
@@ -68,8 +69,33 @@ restores modes and retires the scope, then reports failure without a blocking
 stderr write into the same full terminal. These fault cases passed on both
 Ubuntu images as part of the complete checkpoint above.
 
+The surviving-owner variant uses the same managed relay as a fixed child of the surviving
+[terminal owner](linux-terminal-owner.md). Parent and child share the outer
+foreground group. The parent performs no relay I/O and holds no copy of the
+activation socket or inner master. It waits exclusively for its child and
+restores outer modes after observing child exit. Its metadata record identifies
+the original child; it does not replace the child's authenticated manager
+binding or provide a retirement receipt.
+
+All nine direct cases are repeated with this parent, including normal and raw
+inner stops through shell `bg`/`fg`. The SIGKILL case now kills the relay child
+through its retained pidfd: the parent must restore every saved terminal
+attribute, while independent original cgroup/process handles must prove scope
+removal and descendant death. The killed child cannot publish restoration or
+retirement markers. Outer-terminal loss remains explicitly unrestorable.
+The fixed CI activation burst cap increases from 40 to 56 to cover the nine
+additional sequential activations; concurrency remains bounded at four.
+
+A nineteenth hosted case kills the owner while its relay, inner target and
+descendant are stopped. A same-session subreaper shell prevents an implicit
+orphan-group continuation. Parent-death SIGKILL must close the stopped relay's
+control descriptor, after which independent original process/cgroup handles
+must show full scope retirement. No client or owner exit-cleanup marker may
+exist. The shell keeps the modes restored before the loss. This case and the
+subreaper's negative control are described in the terminal-owner report.
+
 Open gates include external suspension requests while the inner target runs,
-restoration by a surviving owner after uncatchable client death,
+active parent and whole-group loss,
 long sessions, already multithreaded CLI composition, arbitrary provider
 execution, final-exec/exit receipts, and production manager installation.
 The shared signal/terminal component requires a fresh process; it blocks

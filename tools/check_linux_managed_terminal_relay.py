@@ -52,10 +52,10 @@ def target_command(owned, command, response):
     owned.wait(lambda: response in owned.output[offset:])
 
 
-def direct(binary, scenario, env):
+def direct(binary, scenario, env, owned_parent=False):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-relay-') as path:
         root = Path(path)
-        owned = OwnedPty(binary, root, environment=env)
+        owned = OwnedPty(binary, root, environment=env, arguments=('--owned-parent',) if owned_parent else ())
         try:
             data = owned.ready(greeting=b'\x1b[0m\r\n')
             assert (root / 'relay-ready').is_file() and (root / 'intent').is_file()
@@ -103,25 +103,28 @@ def direct(binary, scenario, env):
             else:
                 raise AssertionError('unknown managed relay scenario')
             retired(owned, root)
-            print(f'managed-relay-{scenario}: pass', flush=True)
+            print(f'managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass', flush=True)
         finally:
             owned.close()
 
 
-def shell_job(binary, raw_stop, env):
+def shell_job(binary, raw_stop, env, owned_parent=False):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-relay-shell-') as path:
         root = Path(path)
         owned = OwnedPty(binary, root, shell=True, environment=env)
         try:
             prompt = b'__ASWP_OUTER_PROMPT__ '
             owned.wait(lambda: prompt in owned.output)
-            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'.encode())
+            role = '--owned-parent ' if owned_parent else ''
+            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {role}{shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'\x1b[0m\r\n')
             offset = len(owned.output)
             owned.send(b'suspend\n' if raw_stop else b'\x1a')
             owned.wait(lambda: prompt in owned.output[offset:] and os.tcgetpgrp(owned.master) == owned.pid)
             assert (root / 'restored-before-stop').read_text() == str(int(signal.SIGTSTP))
             assert state(data['pid']) == state(data['target']) == 'T'
+            if owned_parent:
+                assert state(data['child']) == 'T' and (root / 'owner-restored-stop').exists()
             offset = len(owned.output)
             owned.send(b'bg\n')
             owned.wait(lambda: (root / 'continued').exists() and prompt in owned.output[offset:])
@@ -144,18 +147,33 @@ def shell_job(binary, raw_stop, env):
             owned.wait(lambda: (root / 'after').exists())
             assert (root / 'after').read_text() == (root / 'before').read_text()
             retired(owned, root)
-            print(f'managed-relay-shell-{"raw-self-stop" if raw_stop else "typed-ctrl-z"}: pass', flush=True)
+            print(f'managed-{"owned-" if owned_parent else ""}relay-shell-{"raw-self-stop" if raw_stop else "typed-ctrl-z"}: pass', flush=True)
         finally:
             owned.close()
 
 
-def failures(binary, scenario, env):
+def failures(binary, scenario, env, owned_parent=False):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-relay-failure-') as path:
         root = Path(path)
-        owned = OwnedPty(binary, root, environment=env)
+        parent_loss = scenario == 'stopped-parent-loss'
+        assert not parent_loss or owned_parent
+        owned = OwnedPty(binary, root, environment=env, arguments=('--owned-parent',) if owned_parent else (),
+                         shell=parent_loss, subreaper_shell=binary.with_name('terminal_owner_shell') if parent_loss else None)
         descriptors = []
         try:
+            if parent_loss:
+                prompt = b'__ASWP_OUTER_PROMPT__ '
+                owned.wait(lambda: prompt in owned.output)
+                assert (root / 'subreaper-shell').read_text() == str(owned.pid)
+                owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} --owned-parent {shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'\x1b[0m\r\n')
+            relay_fd = None
+            if owned_parent:
+                relay_fd = os.pidfd_open(data['child'])
+                descriptors.append(relay_fd)
+                relay_stat = Path(f"/proc/{data['child']}/stat").read_text().rsplit(') ', 1)[1].split()
+                assert int(relay_stat[1]) == int(relay_stat[2]) == data['pid']
+                assert os.path.samefile(f"/proc/{data['child']}/exe", binary)
             target_command(owned, b'spawn', b'CHILD:')
             owned.wait(lambda: re.search(rb'CHILD:([0-9]+)\r\n', owned.output) is not None)
             descendant = int(re.search(rb'CHILD:([0-9]+)\r\n', owned.output)[1])
@@ -179,7 +197,25 @@ def failures(binary, scenario, env):
             heartbeat = marker_root / 'descendant-heartbeat'
             before = heartbeat.read_text()
             owned.wait(lambda: heartbeat.read_text() != before)
-            if scenario == 'outer-hangup':
+            if parent_loss:
+                assert data['session'] == owned.pid and data['group'] != owned.pid
+                offset = len(owned.output)
+                owned.send(b'\x1a')
+                owned.wait(lambda: prompt in owned.output[offset:] and (root / 'owner-restored-stop').exists())
+                for pid in (data['pid'], data['child'], data['target'], descendant):
+                    assert state(pid) == 'T'
+                signal.pidfd_send_signal(owned.probe_fd, signal.SIGKILL)
+                # No continuation is sent, and same-session subreaper adoption
+                # prevents orphan-group SIGCONT from rescuing a stopped relay.
+                owned.wait(lambda: select.select([relay_fd], [], [], 0)[0])
+                assert select.select([owned.probe_fd], [], [], 0)[0]
+                assert not (root / 'retired').exists() and not (root / 'restored').exists()
+                assert not (root / 'owner-restored-exit').exists()
+                owned.send(b'/usr/bin/stty -g > after-parent-loss\n')
+                owned.wait(lambda: (root / 'after-parent-loss').exists())
+                assert (root / 'after-parent-loss').read_text() == (root / 'before').read_text()
+                assert os.tcgetpgrp(owned.master) == owned.pid
+            elif scenario == 'outer-hangup':
                 os.close(owned.master)
                 owned.master = None
                 owned.wait(lambda: owned.poll() is not None, pump=False)
@@ -188,13 +224,20 @@ def failures(binary, scenario, env):
                 assert (root / 'restoration-unavailable').read_text() == 'owned outer terminal disconnected'
                 assert not (root / 'restored').exists()
             elif scenario == 'client-kill':
-                os.kill(owned.pid, signal.SIGKILL)  # Original unreaped owned child.
+                if owned_parent:
+                    signal.pidfd_send_signal(relay_fd, signal.SIGKILL)
+                else:
+                    os.kill(owned.pid, signal.SIGKILL)  # Original unreaped owned child.
                 owned.wait(lambda: owned.poll() is not None, pump=False)
                 assert os.waitstatus_to_exitcode(owned.status) == -signal.SIGKILL
                 assert not (root / 'restored').exists() and not (root / 'retired').exists()
-                # No destructor can execute after SIGKILL. The owned test
-                # terminal remains raw; do not report a restoration pass.
-                assert termios.tcgetattr(owned.master)[3] & (termios.ICANON | termios.ECHO | termios.ISIG) == 0
+                if owned_parent:
+                    assert (root / 'owner-restored-exit').read_text() == 'None:Some(9)'
+                    assert termios.tcgetattr(owned.master) == owned.original
+                else:
+                    # No destructor can execute after SIGKILL. With no surviving
+                    # owner this direct test terminal remains raw.
+                    assert termios.tcgetattr(owned.master)[3] & (termios.ICANON | termios.ECHO | termios.ISIG) == 0
             elif scenario == 'blocked-drain':
                 owned.send(b'flood\n')
                 owned.wait(lambda: (root / 'backpressure').exists(), pump=False)
@@ -219,7 +262,7 @@ def failures(binary, scenario, env):
             assert heartbeat.read_text() == before and not (marker_root / 'descendant-voluntary-exit').exists()
             with (root / 'lease').open('rb+') as lease:
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            print(f'managed-relay-{scenario}: pass (scope cleanup; SIGKILL has no mode-restoration claim)', flush=True)
+            print(f'managed-{"owned-" if owned_parent else ""}relay-{scenario}: pass (scope cleanup; restoration requires surviving owner)', flush=True)
         finally:
             for descriptor in descriptors:
                 os.close(descriptor)
@@ -230,13 +273,15 @@ def main():
     assert sys.platform == 'linux' and len(sys.argv) == 2
     binary = Path(sys.argv[1]).resolve(strict=True)
     env = environment()
-    for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
-        direct(binary, scenario, env)
-    shell_job(binary, False, env)
-    shell_job(binary, True, env)
-    for scenario in ('outer-hangup', 'client-kill', 'blocked-drain'):
-        failures(binary, scenario, env)
-    print('::notice::managed two-terminal relay: nine owned-PTY cases passed; SIGKILL leaves raw modes unchanged; fixed target and synced fixture intent only; no production custody, exec/exit receipt, or provider qualification', flush=True)
+    for owned_parent in (False, True):
+        for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
+            direct(binary, scenario, env, owned_parent)
+        shell_job(binary, False, env, owned_parent)
+        shell_job(binary, True, env, owned_parent)
+        for scenario in ('outer-hangup', 'client-kill', 'blocked-drain'):
+            failures(binary, scenario, env, owned_parent)
+    failures(binary, 'stopped-parent-loss', env, owned_parent=True)
+    print('::notice::managed two-terminal relay: nineteen owned-PTY cases passed; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

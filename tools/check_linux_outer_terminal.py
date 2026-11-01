@@ -17,7 +17,7 @@ import time
 
 
 class OwnedPty:
-    def __init__(self, binary, root, shell=False, redirect=False, environment=None):
+    def __init__(self, binary, root, shell=False, redirect=False, environment=None, arguments=(), subreaper_shell=None):
         self.root, self.binary, self.shell = root, binary, shell
         self.master, slave = pty.openpty()
         stat = os.fstat(slave)
@@ -48,8 +48,10 @@ class OwnedPty:
                 if environment is not None:
                     env.update(environment)
                 if shell:
+                    if subreaper_shell is not None:
+                        os.execve(subreaper_shell, [str(subreaper_shell), str(root)], env)
                     os.execve('/bin/bash', ['bash', '--noprofile', '--norc', '-i'], env)
-                os.execve(binary, [str(binary), str(root)], env)
+                os.execve(binary, [str(binary), *arguments, str(root)], env)
             except BaseException:
                 os._exit(126)
         os.close(slave)
