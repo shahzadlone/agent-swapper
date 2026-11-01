@@ -25,14 +25,22 @@ def require(ok, message):
 
 
 def require_clean_eof(connection, message):
-    data, ancillary, flags, _ = connection.recvmsg(1, 0)
+    previous = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED)
+    connection.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+    try:
+        data, ancillary, flags, _ = connection.recvmsg(1, 0)
+    finally:
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, previous)
     watcher = select.poll()
     watcher.register(connection, select.POLLRDHUP | select.POLLHUP)
-    closed = any(events & (select.POLLRDHUP | select.POLLHUP) for _, events in watcher.poll(0))
+    events = watcher.poll(0)
+    closed = any(flags & (select.POLLRDHUP | select.POLLHUP) for _, flags in events)
+    failed = any(flags & (select.POLLERR | select.POLLNVAL) for _, flags in events)
     # SOCK_SEQPACKET permits an empty record while the peer remains open.
-    # Only kernel-reported read-side shutdown distinguishes EOF from it.
+    # PASSCRED plus no control capacity forces CTRUNC for every record, even
+    # an empty record queued before peer shutdown; EOF carries no credentials.
     require(not data and not ancillary and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC)
-            and closed, message)
+            and closed and not failed, message)
 
 
 def fixture_prefix():
@@ -206,6 +214,9 @@ def service(directory, uid, unit):
             # then binds the claimed invocation through the system manager.
             # This branch accepts no launch request and creates no worker.
             connection.sendall(json.dumps(report).encode() + b'\n')
+            # Fault trials hold this private fixture barrier until every test
+            # record is queued and any half-close is complete.
+            wait_for(lambda: not (directory / 'bind-eof-hold').exists(), seconds=5)
             connection.settimeout(12)
             require_clean_eof(connection, 'bind-only probe sent launch data')
             (directory / (invocation + '.bind-clean-eof')).write_text(invocation)
@@ -361,7 +372,10 @@ def suite():
                     'bind-only guardian did not record clean EOF or created unexpected files')
             bind_marker.unlink()
             print('::notice title=Linux activation binding::kernel message sender matched manager MainPID and invocation; guardian recorded clean EOF and original scope retired; no launch data or worker', flush=True)
-            for packet in (b'X', b''):
+            for packets, shutdown in [((b'X',), False), ((b'',), False),
+                                      ((b'',), True), ((b'', b'X'), True)]:
+                hold = directory / 'bind-eof-hold'
+                hold.write_text('queue complete fault before guardian EOF read')
                 with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as invalid_bind:
                     invalid_bind.settimeout(8)
                     invalid_bind.connect(str(endpoint(prefix)))
@@ -369,12 +383,16 @@ def suite():
                     offer = json.loads(invalid_bind.recv(4096))
                     require(re.fullmatch(re.escape(prefix) + r'@[A-Za-z0-9_.:\\-]+\.service', offer['unit']),
                             'invalid bind negative-control unit')
-                    require(invalid_bind.send(packet) == len(packet), 'incomplete bind fault packet')
+                    for packet in packets:
+                        require(invalid_bind.send(packet) == len(packet), 'incomplete bind fault packet')
+                    if shutdown:
+                        invalid_bind.shutdown(socket.SHUT_WR)
+                    hold.unlink()
                     require(b'bind-only probe sent launch data' in invalid_bind.recv(4096),
                             'bind fault did not reach the intended refusal')
                 wait_for(lambda: not (Path('/sys/fs/cgroup/system.slice') / offer['unit']).exists(), seconds=5)
                 require(not any(directory.iterdir()), 'failed bind created an EOF marker or worker')
-            print('::notice title=Linux activation bind EOF control::unexpected and empty records refused while peer remained open; no clean EOF marker or worker', flush=True)
+            print('::notice title=Linux activation bind EOF control::unexpected and empty records refused before and after peer shutdown, including trailing data; no clean EOF marker or worker', flush=True)
             with open('/dev/null', 'rb') as harmless:
                 faults = [('oversized control packet', b'GO\nextra', []),
                           ('unexpected descriptor', b'GO\n',
@@ -389,14 +407,19 @@ def suite():
                                 label + ' was not refused at its framing check')
                         require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
                     print('::notice title=Linux fixed-user activation::' + label + ' refused before worker creation', flush=True)
-            for label, packet in [('unexpected command', b'X'), ('empty record on open peer', b'')]:
+            for label, packets, shutdown in [
+                    ('unexpected command', (b'X',), False),
+                    ('empty record on open peer', (b'',), False)]:
                 faulty, faulty_report, faulty_fd = activate(prefix, directory)
                 connections.append(faulty)
                 descriptors.append(faulty_fd)
                 live_before_disconnect(directory, faulty_report)
                 # sendall(b'') performs no send syscall; send is needed to
                 # create an actual zero-length sequenced-packet record.
-                require(faulty.send(packet) == len(packet), 'incomplete guardian error control')
+                for packet in packets:
+                    require(faulty.send(packet) == len(packet), 'incomplete guardian error control')
+                if shutdown:
+                    faulty.shutdown(socket.SHUT_WR)
                 require(b'unexpected fixture activation command' in faulty.recv(4096),
                         'guardian error control did not reach the intended protocol refusal')
                 faulty.close()

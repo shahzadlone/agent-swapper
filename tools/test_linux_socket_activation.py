@@ -29,6 +29,17 @@ class ActivationTests(unittest.TestCase):
             receiver.settimeout(1)
             sender.close()
             probe.require_clean_eof(receiver, 'not EOF')
+        for packets in [(b'',), (b'', b''), (b'', b'X')]:
+            sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            with sender, receiver:
+                for packet in packets:
+                    sender.send(packet)
+                sender.shutdown(socket.SHUT_WR)
+                for _ in packets:
+                    with self.assertRaisesRegex(RuntimeError, 'not EOF'):
+                        probe.require_clean_eof(receiver, 'not EOF')
+                    self.assertEqual(receiver.getsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED), 0)
+                probe.require_clean_eof(receiver, 'not EOF')
 
     def test_cleanup_without_matching_root_ownership_never_controls_units(self):
         directory_meta = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)

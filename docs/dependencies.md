@@ -256,8 +256,11 @@ This avoids the credential PID representation in rustix 1.1.6, which embeds a
 nonzero integer even though the kernel can supply PID zero. See
 [rustix issue 1698](https://github.com/bytecodealliance/rustix/issues/1698).
 The evaluation tool no longer uses rustix `UCred` or `socket_peercred`.
-The root guardian transport does not enable credential reception; its rights
-receiver and credential-free EOF check have different contracts.
+The root guardian's rights receiver keeps credential reception disabled. Its
+EOF check temporarily enables `SO_PASSCRED` with zero ancillary capacity, so
+the kernel marks every queued packet truncated and discards its controls;
+no credentials enter the Rust decoder. The prior socket option is restored
+before subsequent protocol reads, including on errors and `WouldBlock`.
 
 Source inspection covered nix's integer-only `UnixCredentials`, peer-credential
 sockopt wrapper, and unix-ancillary's low-level receive, checked byte parser,
@@ -273,9 +276,13 @@ that every possible control-message type is exposed by the library.
 The socket must be nonblocking and packet receive has an absolute deadline.
 Tests cover kernel PID-zero credentials, payload/control truncation and release
 of rejected transferred capabilities. The locked license/advisory/source audit
-passes without a new exception. Independent review of this replacement is still
-pending; unused dependency APIs and complete production qualification are
-outside this source inspection's scope.
+passes without a new exception. A focused Opus review of the supplied replacement
+source completed without a must-fix decoder finding under the stated 64-bit
+Linux model. Its hardening follow-up reduces the receive capacity to exactly
+one credentials message, so additional controls trigger truncation even when
+the library would otherwise silently discard their type. The nix struct getter's
+initialization and size check were also inspected directly. Unused dependency
+APIs and complete production qualification remain outside this review's scope.
 
 ## Licensing and distribution
 

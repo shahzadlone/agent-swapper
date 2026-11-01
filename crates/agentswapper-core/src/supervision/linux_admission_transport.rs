@@ -39,10 +39,23 @@ pub(crate) fn pair() -> io::Result<(OwnedFd, OwnedFd)> {
 /// from an open peer is a protocol error, not evidence of parent disconnect.
 #[allow(dead_code, reason = "some fixture binaries do not wait for disconnect")]
 pub(crate) fn eof(socket: impl AsFd) -> io::Result<bool> {
+    // This channel has one reader. Temporarily requesting credentials lets the
+    // kernel distinguish an empty record from EOF, even after peer shutdown.
+    // The zero-capacity control buffer discards ALL ancillary data in-kernel;
+    // we never decode rustix UCred (which cannot represent a kernel PID zero).
+    // Restore the option before later admission/control receives use the socket.
+    let previous = sockopt::socket_passcred(&socket)?;
+    sockopt::set_socket_passcred(&socket, true)?;
+    let result = read_eof(&socket);
+    let restored = sockopt::set_socket_passcred(&socket, previous);
+    let closed = result?;
+    restored?;
+    Ok(closed)
+}
+
+fn read_eof(socket: impl AsFd) -> io::Result<bool> {
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     let mut bytes = [0_u8; 1];
-    // No control data is accepted here. A zero-sized control buffer makes the
-    // kernel close any transferred descriptors and report CTRUNC.
     let mut ancillary = RecvAncillaryBuffer::new(&mut []);
     let received = match net::recvmsg(
         &socket,
@@ -71,8 +84,11 @@ pub(crate) fn eof(socket: impl AsFd) -> io::Result<bool> {
         }),
     )?;
     require(
-        readiness[0].revents().intersects(closed),
-        "empty guardian packet is not read-side EOF",
+        readiness[0].revents().intersects(closed)
+            && !readiness[0]
+                .revents()
+                .intersects(PollFlags::ERR | PollFlags::NVAL),
+        "guardian channel lacks orderly read-side EOF",
     )?;
     Ok(true)
 }
@@ -298,10 +314,7 @@ mod tests {
         let error = eof(&receiver)
             .err()
             .ok_or_else(|| io::Error::other("empty packet accepted"))?;
-        assert_eq!(
-            error.to_string(),
-            "empty guardian packet is not read-side EOF"
-        );
+        assert_eq!(error.to_string(), "unexpected guardian control message");
         for packet in [b"X".as_slice(), b"too long"] {
             send(&sender, packet, &[])?;
             assert!(eof(&receiver).is_err());
@@ -327,6 +340,41 @@ mod tests {
             assert!(eof(&receiver).is_err());
             assert!(eof(&witness)?);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn eof_refuses_empty_queued_records_after_shutdown_and_restores_socket_policy() -> io::Result<()>
+    {
+        for original in [false, true] {
+            for following in [
+                None,
+                Some(b"".as_slice()),
+                Some(b"trailing data".as_slice()),
+            ] {
+                let (sender, receiver) = pair()?;
+                // Deliberately queue before enabling credentials: the kernel may
+                // synthesize PID zero, but no credential decoder runs here.
+                send(&sender, b"", &[])?;
+                if let Some(packet) = following {
+                    send(&sender, packet, &[])?;
+                }
+                net::shutdown(&sender, net::Shutdown::Write)?;
+                sockopt::set_socket_passcred(&receiver, original)?;
+                assert!(eof(&receiver).is_err());
+                assert_eq!(sockopt::socket_passcred(&receiver)?, original);
+                if following.is_some() {
+                    assert!(eof(&receiver).is_err());
+                }
+                assert!(eof(&receiver)?);
+                assert_eq!(sockopt::socket_passcred(&receiver)?, original);
+            }
+        }
+        let (sender, receiver) = pair()?;
+        assert!(!eof(&receiver)?);
+        assert!(!sockopt::socket_passcred(&receiver)?);
+        send(&sender, GO, &[])?;
+        receive_control(&receiver, GO)?;
         Ok(())
     }
 

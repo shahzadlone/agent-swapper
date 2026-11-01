@@ -54,9 +54,9 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
         "activation packet did not arrive before deadline",
     )?;
     let mut bytes = [0_u8; 4096];
-    let size =
-        SocketAncillary::buffer_size_for_credentials() + SocketAncillary::buffer_size_for_rights(1);
-    let mut space = vec![0_u8; size];
+    // Only one credentials message fits. Additional controls force CTRUNC,
+    // including types the library would otherwise discard without exposing.
+    let mut space = vec![0_u8; SocketAncillary::buffer_size_for_credentials()];
     let mut ancillary = SocketAncillary::new(&mut space);
     let received = unix_ancillary::cmsg_recvmsg(
         socket.as_fd(),
@@ -161,7 +161,10 @@ mod tests {
                 SendFlags::NOSIGNAL,
             )?;
             drop(transferred);
-            assert!(receive(&receiver, deadline()).is_err());
+            let error = receive(&receiver, deadline())
+                .err()
+                .ok_or_else(|| io::Error::other("unexpected rights accepted"))?;
+            assert_eq!(error.to_string(), "invalid or late activation packet");
             // The original sender is gone. EOF proves refusal did not retain the
             // only transferred socket endpoint; no process-global FD count race.
             let mut bytes = [0; 1];

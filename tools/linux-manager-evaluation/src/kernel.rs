@@ -186,6 +186,8 @@ impl Process {
             .ok_or_else(|| io::Error::other("invalid process identity"))?;
         // Open before /proc reads, and require it to remain live afterwards.
         // This prevents a PID reused during those reads from passing admission.
+        // Reuse before this open requires the caller's separate manager binding
+        // and recheck, under its direct-child service lifecycle restrictions.
         let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
         let proc_root = proc_root()?;
         let proc_dir = same_mount(
@@ -250,6 +252,8 @@ impl Process {
 
 #[derive(Serialize)]
 pub(crate) struct Fact {
+    // A directory can survive a failed invocation and be reused. These fields
+    // identify that retained directory, never an invocation or a fresh start.
     pub(crate) device: u64,
     pub(crate) inode: u64,
     populated: bool,
@@ -265,6 +269,7 @@ pub(crate) struct Binding {
 }
 
 #[derive(Serialize)]
+// Kernel facts only; the caller must independently observe manager retirement.
 pub(crate) struct Retirement {
     device: u64,
     inode: u64,
@@ -274,6 +279,7 @@ pub(crate) struct Retirement {
 
 impl Binding {
     pub(crate) fn bind(unit: &str, user: u32, pid: u32) -> io::Result<Self> {
+        initial_namespace()?;
         // The caller has already restricted the unit to one safe fixture name.
         require(
             !unit.contains('/')
@@ -305,6 +311,7 @@ impl Binding {
     }
 
     pub(crate) fn observe(&self) -> io::Result<Fact> {
+        check_scope_controls(&self.scope)?;
         self.main.check()?;
         require(
             populated(&read_at(&self.scope, "cgroup.events", 4096)?)?,
