@@ -138,3 +138,37 @@ This is a shared observation building block, not production managed execution.
 The reduced evaluation suite passes all 54 tests after moving the duplicated
 kernel cases. Strict core Clippy also passes with the Store qualification feature,
 and the dependency-boundary check confirms identical pinned graphs.
+
+Cooked foreground admission and final raw entry now share this runtime too.
+The [suspension review](linux-suspension-review.md) records the three corrected
+job-control defects, actual negative control and pending native evidence.
+
+## Exclusive direct-child waiting
+
+`child_waiter::ChildWaiter` now owns the existing raw wait loop used by the fixed
+guardian and surviving terminal owner. It consumes the standard `Child`, keeps
+its fields private and is neither Send nor Sync. Stops, continuations and raw
+terminal outcomes use one waiter. Terminal status and ECHILD revoke ownership
+before any caller converts the status through nix's finite signal enum. Drop
+only kills an unreaped direct child and makes a bounded reaping attempt; it
+never supplies evidence that an entire process scope has retired.
+
+The qualification wrapper retains all process-group and ptrace policy. No trace
+feature or dependency enters the normal runtime, and no general process-group
+signal method is exposed by the shared waiter. Callers must still exclude any
+competing waiter or SIGCHLD auto-reaper in their trusted process. Rust's ownership
+of this handle cannot prevent unrelated code from making a separate wait syscall.
+
+The real-time raw-status regression moved with the loop. The fixture retains
+its finite-decoder failure regression, checking that resume/wait are refused
+after the syscall has reaped. New tests observe ECHILD after an intentional
+competing wait and observe the original child pidfd plus ECHILD after cleanup.
+Two compile-fail doctests enforce the thread-ownership restrictions. Local
+runtime validation passes 29 tests and five compile-fail doctests; the one
+ignored receiver role is invoked by a passing cross-process test. All 52 remaining
+evaluation tests and strict runtime/evaluation Clippy pass. Native composition
+qualification remains pending.
+
+The shared waiter also passes all nine outer-terminal and 13 surviving-owner
+cases, eleven pre-exec signal cases, three cleanup-signal cases, and the queued
+stop regression. Strict core Clippy with the Store qualification feature passes.

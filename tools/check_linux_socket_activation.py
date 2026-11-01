@@ -583,8 +583,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 64,
-                        'managed relay did not pass all sixty-four owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 68,
+                        'managed relay did not pass all sixty-eight owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
                 result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
                                         str(relay), '--long-session'], environment=test_env)
@@ -599,8 +599,8 @@ def suite():
                                         str(store_relay), '--store'], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 27,
-                        'real Store terminal composition did not pass all 27 cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 30,
+                        'real Store terminal composition did not pass all 30 cases: '
                         + (result.stdout + result.stderr)[-4000:])
 
                 for stopped_relay in (relay, store_relay):

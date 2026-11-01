@@ -75,7 +75,7 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
             require(
                 matches!(
                     value.to_str(),
-                    Some("go" | "release" | "go-send" | "release-send")
+                    Some("go" | "release" | "go-send" | "release-send" | "raw-entry")
                 ),
                 "invalid admission fixture barrier",
             )?;
@@ -168,12 +168,22 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
         match child.poll()? {
             WaitStatus::StillAlive | WaitStatus::Continued(_) => {}
             WaitStatus::Stopped(_, signal) => {
-                terminal.0.restore_saved()?;
-                marker(
-                    directory,
-                    "owner-restored-stop",
-                    &(signal as i32).to_string(),
-                )?;
+                if terminal.0.foreground()? {
+                    terminal.0.restore_saved()?;
+                    marker(
+                        directory,
+                        "owner-restored-stop",
+                        &(signal as i32).to_string(),
+                    )?;
+                } else {
+                    // Cooked admission can be stopped again after shell bg.
+                    // Preserve the new foreground owner's terminal untouched.
+                    marker(
+                        directory,
+                        "owner-background-stop",
+                        &(signal as i32).to_string(),
+                    )?;
+                }
                 let resumed = signals.suspend()?;
                 if let Some(signal) = resumed.terminate {
                     cancellation = Some(signal);

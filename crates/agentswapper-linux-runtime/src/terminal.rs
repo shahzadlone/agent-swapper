@@ -1,12 +1,15 @@
 //! Terminal restoration tied to the fresh helper's signal-mask lifetime.
 use crate::signals::Signals;
+use nix::sys::signal::Signal;
 use rustix::{
     fs::{self, Mode, OFlags},
     termios,
 };
 use std::{
+    cell::Cell,
     io,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
+    time::{Duration, Instant},
 };
 
 fn require(ok: bool, message: &str) -> io::Result<()> {
@@ -37,7 +40,7 @@ pub struct Terminal<'signals> {
     saved: termios::Termios,
     group: rustix::process::Pid,
     raw: bool,
-    _signals: &'signals Signals,
+    signals: &'signals Signals,
 }
 impl<'signals> Terminal<'signals> {
     /// Admit matching standard terminal streams in this or the direct parent's
@@ -89,7 +92,7 @@ impl<'signals> Terminal<'signals> {
             fd,
             group,
             raw: false,
-            _signals: signals,
+            signals,
         })
     }
     pub fn group(&self) -> rustix::process::Pid {
@@ -104,6 +107,66 @@ impl<'signals> Terminal<'signals> {
                 && rustix::process::getpgrp() == self.group,
         )
     }
+    /// Wait in cooked mode for foreground ownership without extending the
+    /// original admission deadline. A cancellation remains owned by the caller
+    /// until it has restored the terminal and attempted independent cleanup.
+    pub fn wait_for_admission(
+        &self,
+        until: Instant,
+        cancelled: &Cell<Option<Signal>>,
+    ) -> io::Result<()> {
+        require(
+            !self.raw,
+            "admission wait requires cooked terminal ownership",
+        )?;
+        loop {
+            let notices = self.signals.drain()?;
+            remember(cancelled, notices.terminate);
+            if notices.stop && cancelled.get().is_none() {
+                remember(cancelled, self.signals.suspend()?.terminate);
+            }
+            admission_live(until, cancelled)?;
+            if self.foreground()? {
+                return Ok(());
+            }
+            // Background continuation performs no terminal I/O or mode change.
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Enter raw mode immediately before the final target grant. Once ISIG is
+    /// disabled, drain any stop generated while the terminal was still cooked.
+    /// Return to cooked mode before suspension/cancellation and retry foreground
+    /// admission under the same deadline. Later grant delivery remains the
+    /// caller's responsibility and is not atomic with signals or foreground loss.
+    pub fn enter_for_admission(
+        &mut self,
+        until: Instant,
+        cancelled: &Cell<Option<Signal>>,
+    ) -> io::Result<()> {
+        loop {
+            self.wait_for_admission(until, cancelled)?;
+            self.enter()?;
+            let pending = match self.signals.drain() {
+                Ok(pending) => pending,
+                Err(error) => {
+                    let _ = self.restore();
+                    return Err(error);
+                }
+            };
+            remember(cancelled, pending.terminate);
+            if let Err(error) = admission_live(until, cancelled) {
+                let _ = self.restore();
+                return Err(error);
+            }
+            if !pending.stop {
+                return Ok(());
+            }
+            self.restore()?;
+            remember(cancelled, self.signals.suspend()?.terminate);
+        }
+    }
+
     pub fn enter(&mut self) -> io::Result<()> {
         require(
             self.foreground()?,
@@ -143,6 +206,27 @@ impl AsFd for Terminal<'_> {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()
     }
+}
+
+fn remember(cancelled: &Cell<Option<Signal>>, signal: Option<Signal>) {
+    if cancelled.get().is_none() {
+        cancelled.set(signal);
+    }
+}
+fn admission_live(until: Instant, cancelled: &Cell<Option<Signal>>) -> io::Result<()> {
+    if cancelled.get().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "terminal admission cancelled",
+        ));
+    }
+    if Instant::now() >= until {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "terminal admission expired before foreground release",
+        ));
+    }
+    Ok(())
 }
 
 fn reject_master(fd: impl AsFd) -> io::Result<()> {
