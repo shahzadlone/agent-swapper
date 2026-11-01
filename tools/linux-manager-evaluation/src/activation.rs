@@ -94,7 +94,7 @@ fn valid_instance(unit: &str, prefix: &str) -> bool {
 
 // systemd's AF_UNIX Accept=yes instance includes the client credentials:
 // <connection counter>-<client PID>-<client UID>. Unknown credentials refuse.
-fn connection_instance(unit: &str, prefix: &str, pid: u32, uid: u32) -> bool {
+pub(crate) fn connection_instance(unit: &str, prefix: &str, pid: u32, uid: u32) -> bool {
     valid_instance(unit, prefix)
         && unit
             .strip_prefix(&format!("{prefix}@"))

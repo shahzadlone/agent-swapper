@@ -1,8 +1,9 @@
 """Guard and fixed-user unit-rendering checks; no privileged operations."""
 from pathlib import Path
+import hashlib
+import json
 import stat
-import socket
-import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -11,24 +12,61 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
-    @unittest.skipUnless(sys.platform == 'linux', 'Linux sequenced-packet EOF semantics')
-    def test_empty_record_is_not_read_side_eof(self):
-        sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        with sender, receiver:
-            receiver.settimeout(1)
-            self.assertEqual(sender.send(b''), 0)
-            with self.assertRaisesRegex(RuntimeError, 'not EOF'):
-                probe.require_clean_eof(receiver, 'not EOF')
-            sender.send(b'X')
-            with self.assertRaisesRegex(RuntimeError, 'not EOF'):
-                probe.require_clean_eof(receiver, 'not EOF')
-            sender.shutdown(socket.SHUT_WR)
-            probe.require_clean_eof(receiver, 'not EOF')
-        sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        with receiver:
-            receiver.settimeout(1)
-            sender.close()
-            probe.require_clean_eof(receiver, 'not EOF')
+    def test_compiled_source_refuses_links_unprotected_files_and_non_elf(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'guardian'
+            source.write_bytes(b'\x7fELFfixture only')
+            source.chmod(0o755)
+            with patch.dict(probe.os.environ, {'ASWP_MANAGED_OBSERVER': str(source)}):
+                self.assertEqual(probe.source_image(probe.os.getuid()), source.read_bytes())
+                with self.assertRaisesRegex(RuntimeError, 'owned and protected'):
+                    probe.source_image(probe.os.getuid() + 1)
+                source.chmod(0o777)
+                with self.assertRaisesRegex(RuntimeError, 'owned and protected'):
+                    probe.source_image(probe.os.getuid())
+                source.chmod(0o755)
+                source.write_bytes(b'not an executable')
+                with self.assertRaisesRegex(RuntimeError, 'bounded ELF'):
+                    probe.source_image(probe.os.getuid())
+            link = Path(temporary) / 'link'
+            link.symlink_to(source)
+            with patch.dict(probe.os.environ, {'ASWP_MANAGED_OBSERVER': str(link)}), self.assertRaises(OSError):
+                probe.source_image(probe.os.getuid())
+
+    def test_installed_image_requires_root_mode_and_exact_hash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / 'guardian'
+            image.write_bytes(b'fixture image')
+            digest = hashlib.sha256(image.read_bytes()).hexdigest()
+            valid = SimpleNamespace(st_mode=stat.S_IFREG | 0o755, st_uid=0)
+            with patch.object(Path, 'lstat', return_value=valid):
+                probe.verify_image(image, digest)
+                with self.assertRaisesRegex(RuntimeError, 'differs from ownership marker'):
+                    probe.verify_image(image, '0' * 64)
+            for mode, uid in [(stat.S_IFLNK | 0o755, 0), (stat.S_IFREG | 0o777, 0),
+                              (stat.S_IFREG | 0o755, 1000), (stat.S_IFREG | 0o4755, 0)]:
+                with patch.object(Path, 'lstat', return_value=SimpleNamespace(st_mode=mode, st_uid=uid)), \
+                     self.assertRaisesRegex(RuntimeError, 'root-owned and protected'):
+                    probe.verify_image(image, digest)
+
+    def test_changed_installed_image_never_reaches_cleanup_commands(self):
+        prefix, directory = 'aswp-activation-123-1', Path('/tmp/aswp-fixture')
+        ownership = {'uid': 1000, 'gid': 1000, 'directory': str(directory),
+                     'units': probe.unit_files(prefix, directory, 1000, 1000), 'guardian_sha256': '0' * 64}
+        with patch.object(probe, 'fixture_prefix', return_value=prefix), \
+             patch.object(probe.os, 'geteuid', return_value=0), \
+             patch.object(probe, 'private_directory'), \
+             patch.object(probe.os.path, 'lexists', return_value=True), \
+             patch.object(Path, 'lstat', side_effect=[
+                 SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
+                 SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0)]), \
+             patch.object(Path, 'read_text', return_value=json.dumps(ownership)), \
+             patch.object(probe, 'verify_image', side_effect=RuntimeError('image changed')), \
+             patch.object(Path, 'unlink') as unlink, patch.object(probe, 'systemctl') as control:
+            with self.assertRaisesRegex(RuntimeError, 'image changed'):
+                probe.admin('cleanup', directory, 1000, 1000)
+            control.assert_not_called()
+            unlink.assert_not_called()
 
     def test_cleanup_without_matching_root_ownership_never_controls_units(self):
         directory_meta = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
@@ -82,7 +120,7 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual([x for x in lines if x.startswith('Group=')], ['Group=1000'])
         commands = [x for x in lines if x.startswith('Exec')]
         self.assertEqual(len(commands), 1)
-        self.assertTrue(commands[0].startswith('ExecStart=/usr/bin/python3 '))
+        self.assertEqual(commands[0], 'ExecStart=/run/aswp-activation-123-1.guardian --activation-guardian aswp-activation-123-1 1000 /tmp/aswp-fixture %n')
         self.assertIn('Delegate=no', lines)
         self.assertIn('KillMode=control-group', lines)
         self.assertIn('RuntimeMaxSec=60s', lines)

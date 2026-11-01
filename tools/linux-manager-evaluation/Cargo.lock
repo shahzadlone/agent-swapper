@@ -6,10 +6,12 @@ version = 4
 name = "aswp-linux-manager-evaluation"
 version = "0.0.0"
 dependencies = [
+ "fuxix",
  "nix",
  "rustix",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "unix-ancillary",
  "zbus",
@@ -112,6 +114,15 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuxix"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1b7e8fcb245e79824468e1ba763518f42051b620b432002a4d4d8df8b6c1e4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

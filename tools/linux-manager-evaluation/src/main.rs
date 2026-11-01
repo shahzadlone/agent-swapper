@@ -1,8 +1,15 @@
 //! Manager observation and opted-in fixture activation. No custody receipts.
 #![forbid(unsafe_code)]
 
+mod activated_guardian;
 mod activation;
 mod activation_packet;
+#[allow(
+    dead_code,
+    reason = "qualification service shares the reviewed core transport"
+)]
+#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
+mod admission_transport;
 mod kernel;
 mod watch;
 
@@ -644,6 +651,16 @@ fn run() -> io::Result<Report> {
 }
 
 fn main() {
+    if let Some(result) = activated_guardian::dispatch() {
+        if let Err(error) = result {
+            // Fixture diagnostics only: this role accepts no provider secrets.
+            // stdout is the activation socket, which the fault controls inspect.
+            let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
+            let _ = writeln!(io::stdout(), "activation fixture refused: {diagnostic}");
+            std::process::exit(125);
+        }
+        return;
+    }
     if let Err(error) = run().and_then(|report| write_report(&report)) {
         let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
         eprintln!("manager observation unavailable or refused: {diagnostic}");

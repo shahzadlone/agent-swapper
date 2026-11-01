@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Fixed-user activation experiment; disposable hosted CI only, never installation."""
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import select
 import socket
 import stat
 import struct
@@ -14,25 +14,14 @@ import sys
 import tempfile
 import time
 
-from check_linux_managed_scope import check_controls, membership, private_directory, wait_for
+from check_linux_managed_scope import check_controls, private_directory, wait_for
 
-PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_SOCKET_ACTIVATION'
+PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_SOCKET_ACTIVATION,ASWP_MANAGED_OBSERVER'
 
 
 def require(ok, message):
     if not ok:
         raise RuntimeError(message)
-
-
-def require_clean_eof(connection, message):
-    data, ancillary, flags, _ = connection.recvmsg(1, 0)
-    watcher = select.poll()
-    watcher.register(connection, select.POLLRDHUP | select.POLLHUP)
-    closed = any(events & (select.POLLRDHUP | select.POLLHUP) for _, events in watcher.poll(0))
-    # SOCK_SEQPACKET permits an empty record while the peer remains open.
-    # Only kernel-reported read-side shutdown distinguishes EOF from it.
-    require(not data and not ancillary and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC)
-            and closed, message)
 
 
 def fixture_prefix():
@@ -50,6 +39,34 @@ def endpoint(prefix):
     return Path('/run') / (prefix + '.sock')
 
 
+def guardian_image(prefix):
+    return Path('/run') / (prefix + '.guardian')
+
+
+def source_image(uid):
+    path = Path(os.environ.get('ASWP_MANAGED_OBSERVER', ''))
+    require(path.is_absolute(), 'compiled Rust guardian source is required')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        meta = os.fstat(stream.fileno())
+        require(stat.S_ISREG(meta.st_mode) and meta.st_uid == uid and meta.st_mode & 0o022 == 0,
+                'compiled guardian source is not owned and protected')
+        data = stream.read(64 * 1024 * 1024 + 1)
+    require(len(data) <= 64 * 1024 * 1024 and data.startswith(b'\x7fELF'),
+            'compiled guardian source is not a bounded ELF image')
+    return data
+
+
+def verify_image(path, digest):
+    meta = path.lstat()
+    require(stat.S_ISREG(meta.st_mode) and meta.st_uid == 0 and meta.st_mode & 0o7777 == 0o755,
+            'installed guardian image is not root-owned and protected')
+    with path.open('rb') as stream:
+        data = stream.read(64 * 1024 * 1024 + 1)
+    require(len(data) <= 64 * 1024 * 1024 and hashlib.sha256(data).hexdigest() == digest,
+            'installed guardian image differs from ownership marker')
+
+
 def ordinary_ids(uid, gid):
     uid, gid = int(uid), int(gid)
     require(0 < uid < 2**31 and 0 < gid < 2**31, 'ordinary target UID and GID required')
@@ -58,11 +75,11 @@ def ordinary_ids(uid, gid):
 
 def unit_files(prefix, directory, uid, gid):
     uid, gid = ordinary_ids(uid, gid)
-    script = Path(__file__).resolve()
-    for path in (script, directory):
+    for path in (guardian_image(prefix), directory):
         require(path.is_absolute() and re.fullmatch(r'/[A-Za-z0-9_./-]+', str(path))
                 and '..' not in path.parts, 'fixture path cannot be represented as a fixed unit argument')
     require(re.fullmatch(r'aswp-activation-[0-9]{1,24}-[0-9]{1,8}', prefix), 'invalid fixture unit prefix')
+    run, attempt = prefix.removeprefix('aswp-activation-').split('-')
     socket_unit = f'''[Unit]
 Description=AgentSwapper disposable activation fixture
 [Socket]
@@ -83,7 +100,8 @@ CollectMode=inactive-or-failed
 Type=exec
 User={uid}
 Group={gid}
-ExecStart=/usr/bin/python3 {script} --service {directory} {uid} %n
+ExecStart={guardian_image(prefix)} --activation-guardian {prefix} {uid} {directory} %n
+Environment=GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted ASWP_CI_SOCKET_ACTIVATION=1 GITHUB_RUN_ID={run} GITHUB_RUN_ATTEMPT={attempt}
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
@@ -118,7 +136,7 @@ def admin(verb, directory, uid, gid):
     uid, gid = ordinary_ids(uid, gid)
     private_directory(directory, uid)
     files = unit_files(prefix, directory, uid, gid)
-    ownership = json.dumps({'uid': uid, 'gid': gid, 'directory': str(directory), 'units': files}, sort_keys=True)
+    identity = {'uid': uid, 'gid': gid, 'directory': str(directory), 'units': files}
     marker = Path('/run') / (prefix + '.owner')
     parent = Path('/run/systemd/system')
     metadata = parent.lstat()
@@ -126,11 +144,20 @@ def admin(verb, directory, uid, gid):
             'runtime unit directory is not root-owned and protected')
     if verb == 'install':
         require(not endpoint(prefix).exists(), 'fixture activation endpoint already exists')
+        require(not os.path.lexists(guardian_image(prefix)), 'fixture guardian image already exists')
         for name in files:
             require(not os.path.lexists(parent / name), 'fixture unit name already exists')
+        data = source_image(uid)
+        ownership = json.dumps(identity | {'guardian_sha256': hashlib.sha256(data).hexdigest()}, sort_keys=True)
         descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         with os.fdopen(descriptor, 'w') as stream:
             stream.write(ownership)
+        fd = os.open(guardian_image(prefix), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o755)
+        verify_image(guardian_image(prefix), hashlib.sha256(data).hexdigest())
         for name, contents in files.items():
             fd = os.open(parent / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
             with os.fdopen(fd, 'w') as stream:
@@ -144,8 +171,19 @@ def admin(verb, directory, uid, gid):
         return
     marker_meta = marker.lstat()
     require(stat.S_ISREG(marker_meta.st_mode) and marker_meta.st_uid == 0
-            and marker_meta.st_mode & 0o077 == 0 and marker.read_text() == ownership,
+            and marker_meta.st_mode & 0o077 == 0,
             'fixture ownership marker is absent, changed or not protected')
+    try:
+        ownership = json.loads(marker.read_text())
+    except ValueError as error:
+        raise RuntimeError('fixture ownership marker is invalid') from error
+    require(isinstance(ownership, dict) and set(ownership) == set(identity) | {'guardian_sha256'}
+            and all(ownership[key] == value for key, value in identity.items())
+            and isinstance(ownership['guardian_sha256'], str)
+            and re.fullmatch(r'[0-9a-f]{64}', ownership['guardian_sha256']),
+            'fixture ownership marker differs from this run')
+    if os.path.lexists(guardian_image(prefix)):
+        verify_image(guardian_image(prefix), ownership['guardian_sha256'])
     for name, contents in files.items():
         path = parent / name
         if os.path.lexists(path):
@@ -174,68 +212,10 @@ def admin(verb, directory, uid, gid):
             path.unlink()
     systemctl('daemon-reload')
     require(not endpoint(prefix).exists(), 'activation endpoint survived cleanup')
+    if os.path.lexists(guardian_image(prefix)):
+        verify_image(guardian_image(prefix), ownership['guardian_sha256'])
+        guardian_image(prefix).unlink()
     marker.unlink()
-
-
-def service(directory, uid, unit):
-    started = time.monotonic()
-    uid = int(uid)
-    require(os.getuid() == os.geteuid() == uid != 0, 'activated guardian is not the fixed ordinary user')
-    private_directory(directory)
-    require(re.fullmatch(r'aswp-activation-[0-9]{1,24}-[0-9]{1,8}@[A-Za-z0-9_.:\\-]+\.service', unit),
-            'invalid activated fixture unit')
-    invocation = os.environ.get('INVOCATION_ID', '')
-    require(re.fullmatch(r'[0-9a-f]{32}', invocation) and invocation != '0' * 32,
-            'activation did not supply an invocation identity')
-    group = '/system.slice/' + unit
-    require(membership() == group, 'activated guardian is outside its expected scope')
-    check_controls(Path('/sys/fs/cgroup' + group))
-    with socket.socket(fileno=os.dup(sys.stdin.fileno())) as connection:
-        connection.settimeout(8)
-        require(connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_SEQPACKET,
-                'activation control socket is not sequenced-packet')
-        peer_pid, peer_uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-        require(peer_uid == uid and peer_pid > 0, 'activation client identity differs')
-        request, ancillary, flags, _ = connection.recvmsg(6, 0)
-        require(request in (b'GO\n', b'BIND\n') and not ancillary
-                and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC), 'invalid fixture activation request')
-        report = {'unit': unit, 'invocation': invocation, 'pid': os.getpid(), 'uid': uid,
-                  'group': group, 'peer_uid': peer_uid, 'peer_pid': peer_pid, 'started': started}
-        if request == b'BIND\n':
-            # The Rust observer authenticates this message's SCM_CREDENTIALS,
-            # then binds the claimed invocation through the system manager.
-            # This branch accepts no launch request and creates no worker.
-            connection.sendall(json.dumps(report).encode() + b'\n')
-            connection.settimeout(12)
-            require_clean_eof(connection, 'bind-only probe sent launch data')
-            (directory / (invocation + '.bind-clean-eof')).write_text(invocation)
-            return
-        run = directory / invocation
-        run.mkdir(mode=0o700)
-        subprocess.Popen(['/usr/bin/python3', str(Path(__file__).resolve()), '--writer', str(run)],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         close_fds=True, start_new_session=True)
-        wait_for(lambda: (run / 'heartbeat').exists(), seconds=5)
-        connection.sendall(json.dumps(report).encode() + b'\n')
-        connection.settimeout(40)
-        require_clean_eof(connection, 'unexpected fixture activation command')
-        (run / 'guardian-clean-eof').write_text(invocation)
-    # Exiting the main service process lets KillMode=control-group retire its
-    # detached writer. The client never sends a numeric process kill request.
-
-
-def writer(directory):
-    private_directory(directory)
-    require(os.geteuid() != 0 and os.getsid(0) == os.getpid(), 'fixture writer is not an ordinary detached process')
-    deadline = time.monotonic() + 60
-    counter = 0
-    while time.monotonic() < deadline:
-        temporary = directory / 'heartbeat.tmp'
-        temporary.write_text(str(counter))
-        temporary.replace(directory / 'heartbeat')
-        counter += 1
-        time.sleep(0.02)
-    (directory / 'voluntary-exit').write_text('deadline')
 
 
 def deny_other_user():
@@ -435,16 +415,12 @@ def suite():
             for descriptor in descriptors:
                 os.close(descriptor)
             subprocess.run(admin_args + ['cleanup'] + identity_args, check=True, timeout=50)
-    print('::notice title=Linux fixed-user activation cleanup::temporary socket, template units, service instances and fixture files removed', flush=True)
+    print('::notice title=Linux fixed-user activation cleanup::temporary socket, template units, root-owned Rust guardian image, service instances and fixture files removed', flush=True)
 
 
 def main():
     args = sys.argv[1:]
-    if len(args) == 4 and args[0] == '--service':
-        service(Path(args[1]), args[2], args[3])
-    elif len(args) == 2 and args[0] == '--writer':
-        writer(Path(args[1]))
-    elif len(args) == 5 and args[0] == '--admin':
+    if len(args) == 5 and args[0] == '--admin':
         admin(args[1], Path(args[2]), args[3], args[4])
     elif args == ['--deny-other-user']:
         deny_other_user()
