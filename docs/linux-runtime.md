@@ -173,3 +173,10 @@ evaluation tests, strict manager/evaluation/core-feature Clippy, formatting,
 dependency boundaries and both locked license/advisory audits. No new registry
 package was introduced. Hosted authentication, scope/terminal composition and
 candidate rebuild results are still required for this revision.
+
+The first native transport run reached the stalled-authentication refusal but
+its harness accepted only the enclosing observer's timeout wording. The harness
+now accepts either specific eight-second timeout, while still requiring code
+125, empty stdout, a real authentication byte, EOF from the observer and the
+existing twelve-second process bound. This does not broaden successful manager
+admission. Native rerun evidence remains pending.
