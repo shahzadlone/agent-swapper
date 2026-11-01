@@ -211,6 +211,11 @@ pub(crate) fn serve(
                 error.to_string(),
             );
         }
+        // Preserve an independently observed terminal-loss diagnostic too.
+        // It follows the exit report and cannot replace or suppress it.
+        if matches!(hangup(&slave), Ok(true)) {
+            let _ = fs::write(directory.join("guardian-terminal-hangup"), invocation);
+        }
         Ok(true)
     };
     activated_guardian::wait_until(until, || {

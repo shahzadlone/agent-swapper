@@ -104,3 +104,9 @@ the long-session check on Ubuntu 22.04/24.04 in jobs 124777197243 and
 The `/usr/lib` image-path and queued-report correction also passed both native
 manager jobs in [run 41282501325](https://github.com/shahzadlone/agent-swapper/actions/runs/41282501325).
 Full candidate/rebuild results are checked separately before main integration.
+
+The first combined run (41282864768) stopped at the existing terminal-hangup
+journal test: reporting an already reaped target before checking terminal
+hangup omitted its diagnostic marker. The correction preserves both observations,
+reporting terminal status first and recording a separately observed HUP as
+best-effort diagnostics. The existing hangup assertion remains unchanged.
