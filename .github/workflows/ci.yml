@@ -253,6 +253,9 @@ jobs:
         env:
           ASWP_MANAGER_REFUSALS: '1'
         run: python3 tools/check_linux_manager_refusals.py "${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation"
+      - name: Evaluate fixed-child final-exec observation
+        timeout-minutes: 1
+        run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_event
       - name: Qualify root-owned service cleanup
         env:
           ASWP_MANAGED_VALIDATOR: ${{ github.workspace }}/target/debug/examples/linux_manager_identity_probe

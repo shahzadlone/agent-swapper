@@ -185,3 +185,7 @@ shim acquires its own controlling terminal and execs the fixed terminal target
 with the same PID. It never modifies the caller's terminal or accepts a provider
 command. This is inner-PTY qualification; an interactive client relay, shell
 suspend/resume and production provider execution remain separate gates.
+
+The independent `exec_event` example evaluates kernel final-exec observation
+using only its own fixed child. It neither activates a service nor changes the
+PTY protocol. See [the experiment and limits](../../docs/linux-exec-confirmation.md).

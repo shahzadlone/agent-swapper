@@ -312,3 +312,11 @@ The root and nested lockfiles retain the same reviewed zbus, Tokio, zruntime,
 rustix, nix, unix-ancillary and fuxix versions; the CI dependency-boundary check
 rejects drift or evaluation dependencies in the normal/build graph. This adds
 no async runtime or manager client to the shipped CLI.
+
+The separate `exec_event` example enables pinned nix 0.31.3's `ptrace` and
+`signal` features as development dependencies only. No crate version or
+production dependency changes. Source inspection covers the `traceme`,
+`setoptions`, `cont`, `detach` wrappers and typed child wait decoding; the spike
+uses no memory/register operations or externally supplied PID. The containing
+example retains `unsafe_code = forbid`. This limited review does not qualify
+ptrace-based production launch or provider compatibility.
