@@ -60,10 +60,12 @@ fn line(input: BorrowedFd<'_>, deadline: Instant) -> io::Result<Vec<u8>> {
             ));
         }
         let mut byte = [0_u8];
-        require(
-            rustix::io::read(input, &mut byte)? == 1,
-            "terminal input ended",
-        )?;
+        if rustix::io::read(input, &mut byte)? != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "terminal input ended",
+            ));
+        }
         if byte[0] == b'\n' {
             return Ok(result);
         }
@@ -232,15 +234,18 @@ mod tests {
         same_mode(termios::tcgetattr(&slave)?, &original);
         // A read-only regular file fails the prompt write after mode entry.
         let path = tempfile::NamedTempFile::new()?;
-        assert!(
-            mode_line(
-                slave.as_fd(),
-                &mut fs::File::open(path.path())?,
-                &raw,
-                b"RAW>",
-                Instant::now() + Duration::from_secs(1)
-            )
-            .is_err()
+        let error = mode_line(
+            slave.as_fd(),
+            &mut fs::File::open(path.path())?,
+            &raw,
+            b"RAW>",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .err()
+        .ok_or_else(|| io::Error::other("prompt write unexpectedly succeeded"))?;
+        assert_eq!(
+            error.raw_os_error(),
+            Some(rustix::io::Errno::BADF.raw_os_error())
         );
         same_mode(termios::tcgetattr(&slave)?, &original);
         rustix::io::write(&master, &[b'x'; 256])?;
@@ -256,7 +261,13 @@ mod tests {
         assert_eq!(error.to_string(), "terminal fixture input exceeds bounds");
         same_mode(termios::tcgetattr(&slave)?, &original);
         drop(master);
-        assert!(line(slave.as_fd(), Instant::now() + Duration::from_secs(1)).is_err());
+        let error = line(slave.as_fd(), Instant::now() + Duration::from_secs(1))
+            .err()
+            .ok_or_else(|| io::Error::other("hangup accepted as input"))?;
+        assert!(
+            error.kind() == io::ErrorKind::UnexpectedEof
+                || error.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error())
+        );
         Ok(())
     }
 }
