@@ -5,6 +5,7 @@
 //! diagnostic facts alone never establish custody, exec, or journal completion.
 //! This module does not install units, contact a manager, send signals or write
 //! migration controls. It is not a restart-recovery or provider-isolation API.
+use crate::installed_image::ProtectedImage;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     fs::{FileType, Mode, OFlags, ResolveFlags, openat, openat2},
@@ -260,6 +261,20 @@ impl Process {
         self.live()
     }
 
+    fn require_image(&self, image: &ProtectedImage) -> io::Result<()> {
+        self.check()?;
+        // Deliberately follow only the kernel's fixed exe magic link through
+        // the original retained proc directory. Never reopen a numeric PID path.
+        let actual = openat(
+            &self.proc_dir,
+            "exe",
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        image.require_descriptor(&actual)?;
+        self.live()
+    }
+
     fn live(&self) -> io::Result<()> {
         require(
             !self.exited()?,
@@ -348,6 +363,13 @@ pub struct Retirement {
 }
 
 impl Binding {
+    /// Corroborate the original guardian's executable through its retained proc
+    /// directory and pidfd. The caller supplies a policy-approved installed image;
+    /// this observation is not exec confirmation or a whole-scope receipt.
+    pub fn require_main_image(&self, image: &ProtectedImage) -> io::Result<()> {
+        self.main.require_image(image)
+    }
+
     /// Borrow the original guardian pidfd. This is not a numeric-PID lookup or
     /// manager authorization; the caller remains responsible for its policy.
     pub fn guardian_pidfd(&self) -> BorrowedFd<'_> {
@@ -588,6 +610,43 @@ mod tests {
         };
         assert!(wrong.check().is_err());
         assert!(Process::bind(child.0.id(), uid, "/aswp-wrong-child-group").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn retained_process_requires_the_expected_image_and_stays_live() -> io::Result<()> {
+        use crate::child_waiter::ChildWaiter;
+        use std::{
+            path::Path,
+            process::{Command, Stdio},
+        };
+        let child = ChildWaiter::new(
+            Command::new("/usr/bin/sleep")
+                .arg("30")
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
+        )?;
+        let group = std::fs::read_to_string("/proc/self/cgroup")?;
+        let group = group
+            .strip_prefix("0::")
+            .and_then(|value| value.strip_suffix('\n'))
+            .ok_or_else(|| io::Error::other("test requires unified cgroup v2"))?;
+        let process = Process::bind(
+            child.pid().as_raw_pid() as u32,
+            rustix::process::getuid().as_raw(),
+            group,
+        )?;
+        let expected = ProtectedImage::open(&std::fs::canonicalize("/usr/bin/sleep")?)?;
+        process.require_image(&expected)?;
+        // Python is a different executable even on multicall coreutils hosts.
+        let different =
+            ProtectedImage::open(&std::fs::canonicalize(Path::new("/usr/bin/python3"))?)?;
+        assert!(process.require_image(&different).is_err());
+        drop(child);
+        assert!(process.require_image(&expected).is_err());
         Ok(())
     }
 

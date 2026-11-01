@@ -104,8 +104,12 @@ impl ProtectedImage {
             OFlags::RDONLY | OFlags::CLOEXEC,
             Mode::empty(),
         )?;
+        self.require_descriptor(&current)
+    }
+
+    pub(crate) fn require_descriptor(&self, actual: impl AsFd) -> io::Result<()> {
         let expected = fstat(&self.0)?;
-        let actual = fstat(&current)?;
+        let actual = fstat(actual)?;
         require(
             (expected.st_dev, expected.st_ino) == (actual.st_dev, actual.st_ino),
             "running executable differs from the retained protected image",

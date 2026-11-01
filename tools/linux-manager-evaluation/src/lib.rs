@@ -266,6 +266,21 @@ async fn snapshot(
         "unit snapshot disagrees with expected fixture",
     )?;
     let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
+    if matches!(&expected.kind, UnitKind::Activated { .. }) {
+        let (prefix, _) = expected
+            .unit
+            .split_once('@')
+            .ok_or_else(|| io::Error::other("activation image lacks its fixed prefix"))?;
+        require(
+            fixture_policy::valid_prefix(prefix),
+            "invalid activation image prefix",
+        )?;
+        let path = format!("/usr/lib/{prefix}.guardian");
+        let image = agentswapper_linux_runtime::installed_image::ProtectedImage::open(
+            std::path::Path::new(&path),
+        )?;
+        kernel.require_main_image(&image)?;
+    }
     let invocation_xattr = invocation_xattr(kernel.directory(), &first, &invocation)?;
     let bound_pid =
         u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)

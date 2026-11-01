@@ -297,3 +297,31 @@ and the child waiter at `a719604` in
 [41288872078](https://github.com/shahzadlone/agent-swapper/actions/runs/41288872078).
 These close their earlier pending extraction results. The current combined
 manager-handle and review-correction revision still requires its own run.
+
+## Client corroboration of the guardian image
+
+The activation snapshot now opens its exact fixed installed guardian image and
+corroborates it through the original kernel binding. `require_main_image` opens
+the kernel's `exe` magic link relative to the retained proc directory, compares
+device/inode with the protected image handle, and checks the original pidfd is
+still live. It never reconstructs a numeric `/proc/PID/exe` path. UID and cgroup
+observations precede this check; the existing manager rechecks still follow it.
+The guardian's own image check remains an additional check.
+
+The caller must supply a policy-approved image in a trusted namespace. This
+comparison needs procfs read permission and a dumpable guardian; unavailable
+access refuses admission. It does not authenticate argv, establish target exec,
+prove immutable state after observation or replace the remaining installation
+manifest/version checks. Transient measurement fixtures keep their existing
+policy; the new check applies to fixed socket-activated guardian snapshots.
+
+A real owned child test accepts its protected system image, rejects a different
+image, then rejects the original retained process after its pidfd has exited.
+Canonical test assets accommodate multicall coreutils; the different image is
+Python, not another applet that might share the same inode. Local runtime tests
+pass 33 cases plus five compile-fail doctests, with the receiver role exercised
+by its cross-process test. Strict runtime and consumer Clippy pass. Native
+activation and combined qualification remain pending.
+
+All 49 evaluation tests, strict core Clippy with the Store qualification feature
+and the dependency-boundary check also pass for the client image comparison.

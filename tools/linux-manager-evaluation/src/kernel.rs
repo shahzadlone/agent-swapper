@@ -44,6 +44,12 @@ impl From<observed::Retirement> for Retirement {
 }
 pub(crate) struct Binding(observed::Binding);
 impl Binding {
+    pub(crate) fn require_main_image(
+        &self,
+        image: &agentswapper_linux_runtime::installed_image::ProtectedImage,
+    ) -> io::Result<()> {
+        self.0.require_main_image(image)
+    }
     pub(crate) fn bind(unit: &str, user: u32, pid: u32) -> io::Result<Self> {
         require(
             !unit.contains('/')
