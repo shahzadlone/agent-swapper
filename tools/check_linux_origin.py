@@ -50,8 +50,13 @@ def stop(child):
 def ready(child):
     with selectors.DefaultSelector() as selector:
         selector.register(child.stdout, selectors.EVENT_READ)
-        require(selector.select(5) and os.read(child.stdout.fileno(), 1) == b'R',
-                'origin fixture child did not reach its barrier')
+        arrived = selector.select(5) and os.read(child.stdout.fileno(), 1) == b'R'
+    if not arrived:
+        if child.poll() is None:
+            child.kill()
+        _, errors = child.communicate(timeout=3)
+        raise RuntimeError('origin fixture child did not reach its barrier: '
+                           + errors.decode('utf-8', errors='replace')[-1500:])
 
 
 def expected(result, reason):
@@ -121,6 +126,15 @@ def inside(case, binary, backend, uid, gid):
             if case == 'full-map-user':
                 # No map helpers, subordinate-ID changes or policy overrides.
                 # The root parent maps only its blocked, still-live owned child.
+                # Before mapping, the child cannot traverse private checkout
+                # ancestors as its overflow IDs. Stage only the two public
+                # fixture scripts in this root-owned, read-only directory.
+                base.chmod(0o755)
+                for name in ('check_linux_origin.py', 'check_linux_image_mounts.py'):
+                    with (base / name).open('xb') as output:
+                        output.write(Path(__file__).with_name(name).read_bytes())
+                    (base / name).chmod(0o644)
+                command[4] = str(base / 'check_linux_origin.py')
                 command = ['/usr/bin/unshare', '--user', *command]
             target = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             ready(target)
@@ -179,6 +193,7 @@ def main():
             'ordinary origin fixture runner required')
     binary = Path(args[0])
     require(binary.is_absolute() and binary.is_file() and not binary.is_symlink(), 'invalid origin probe binary')
+    failures = []
     for case in CASES:
         backends = ['auto', 'procfs'] + (['pidfd'] if args[1] == 'available' else [])
         # Metadata substitutions target the procfs mechanism explicitly; the
@@ -186,12 +201,15 @@ def main():
         if case in ('fake-proc', 'proc-subdirectory', 'status-overlay', 'namespace-directory'):
             backends = ['procfs']
         for backend in backends:
-            subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE,
+            result = subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE,
                             '/usr/bin/timeout', '--kill-after=3s', '25s', '/usr/bin/unshare',
                             '--mount', '--propagation', 'private', '--fork', '--kill-child',
                             '/usr/bin/python3', '-I', '-B', '-S', str(Path(__file__).resolve()),
                             '--inside', case, str(binary), backend, str(os.getuid()), str(os.getgid())],
-                           stdin=subprocess.DEVNULL, check=True, timeout=35)
+                           stdin=subprocess.DEVNULL, check=False, timeout=35)
+            if result.returncode != 0:
+                failures.append(f'{case}/{backend}: exit {result.returncode}')
+    require(not failures, 'origin qualification failures: ' + ', '.join(failures))
 
 
 if __name__ == '__main__':
