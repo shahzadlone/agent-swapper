@@ -15,6 +15,27 @@ use std::{
     time::{Duration, Instant},
 };
 pub(crate) const GO: &[u8] = b"ASWP-GO-1";
+
+#[derive(Debug)]
+struct UnexpectedControlRecord;
+
+impl std::fmt::Display for UnexpectedControlRecord {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("unexpected guardian control message")
+    }
+}
+
+impl std::error::Error for UnexpectedControlRecord {}
+
+#[allow(
+    dead_code,
+    reason = "only attribution fixtures distinguish protocol refusals"
+)]
+pub(crate) fn is_record_refusal(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.is::<UnexpectedControlRecord>())
+}
 fn require(value: bool, message: &'static str) -> io::Result<()> {
     if value {
         Ok(())
@@ -72,13 +93,16 @@ fn read_eof(socket: impl AsFd) -> io::Result<bool> {
         Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => return Ok(false),
         Err(error) => return Err(error.into()),
     };
-    require(
-        received.bytes == 0
-            && !received
-                .flags
-                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC),
-        "unexpected guardian control message",
-    )?;
+    if received.bytes != 0
+        || received
+            .flags
+            .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            UnexpectedControlRecord,
+        ));
+    }
     let closed = PollFlags::RDHUP | PollFlags::HUP;
     let mut readiness = [PollFd::new(&socket, closed)];
     poll(
@@ -336,6 +360,8 @@ mod tests {
             .err()
             .ok_or_else(|| io::Error::other("empty packet accepted"))?;
         assert_eq!(error.to_string(), "unexpected guardian control message");
+        assert!(is_record_refusal(&error));
+        assert!(!is_record_refusal(&io::Error::other(error.to_string())));
         for packet in [b"X".as_slice(), b"too long"] {
             send(&sender, packet, &[])?;
             assert!(eof(&receiver).is_err());
@@ -345,6 +371,18 @@ mod tests {
         let (sender, receiver) = pair()?;
         drop(sender);
         assert!(eof(&receiver)?);
+        Ok(())
+    }
+
+    #[test]
+    fn socket_reset_is_not_attributed_to_a_queued_record() -> io::Result<()> {
+        let (sender, receiver) = pair()?;
+        send(&receiver, b"unread response", &[])?;
+        drop(sender);
+        let error = eof(&receiver)
+            .err()
+            .ok_or_else(|| io::Error::other("reset accepted as EOF"))?;
+        assert!(!is_record_refusal(&error));
         Ok(())
     }
 

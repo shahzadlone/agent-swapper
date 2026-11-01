@@ -84,14 +84,16 @@ fn wait_until(deadline: Instant, mut ready: impl FnMut() -> io::Result<bool>) ->
     }
 }
 
-fn serve(prefix: &str, uid: u32, directory: &Path, unit: &str) -> io::Result<()> {
+fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::Result<()> {
     activation::gate(prefix)?;
     let started = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
     require(
         uid != 0
             && rustix::process::getuid().as_raw() == uid
             && rustix::process::geteuid().as_raw() == uid
-            && rustix::process::getgid() == rustix::process::getegid(),
+            && gid != 0
+            && rustix::process::getgid().as_raw() == gid
+            && rustix::process::getegid().as_raw() == gid,
         "activated guardian is not the fixed ordinary user",
     )?;
     protected_executable(prefix)?;
@@ -140,6 +142,13 @@ fn serve(prefix: &str, uid: u32, directory: &Path, unit: &str) -> io::Result<()>
         }
         worker = Some(command.spawn()?);
         wait_until(Instant::now() + Duration::from_secs(5), || {
+            if let Some(child) = &mut worker
+                && let Some(status) = child.try_wait()?
+            {
+                return Err(io::Error::other(format!(
+                    "fixture writer exited before heartbeat: {status}"
+                )));
+            }
             Ok(run.join("heartbeat").exists())
         })?;
     }
@@ -174,7 +183,13 @@ fn serve(prefix: &str, uid: u32, directory: &Path, unit: &str) -> io::Result<()>
     let disconnected = wait_until(
         Instant::now() + Duration::from_secs(if bind_only { 12 } else { 40 }),
         || {
-            let eof = admission_transport::eof(&channel).map_err(|_| io::Error::other(refusal))?;
+            let eof = admission_transport::eof(&channel).map_err(|error| {
+                if admission_transport::is_record_refusal(&error) {
+                    io::Error::other(refusal)
+                } else {
+                    error
+                }
+            })?;
             if let Some(worker) = &mut worker {
                 require(
                     worker.try_wait()?.is_none(),
@@ -256,11 +271,12 @@ pub(crate) fn dispatch() -> Option<io::Result<()>> {
     match args.first().map(String::as_str) {
         Some("--activation-guardian") => Some((|| {
             require(
-                args.len() == 5,
-                "guardian fixture requires prefix, user, directory and unit",
+                args.len() == 6,
+                "guardian fixture requires prefix, user, group, directory and unit",
             )?;
             let uid = args[2].parse::<u32>().map_err(io::Error::other)?;
-            serve(&args[1], uid, Path::new(&args[3]), &args[4])
+            let gid = args[3].parse::<u32>().map_err(io::Error::other)?;
+            serve(&args[1], uid, gid, Path::new(&args[4]), &args[5])
         })()),
         Some("--activation-writer") => Some((|| {
             require(
@@ -284,6 +300,9 @@ mod tests {
             (b"GO\n".as_slice(), false, true),
             (b"".as_slice(), false, false),
             (b"GO\nextra".as_slice(), false, false),
+            (b"GO\nab".as_slice(), false, false),
+            (b"BIND\nX".as_slice(), false, false),
+            (b"BIND".as_slice(), false, false),
             (b"BIND\n".as_slice(), true, false),
         ] {
             let (sender, receiver) = admission_transport::pair()?;

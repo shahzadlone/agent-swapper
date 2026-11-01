@@ -276,10 +276,31 @@ streams with null devices, starts a separate session, and refuses any surviving
 nonstandard descriptor before writing a heartbeat. This checks the fixture's
 actual inherited descriptors; it does not qualify future arbitrary providers.
 
-Local validation passed 24 Rust tests, seven Python guard tests, strict Clippy
-and the locked dependency audit. After correcting the concurrent-fork timing
-assumption, the parallel Rust suite passed 30/30 stress runs. Native CI and an
-independent source review of the service/image lifecycle are pending. Real
+The initial Rust service passed both native manager jobs at `e10a564` in
+[run 41262114805](https://github.com/shahzadlone/agent-swapper/actions/runs/41262114805).
+After correcting the concurrent-fork timing assumption, its 24-test parallel
+suite passed 30/30 stress runs. Its focused Opus service/image review is now
+complete. The subsequent follow-up passes 25 Rust tests, eight core transport
+tests and 11 Python guard tests locally, plus strict Clippy; native validation
+of these later changes remains pending.
+
+The review's `/run` noexec concern did not occur on either qualified native
+runner. This disposable fixture keeps its existing runtime path but now refuses
+a noexec mount explicitly before writing files or controlling units. It never
+changes mount options. Effective socket/template configuration must match the
+runtime fragments, have no drop-ins and need no reload; preexisting manager
+units are refused. Group identity, root-peer refusal and retained-directory
+membership are checked too. Cleanup verifies socket stop instead of ignoring
+failures, and rolls back exclusively created inodes if file creation fails
+before reload. Error diagnostics retain earlier failures.
+
+Queued-record refusal is now a distinct error type. Transport, poll and
+socket-option failures cannot produce the expected fault-control attribution.
+Guardian diagnostics use one bounded socket record, and writer startup reports
+early child failure. These address the review's substantive findings; the
+native run must still qualify the complete revised configuration and lifecycle.
+
+Real
 profile lease transfer, durable journal-before-GO ordering and an inner PTY
 remain the next integration work. No normal launch path uses this service.
 
@@ -289,3 +310,27 @@ for review. The next implementation gates are qualifying the Rust activated
 guardian, lease/journal/GO ordering, inherited descriptor hygiene and the service's inner
 PTY plus client relay. Neither this design nor successful read-only observation
 enables automatic switching.
+
+### Next integration seam
+
+The next checkpoint will expose the observer's client side as an isolated
+library used only by Linux core development tests, with a thin observer binary.
+The service and writer remain binary roles. This keeps the real `Store`
+lifecycle APIs private and avoids an extra subprocess/JSON authentication
+boundary. Opus independently recommended this direction over public core
+testing hooks or a sidecar observer.
+
+Owned bound/prepared/running/closed states will make the GO sequence explicit:
+acquire a disposable profile lease, bind the guardian, persist a fresh logical
+run scope, transfer a duplicate lease, receive and verify the gated writer's
+identity, persist its spawn observation, then release GO. Errors retain the
+original scope witnesses for explicit bounded retirement; drop only closes
+resources and never grants a journal completion. Observations have no conversion
+to a Linux custody receipt. The library must stay absent from the core's normal
+dependency graph and resolve the same pinned versions through the root lock.
+
+New tests will combine those real boundaries: journaling failure withholds GO,
+the guardian's duplicate alone retains the lease, and the durable unresolved
+run continues to block reuse after cleanup and reopening. They will use a
+cooperating gated writer, not claim provider exec confirmation. Existing
+operator-attestation behavior need not change to complete this checkpoint.

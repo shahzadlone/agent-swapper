@@ -13,6 +13,56 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_partial_file_creation_rolls_back_only_exclusively_created_inodes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            marker, image = directory / 'owner', directory / 'guardian'
+            unrelated = directory / 'existing'
+            unrelated.write_text('keep')
+            created = []
+            probe.create_owned_file(marker, b'ownership', 0o600, created)
+            with patch.object(probe.os, 'fchmod', side_effect=OSError('injected chmod failure')):
+                with self.assertRaises(OSError):
+                    probe.create_owned_file(image, b'partial image', 0o755, created)
+            probe.rollback_created(created)
+            self.assertFalse(marker.exists())
+            self.assertFalse(image.exists())
+            self.assertEqual(unrelated.read_text(), 'keep')
+            created = []
+            with self.assertRaises(FileExistsError):
+                probe.create_owned_file(unrelated, b'replacement', 0o600, created)
+            self.assertEqual(created, [])
+            probe.create_owned_file(image, b'owned', 0o600, created)
+            image.rename(directory / 'original')
+            image.write_text('replacement')
+            with self.assertRaisesRegex(RuntimeError, 'changed; refusing rollback'):
+                probe.rollback_created(created)
+            self.assertEqual(image.read_text(), 'replacement')
+
+    def test_noexec_mount_refuses_before_writing_or_controlling_units(self):
+        with patch.object(probe, 'fixture_prefix', return_value='aswp-activation-123-1'), \
+             patch.object(probe.os, 'geteuid', return_value=0), \
+             patch.object(probe, 'private_directory'), \
+             patch.object(Path, 'lstat', return_value=SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)), \
+             patch.object(probe.os.path, 'lexists', return_value=False), \
+             patch.object(probe.os, 'statvfs', return_value=SimpleNamespace(f_flag=probe.os.ST_NOEXEC)), \
+             patch.object(probe.os, 'open') as create, patch.object(probe, 'systemctl') as control:
+            with self.assertRaisesRegex(RuntimeError, 'executable /run mount'):
+                probe.admin('install', Path('/tmp/aswp-fixture'), 1000, 1000)
+            create.assert_not_called()
+            control.assert_not_called()
+
+    def test_effective_unit_refuses_overrides_dropins_reload_and_incomplete_properties(self):
+        fragment = '/run/systemd/system/aswp-activation-123-1.socket'
+        good = f'LoadState=loaded\nFragmentPath={fragment}\nDropInPaths=\nNeedDaemonReload=no\n'
+        with patch.object(probe, 'systemctl', return_value=SimpleNamespace(stdout=good)):
+            probe.effective_unit('aswp-activation-123-1.socket', Path(fragment))
+        for bad in [good.replace('/run/', '/etc/'), good.replace('DropInPaths=', 'DropInPaths=/etc/override.conf'),
+                    good.replace('Reload=no', 'Reload=yes'), good.replace('loaded', 'not-found'),
+                    good + 'LoadState=loaded\n', good.replace('DropInPaths=\n', '')]:
+            with patch.object(probe, 'systemctl', return_value=SimpleNamespace(stdout=bad)), self.assertRaises(RuntimeError):
+                probe.effective_unit('aswp-activation-123-1.socket', Path(fragment))
+
     def test_bind_reset_requires_the_exact_guardian_refusal_marker(self):
         invocation = 'a' * 32
         with tempfile.TemporaryDirectory() as temporary:
@@ -147,7 +197,7 @@ class ActivationTests(unittest.TestCase):
         self.assertEqual([x for x in lines if x.startswith('Group=')], ['Group=1000'])
         commands = [x for x in lines if x.startswith('Exec')]
         self.assertEqual(len(commands), 1)
-        self.assertEqual(commands[0], 'ExecStart=/run/aswp-activation-123-1.guardian --activation-guardian aswp-activation-123-1 1000 /tmp/aswp-fixture %n')
+        self.assertEqual(commands[0], 'ExecStart=/run/aswp-activation-123-1.guardian --activation-guardian aswp-activation-123-1 1000 1000 /tmp/aswp-fixture %n')
         self.assertIn('Delegate=no', lines)
         self.assertIn('KillMode=control-group', lines)
         self.assertIn('RuntimeMaxSec=60s', lines)

@@ -680,8 +680,18 @@ fn main() {
         if let Err(error) = result {
             // Fixture diagnostics only: this role accepts no provider secrets.
             // stdout is the activation socket, which the fault controls inspect.
-            let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
-            let _ = writeln!(io::stdout(), "activation fixture refused: {diagnostic}");
+            let mut diagnostic: String = error.to_string().escape_debug().take(1800).collect();
+            while diagnostic.len() > 1800 {
+                diagnostic.pop();
+            }
+            let packet = format!("activation fixture refused: {diagnostic}\n");
+            // One bounded record, even when stdout's line writer would split a
+            // formatted diagnostic. A full/closed peer must not block cleanup.
+            let _ = rustix::net::send(
+                io::stdout(),
+                packet.as_bytes(),
+                rustix::net::SendFlags::NOSIGNAL | rustix::net::SendFlags::DONTWAIT,
+            );
             std::process::exit(125);
         }
         return;
