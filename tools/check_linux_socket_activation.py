@@ -90,14 +90,14 @@ def endpoint(prefix):
 def guardian_image(prefix):
     # /run is commonly noexec. Keep executable fixture content in a protected
     # executable parent; sockets and ownership metadata still belong in /run.
-    return Path('/opt') / (prefix + '.guardian')
+    return Path('/usr/lib') / (prefix + '.guardian')
 
 
 def protected_image_parent(prefix):
-    for path in (Path('/'), guardian_image(prefix).parent):
+    for path in reversed(guardian_image(prefix).parents):
         metadata = path.lstat()
         require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0,
-                'guardian image parent is not root-owned and protected')
+                f'guardian image parent is not root-owned and protected: {path}')
 
 
 def source_image(uid):
@@ -240,7 +240,7 @@ def admin(verb, directory, uid, gid):
         protected_image_parent(prefix)
         require(not os.path.lexists(endpoint(prefix)), 'fixture activation endpoint already exists')
         require(not os.statvfs(guardian_image(prefix).parent).f_flag & os.ST_NOEXEC,
-                'disposable Rust fixture requires an executable /opt mount; no host mount will be changed')
+                'disposable Rust fixture requires an executable /usr/lib mount; no host mount will be changed')
         require(not os.path.lexists(guardian_image(prefix)), 'fixture guardian image already exists')
         for name in files:
             require(not os.path.lexists(parent / name), 'fixture unit name already exists')

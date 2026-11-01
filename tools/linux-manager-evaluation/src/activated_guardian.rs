@@ -30,12 +30,14 @@ pub(crate) fn private_directory(path: &Path) -> io::Result<()> {
 
 pub(crate) fn protected_executable(prefix: &str) -> io::Result<()> {
     activation::protected_fragment(&format!("/run/systemd/system/{prefix}@.service"))?;
-    let parent = fs::symlink_metadata("/opt")?;
-    require(
-        parent.is_dir() && parent.uid() == 0 && parent.mode() & 0o022 == 0,
-        "guardian image parent is not root-owned and protected",
-    )?;
-    let path = format!("/opt/{prefix}.guardian");
+    for path in ["/", "/usr", "/usr/lib"] {
+        let parent = fs::symlink_metadata(path)?;
+        require(
+            parent.is_dir() && parent.uid() == 0 && parent.mode() & 0o022 == 0,
+            "guardian image parent is not root-owned and protected",
+        )?;
+    }
+    let path = format!("/usr/lib/{prefix}.guardian");
     require(
         std::env::current_exe()? == Path::new(&path),
         "guardian image is not the installed fixture",

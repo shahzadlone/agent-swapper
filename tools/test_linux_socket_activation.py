@@ -89,7 +89,7 @@ time.sleep(20)
              patch.object(probe.os.path, 'lexists', return_value=False), \
              patch.object(probe.os, 'statvfs', return_value=SimpleNamespace(f_flag=probe.os.ST_NOEXEC)), \
              patch.object(probe.os, 'open') as create, patch.object(probe, 'systemctl') as control:
-            with self.assertRaisesRegex(RuntimeError, 'executable /opt mount'):
+            with self.assertRaisesRegex(RuntimeError, 'executable /usr/lib mount'):
                 probe.admin('install', Path('/tmp/aswp-fixture'), 1000, 1000)
             create.assert_not_called()
             control.assert_not_called()
@@ -107,25 +107,26 @@ time.sleep(20)
              patch.object(probe.os, 'open') as create, patch.object(probe, 'systemctl') as control:
             with self.assertRaisesRegex(RuntimeError, 'source boundary reached'):
                 probe.admin('install', Path('/tmp/aswp-fixture'), 1000, 1000)
-            mounts.assert_called_once_with(Path('/opt'))
+            mounts.assert_called_once_with(Path('/usr/lib'))
             create.assert_not_called()
             control.assert_not_called()
 
     def test_unprotected_image_parent_refuses_before_writes_or_service_control(self):
         safe = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
-        for bad in [SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=1000),
-                    SimpleNamespace(st_mode=stat.S_IFDIR | 0o775, st_uid=0),
-                    SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=0)]:
-            with self.subTest(metadata=bad), \
-                 patch.object(probe, 'fixture_prefix', return_value='aswp-activation-123-1'), \
-                 patch.object(probe.os, 'geteuid', return_value=0), \
-                 patch.object(probe, 'private_directory'), \
-                 patch.object(Path, 'lstat', autospec=True, side_effect=lambda path: bad if path == Path('/opt') else safe), \
-                 patch.object(probe.os, 'open') as create, patch.object(probe, 'systemctl') as control:
-                with self.assertRaisesRegex(RuntimeError, 'guardian image parent'):
-                    probe.admin('install', Path('/tmp/aswp-fixture'), 1000, 1000)
-                create.assert_not_called()
-                control.assert_not_called()
+        for bad_path in (Path('/'), Path('/usr'), Path('/usr/lib')):
+            for bad in [SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=1000),
+                        SimpleNamespace(st_mode=stat.S_IFDIR | 0o775, st_uid=0),
+                        SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_uid=0)]:
+                with self.subTest(path=bad_path, metadata=bad), \
+                     patch.object(probe, 'fixture_prefix', return_value='aswp-activation-123-1'), \
+                     patch.object(probe.os, 'geteuid', return_value=0), \
+                     patch.object(probe, 'private_directory'), \
+                     patch.object(Path, 'lstat', autospec=True, side_effect=lambda path: bad if path == bad_path else safe), \
+                     patch.object(probe.os, 'open') as create, patch.object(probe, 'systemctl') as control:
+                    with self.assertRaisesRegex(RuntimeError, 'guardian image parent'):
+                        probe.admin('install', Path('/tmp/aswp-fixture'), 1000, 1000)
+                    create.assert_not_called()
+                    control.assert_not_called()
 
     def test_effective_unit_refuses_overrides_dropins_reload_and_incomplete_properties(self):
         fragment = '/run/systemd/system/aswp-activation-123-1.socket'
@@ -209,11 +210,9 @@ time.sleep(20)
              patch.object(probe.os, 'geteuid', return_value=0), \
              patch.object(probe, 'private_directory'), \
              patch.object(probe.os.path, 'lexists', return_value=True), \
-             patch.object(Path, 'lstat', side_effect=[
-                 SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
-                 SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0),
-                 SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
-                 SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)]), \
+             patch.object(Path, 'lstat', autospec=True, side_effect=lambda path: SimpleNamespace(
+                 st_mode=(stat.S_IFREG | 0o600) if path.name.endswith('.owner') else (stat.S_IFDIR | 0o755),
+                 st_uid=0)), \
              patch.object(Path, 'read_text', return_value=json.dumps(ownership)), \
              patch.object(probe, 'verify_image', side_effect=RuntimeError('image changed')), \
              patch.object(Path, 'unlink') as unlink, patch.object(probe, 'systemctl') as control:
@@ -274,7 +273,7 @@ time.sleep(20)
         self.assertEqual([x for x in lines if x.startswith('Group=')], ['Group=1000'])
         commands = [x for x in lines if x.startswith('Exec')]
         self.assertEqual(len(commands), 1)
-        self.assertEqual(commands[0], 'ExecStart=/opt/aswp-activation-123-1.guardian --activation-guardian aswp-activation-123-1 1000 1000 /tmp/aswp-fixture %n')
+        self.assertEqual(commands[0], 'ExecStart=/usr/lib/aswp-activation-123-1.guardian --activation-guardian aswp-activation-123-1 1000 1000 /tmp/aswp-fixture %n')
         self.assertIn('Delegate=no', lines)
         self.assertIn('KillMode=control-group', lines)
         self.assertIn('RuntimeMaxSec=60s', lines)
