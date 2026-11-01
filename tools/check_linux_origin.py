@@ -158,11 +158,12 @@ def inside(case, binary, backend, uid, gid):
                 source.chmod(0o644)
                 destination = f'{thread_view}/status'
             if destination:
+                source_metadata = os.stat(source)
                 subprocess.run(['/usr/bin/mount', '--bind', str(source), destination],
                                check=True, capture_output=True, timeout=5)
                 mounted = destination
-                require(os.stat(source).st_dev == os.stat(destination).st_dev
-                        and os.stat(source).st_ino == os.stat(destination).st_ino,
+                require(source_metadata.st_dev == os.stat(destination).st_dev
+                        and source_metadata.st_ino == os.stat(destination).st_ino,
                         'origin overlay does not name the installed source inode')
             stdout, stderr = target.communicate(input=b'GO', timeout=10)
             expected(subprocess.CompletedProcess([], target.returncode, stdout.decode(), stderr.decode()), CASES[case])
@@ -193,13 +194,17 @@ def main():
         _, case, binary, backend, uid, gid = args
         inside(case, binary, backend, *_mounts.identity(uid, gid))
         return
-    require(len(args) == 2 and args[1] in ('available', 'unsupported') and os.geteuid() != 0,
+    installation = len(args) == 2 and args[0] == '--installation'
+    require(len(args) == 2 and (installation or args[1] in ('available', 'unsupported')) and os.geteuid() != 0,
             'ordinary origin fixture runner required')
-    binary = Path(args[0])
+    binary = Path(args[1] if installation else args[0])
     require(binary.is_absolute() and binary.is_file() and not binary.is_symlink(), 'invalid origin probe binary')
+    if installation:
+        require(not os.path.lexists(f'/etc/agentswapper/installations/{os.getuid()}/active.json'),
+                'production selection fixture requires an absent installation')
     failures = []
-    for case in CASES:
-        backends = ['auto', 'procfs'] + (['pidfd'] if args[1] == 'available' else [])
+    for case in (('root', 'full-map-user') if installation else CASES):
+        backends = ['auto'] if installation else ['auto', 'procfs'] + (['pidfd'] if args[1] == 'available' else [])
         # Metadata substitutions target the procfs mechanism explicitly; the
         # pidfd path deliberately does not consult these filesystem names.
         if case in ('fake-proc', 'proc-subdirectory', 'status-overlay', 'namespace-directory'):

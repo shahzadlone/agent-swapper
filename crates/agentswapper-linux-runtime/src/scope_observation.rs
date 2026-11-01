@@ -113,9 +113,10 @@ fn own_process(root: &OwnedFd) -> io::Result<OwnedFd> {
     Ok(own)
 }
 
-/// Check identity maps and the visible PID 1's init.scope. This is an admission
-/// prerequisite, not proof of membership in the host's initial namespaces.
+/// Establish initial-user namespace origin before checking identity maps and the
+/// visible PID 1's init.scope. This does not prove initial mount/PID membership.
 pub fn initial_namespace() -> io::Result<()> {
+    let origin = agentswapper_linux_origin::Origin::capture()?;
     let root = proc_root()?;
     let own = own_process(&root)?;
     for name in ["uid_map", "gid_map"] {
@@ -129,7 +130,8 @@ pub fn initial_namespace() -> io::Result<()> {
     require(
         read_at(&init, "cgroup", 4096)? == b"0::/init.scope\n",
         "initial unified system-manager scope unavailable",
-    )
+    )?;
+    origin.require_current()
 }
 
 fn root_directory(fd: &OwnedFd) -> io::Result<()> {

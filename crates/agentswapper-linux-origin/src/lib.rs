@@ -1,7 +1,8 @@
 //! Candidate kernel-backed namespace observations, not launch authority.
 //!
-//! This crate is not yet consumed by the production installation reader.
-//! Native qualification and independent review precede that integration.
+//! Installation selection and manager prerequisites capture this before trusting
+//! root-owned metadata. Production managed launch remains disabled; this value
+//! does not authenticate installed policy, a manager or process custody.
 
 #[cfg(target_os = "linux")]
 #[allow(

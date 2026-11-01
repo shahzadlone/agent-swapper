@@ -5,9 +5,11 @@ use crate::{
     linux::{self, Manager, SERVICE_INTERFACE, UNIT_INTERFACE, property, require},
 };
 use agentswapper_linux_runtime::{
-    installed_artifacts::InstalledArtifacts, installed_config::ProtectedConfig,
-    installed_image::ProtectedImage, installed_selection::SelectedInstallation,
-    process_policy::OrdinaryCredentials, scope_observation,
+    installed_config::ProtectedConfig,
+    installed_image::ProtectedImage,
+    installed_selection::{AdmittedInstallation, SelectedInstallation},
+    process_policy::OrdinaryCredentials,
+    scope_observation,
 };
 use std::{io, os::fd::OwnedFd, path::Path, sync::Arc};
 use zbus::OwnedObjectPath;
@@ -33,7 +35,7 @@ enum Assets {
     #[cfg(feature = "qualification")]
     Explicit(Box<ExplicitAssets>),
     Selected(Box<SelectedInstallation>),
-    Admitted(Box<InstalledArtifacts>),
+    Admitted(Box<AdmittedInstallation>),
 }
 #[cfg(feature = "qualification")]
 struct ExplicitAssets {
@@ -43,8 +45,9 @@ struct ExplicitAssets {
 impl ServicePolicy {
     /// Retain the selected generation through service admission. This validates
     /// installed artifacts; loaded-unit and original-process checks still occur
-    /// in `BoundService::bind`. Trusted namespace provenance is a prerequisite.
+    /// in `BoundService::bind`. The selection retains its namespace observation.
     pub fn installed(selection: SelectedInstallation) -> io::Result<Self> {
+        selection.require_current()?;
         let credentials = OrdinaryCredentials::current()?;
         require(
             selection.artifacts().manifest().identity()
@@ -106,7 +109,7 @@ impl ServicePolicy {
             #[cfg(feature = "qualification")]
             Assets::Explicit(assets) => &assets.image,
             Assets::Selected(selection) => selection.artifacts().guardian(),
-            Assets::Admitted(artifacts) => artifacts.guardian(),
+            Assets::Admitted(installation) => installation.artifacts().guardian(),
         }
     }
     /// Revalidate retained installation metadata before connecting or preparing

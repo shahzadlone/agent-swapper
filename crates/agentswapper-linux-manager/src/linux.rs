@@ -51,11 +51,11 @@ pub fn prerequisites() -> io::Result<Vec<PathFact>> {
         !rustix::process::geteuid().is_root(),
         "ordinary user required",
     )?;
+    scope_observation::initial_namespace()?;
     require(
         Path::new("/run/systemd/system").is_dir(),
         "system manager unavailable",
     )?;
-    scope_observation::initial_namespace()?;
     let mut facts = Vec::new();
     for path in ["/", "/run", "/run/dbus", SOCKET] {
         let meta = fs::symlink_metadata(path)?;

@@ -338,5 +338,6 @@ versions are unchanged. A small module owns the fixed namespace-query ioctls and
 credential queries not exposed by Rustix; unsafe code is denied elsewhere in
 the crate and each native operation documents its ownership and safety contract.
 It does not expose namespace/credential mutation or arbitrary ioctl calls and is
-not consumed by the production launcher yet. See [namespace origin](linux-origin.md)
+used before installation selection and manager prerequisites. The managed
+launcher remains disabled. See [namespace origin](linux-origin.md)
 for the primary kernel contracts, review and pending native qualification.

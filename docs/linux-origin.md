@@ -1,7 +1,8 @@
 # Linux namespace origin candidate
 
-This read-only crate is a qualification candidate. The production installation
-reader and normal CLI do not consume it yet. A successful observation does not
+The installation selection reader now captures this read-only observation before
+opening its selector, manifest or images. Normal CLI execution still uses the
+explicitly uncontained preview; the managed launcher is not enabled. A successful observation does not
 establish service-manager custody, trusted installation files or target exit.
 
 ## Contract
@@ -75,11 +76,18 @@ overlaid namespace directory. They require the intended result and diagnostic;
 crashes, setup failures and generic errors are not successful negative tests.
 Only the root parent maps its blocked child; no subordinate-ID files, accounts,
 AppArmor policy or host sysctls are changed. Python starts isolated. Temporary
-mounts disappear with the private namespace. Native outcomes are pending.
+mounts disappear with the private namespace. Native integration outcomes are pending. An additional hosted probe calls the
+actual production `SelectedInstallation::open` in root and full-map child-user
+contexts. Both must refuse at the origin check before reaching the deliberately
+absent production selector; an absent-file error cannot satisfy that control.
 
 Source-only Opus 5.5 reviews assessed the design and fallback. The implementation
-and fixture audit is pending. Integration, final-hop race/ownership controls,
-post-exec helper observations and production ordering remain open gates.
+and fixture audit is pending. The selected and admitted installation types retain origin across the selector
+transition. Rechecking an active generation verifies its original namespace
+observation before and after artifact checks. Service policy validates the
+selection before reading its unit text. The manager prerequisite check also
+establishes origin before trusting root-owned bus paths. Native integration,
+final-hop race/ownership controls and post-exec helper observations remain gates.
 
 ## Primary contracts checked
 
