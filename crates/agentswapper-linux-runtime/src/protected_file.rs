@@ -76,6 +76,7 @@ pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
 mod tests {
     use super::*;
     use std::{
+        io::Read,
         os::unix::ffi::OsStrExt,
         process::{Command, Stdio},
         time::Duration,
@@ -136,7 +137,7 @@ mod tests {
             .env_clear()
             .env("ASWP_TEST_INSTALLED_FILE_SESSION", "1")
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
         let status = child.wait_timeout(Duration::from_secs(5))?;
@@ -144,8 +145,16 @@ mod tests {
             child.kill()?;
             child.wait()?;
         }
+        let mut report = String::new();
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("isolated role output absent"))?
+            .take(8192)
+            .read_to_string(&mut report)?;
         require(
-            status.is_some_and(|status| status.success()),
+            status.is_some_and(|status| status.success())
+                && report.contains("test result: ok. 1 passed; 0 failed;"),
             "isolated terminal refusal failed",
         )
     }

@@ -458,3 +458,15 @@ lookup now refused absence before the former unit-name comparison. Binding now
 uses the existing authenticated absence decoder and exposes a stable NotFound
 error; the test requires both that kind and the precise absence message. It does
 not accept arbitrary manager errors. The rest of the composition requires a rerun.
+
+The source-only Opus 5.5 review of `86f6c72` found no authority bypass and
+identified evidence, policy-retention and API-surface gaps. The first corrections
+make both subprocess-role tests require one executed passing test; an actual
+misspelled-role negative control fails, and restoring the name passes. The
+mutable-template control now checks the socket's accepted-connection count and
+idle state before and after refusal, verifies mode restoration, and rechecks the
+loaded unit. Mocked timeout, unexpected success and unexpected connection cases
+all fail while restoring mode 0644. Admission and connection substitution share
+one ten-second deadline, including the bounded offer read. Local runtime and
+evaluation tests, strict evaluation Clippy and 15 activation-harness tests pass.
+Native qualification of these corrections remains pending.
