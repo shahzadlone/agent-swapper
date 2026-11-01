@@ -199,3 +199,11 @@ The image was never executed. Both development workspaces now optimize that
 pinned dependency; release hashing already uses the optimized release profile.
 All file checks, digest bounds and fixture deadlines remain in effect. The
 complete native rerun must establish whether the aggregate timeout is resolved.
+
+The optimized checkpoint `71ab9af` passed the full native suite on both Ubuntu
+runners and the complete release/rebuild pipeline (`41302398455`). The asset
+matrix now adds four pathname controls: ancestor-directory replacement and a
+private leaf bind mount for both images and configuration. They preserve all
+metadata on the retained inode and the original bytes, then require the distinct
+pathname-mismatch diagnostic. These additional cases need their own native
+result; they do not change filesystem trust or authorize launching helpers.

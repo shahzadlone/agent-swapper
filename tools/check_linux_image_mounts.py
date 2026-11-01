@@ -20,6 +20,8 @@ CASES = {
     'config-replaced': 'installed configuration changed since admission began',
     'config-modified': 'installed configuration changed since admission began',
     'config-mode-changed': 'installed configuration changed since admission began',
+    'config-ancestor-replaced': 'installed configuration path no longer names the retained file',
+    'config-mount-overlaid': 'installed configuration path no longer names the retained file',
     'manifest-protected': None,
     'manifest-protocol': 'installed manifest is invalid or incompatible',
     'manifest-user': 'installed manifest is invalid or incompatible',
@@ -34,6 +36,8 @@ CASES = {
     'image-replaced': 'installed image changed since admission began',
     'image-modified': 'installed image changed since admission began',
     'image-mode-changed': 'installed image changed since admission began',
+    'image-ancestor-replaced': 'installed image path no longer names the retained file',
+    'image-mount-overlaid': 'installed image path no longer names the retained file',
     'bundle-protected': None,
     'bundle-guardian-mismatch': 'installed asset digest mismatch',
     'bundle-session-helper-mismatch': 'installed asset digest mismatch',
@@ -127,11 +131,30 @@ def identity(uid, gid):
     return uid, gid
 
 
+def file_stamp(metadata):
+    # Mirror the Rust change detector, excluding only atime. Nanosecond totals
+    # represent the same seconds/nanoseconds pairs without float rounding.
+    return (metadata.st_dev, metadata.st_ino, metadata.st_nlink, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_mode,
+            metadata.st_uid, metadata.st_gid, metadata.st_rdev)
+
+
+def replace_ancestor(image):
+    """Keep the original leaf linked and untouched while replacing its parent."""
+    data, mode = image.read_bytes(), image.stat().st_mode & 0o7777
+    image.parent.rename(image.parent.with_name('retained-ancestor'))
+    image.parent.mkdir(mode=0o755)
+    image.parent.chmod(0o755)
+    image.write_bytes(data)
+    image.chmod(mode)
+
+
 def retained_asset_control(command, image, case):
     # The child drops root before exec. Mutate only this namespace's owned tmpfs
     # file after the ordinary observer has retained its original descriptor.
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE) as child:
+        held, overlaid = None, False
         try:
             ready, _, _ = select.select([child.stdout], [], [], 5)
             require(bool(ready) and child.stdout.readline(128) == b'installed-asset: retained\n',
@@ -148,7 +171,26 @@ def retained_asset_control(command, image, case):
                             'selection-generation-switch': 'active.json',
                             'selection-retained-generation': 'active.json'}[case]
                 image = image.parent / selected
-            if case.endswith('-replaced'):
+            if case.endswith(('-ancestor-replaced', '-mount-overlaid')):
+                held = os.open(image, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+                before = file_stamp(os.fstat(held))
+                if case.endswith('-ancestor-replaced'):
+                    replace_ancestor(image)
+                else:
+                    replacement = image.with_name('overlay')
+                    replacement.write_bytes(image.read_bytes())
+                    replacement.chmod(image.stat().st_mode & 0o7777)
+                    subprocess.run(['/usr/bin/mount', '--bind', str(replacement), str(image)],
+                                   stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=5)
+                    overlaid = True
+                require(file_stamp(os.fstat(held)) == before,
+                        'path-only control changed the original retained inode')
+                current = image.stat(follow_symlinks=False)
+                require((current.st_dev, current.st_ino) != before[:2],
+                        'path-only control did not replace the named inode')
+                require(os.pread(held, 16 * 1024, 0) == image.read_bytes(),
+                        'path-only control changed the asset bytes')
+            elif case.endswith('-replaced'):
                 replacement = image.with_name('replacement')
                 replacement.write_bytes(image.read_bytes())
                 replacement.chmod(image.stat().st_mode & 0o7777)
@@ -167,6 +209,13 @@ def retained_asset_control(command, image, case):
             if child.poll() is None:
                 child.kill()
                 child.communicate(timeout=5)
+            if held is not None:
+                os.close(held)
+            if overlaid:
+                # Retire this exact private leaf mount before the parent tmpfs.
+                # A failed unmount aborts; no recursive removal follows it.
+                subprocess.run(['/usr/bin/umount', str(image)], stdin=subprocess.DEVNULL,
+                               check=True, capture_output=True, timeout=5)
 
 
 def mounted_case(case, binary, uid, gid):
@@ -187,7 +236,12 @@ def mounted_case(case, binary, uid, gid):
         subprocess.run(['/usr/bin/mount', '-t', 'tmpfs', '-o', options, 'aswp-image-fixture', str(base)],
                        stdin=subprocess.DEVNULL, check=True, capture_output=True, timeout=5)
         mounted = True
-        image = base / 'image'
+        image_parent = base
+        if case.endswith('-ancestor-replaced'):
+            image_parent = base / 'current'
+            image_parent.mkdir(mode=0o755)
+            image_parent.chmod(0o755)
+        image = image_parent / 'image'
         # These inert bytes are never executed. The probe checks metadata/content.
         image.write_bytes(b'owned image-policy fixture\n')
         image.chmod(0o644 if case.startswith(('config-', 'manifest-', 'bundle-')) and case != 'config-executable' else 0o755)
@@ -261,6 +315,8 @@ def mounted_case(case, binary, uid, gid):
             role = '--selection-probe'
         retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed',
                            'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed',
+                           'config-ancestor-replaced', 'config-mount-overlaid',
+                           'image-ancestor-replaced', 'image-mount-overlaid',
                            'bundle-guardian-replaced', 'bundle-template-replaced', 'bundle-manifest-replaced',
                            'selection-selector-replaced', 'selection-manifest-replaced',
                            'selection-guardian-modified', 'selection-generation-switch', 'selection-retained-generation')

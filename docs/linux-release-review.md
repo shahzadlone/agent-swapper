@@ -34,7 +34,6 @@ separately. These changes do not supply restart recovery or target-exit evidence
 | Commit ambiguity | Distinguish a matching already-committed retirement from corruption while preserving failed-commit receipts. |
 | Consumer compatibility | Audit unknown exit status versus unfinished work in JSON/session consumers; retain explicit completion semantics. |
 | Migration fixtures | Supplement synthetic downgrade tests with databases produced by actual historical schema-5/6/7 revisions. |
-| Protected path reopening | Add ancestor replacement and private bind-mount controls that leave the retained leaf inode unchanged. |
 | Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
 | Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
 | systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
@@ -81,6 +80,20 @@ qualification evidence and never grant the runtime a completion capability.
 
 Local default and qualification strict Clippy, all 75 Store tests, and all 43
 Linux Python controls pass. This revision's native result is pending.
+
+## Protected pathname controls
+
+The asset matrix now replaces an ancestor directory and overlays a leaf with a
+private bind mount, for both configuration and image files. Each control retains
+an independent descriptor, verifies every original stamp field remains unchanged,
+checks that the path names a different inode, and confirms identical contents.
+Only the pathname recheck can produce the expected new fixed diagnostic. The
+existing unchanged-file positive controls still apply. All mount operations are
+confined to the hosted fixture's recursively private mount namespace and owned
+tmpfs; a leaf overlay is unmounted before its parent.
+
+Local runtime tests, strict Clippy and the ordinary-file ancestor control pass.
+The four new privileged cases require native CI; none ran on the developer host.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,

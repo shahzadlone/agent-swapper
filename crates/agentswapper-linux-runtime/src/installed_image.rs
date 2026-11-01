@@ -76,7 +76,7 @@ impl ProtectedImage {
         let current = Self::open(path)?;
         require(
             self.stamp == current.stamp,
-            "installed image changed since admission began",
+            "installed image path no longer names the retained file",
         )?;
         self.require_unchanged()
     }

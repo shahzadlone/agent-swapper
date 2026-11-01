@@ -1,5 +1,7 @@
 """Refusal controls must run before any privilege, mount or fixture creation."""
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +9,22 @@ import check_linux_image_mounts as probe
 
 
 class RefusalTests(unittest.TestCase):
+    def test_ancestor_control_preserves_every_retained_stamp_field(self):
+        # Pure owned-file manipulation, with no root, mount or installed policy.
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / 'current'
+            parent.mkdir()
+            image = parent / 'image'
+            image.write_bytes(b'identical owned bytes')
+            image.chmod(0o644)
+            with image.open('rb') as retained:
+                before = probe.file_stamp(os.fstat(retained.fileno()))
+                probe.replace_ancestor(image)
+                self.assertEqual(probe.file_stamp(os.fstat(retained.fileno())), before)
+                self.assertNotEqual(image.stat().st_ino, before[1])
+                self.assertEqual(retained.read(), image.read_bytes())
+                self.assertTrue(parent.with_name('retained-ancestor').is_dir())
+
     def test_manifest_without_a_version_never_creates_or_mounts(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(probe, 'private_namespace'), \
                 patch.object(probe.subprocess, 'run') as run, patch.object(probe.tempfile, 'mkdtemp') as create:
