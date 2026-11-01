@@ -193,3 +193,8 @@ PTY protocol. See [the experiment and limits](../../docs/linux-exec-confirmation
 The companion `exec_identity` example measures a read-only procfs alternative,
 including fast exits that cannot be positively observed. Both remain isolated
 experiments; neither selects a production execution mechanism.
+
+The fixed `terminal_job_control` example separately tests a guardian-owned inner
+session with a foreground child group. It checks terminal-generated stop and
+continue behavior without changing the caller's terminal. See the
+[topology experiment and limits](../../docs/linux-terminal-job-control.md).
