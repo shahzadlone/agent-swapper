@@ -607,3 +607,16 @@ Clippy locally. Its revised hosted terminal case remains pending. Separately,
 the prior crash/wake-up checkpoint `9fb76b0` passed the full platform/package
 pipeline in [run 41266261801](https://github.com/shahzadlone/agent-swapper/actions/runs/41266261801)
 and was integrated into main as `2e90693`.
+
+The strengthened terminal case at `191948d` passed both Ubuntu jobs in
+[run 41268750270](https://github.com/shahzadlone/agent-swapper/actions/runs/41268750270).
+The focused Opus follow-up confirmed credential-before-ioctl ordering and the
+new echo, raw-byte and typeahead assertions. Its remaining test improvements
+are implemented: retirement drains a verified nonblocking master under a
+two-second deadline before checking the cleared session; only the interrupt
+case may leave a Ctrl-C echo. Prompt failure and hangup now assert their actual
+causes. Slave-as-master refusal pins TIOCGPTPEER's EIO, and master-as-slave
+checks TIOCGPTN before the devpts filesystem condition, so the negative test
+cannot pass at an earlier filesystem check. This works without opening the
+often permission-restricted `/dev/pts/ptmx` alias. Local tests and strict
+Clippy pass; this last refinement awaits its own native run.

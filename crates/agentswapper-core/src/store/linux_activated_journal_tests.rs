@@ -174,15 +174,30 @@ fn terminal_gated(master: impl AsFd, pid: u32) {
     assert_eq!(poll(&mut ready, Some(&timeout)).unwrap(), 0);
 }
 
-fn terminal_retired(master: impl AsFd) {
-    assert_eq!(
-        rustix::termios::tcgetsid(&master).err(),
-        Some(rustix::io::Errno::NOTTY)
+fn terminal_retired(master: impl AsFd, interrupted: bool) {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    assert!(
+        rustix::fs::fcntl_getfl(&master)
+            .unwrap()
+            .contains(rustix::fs::OFlags::NONBLOCK)
     );
     // A pending Ctrl-C echo can remain after the last slave closes; drain it
     // within a small bound before requiring the kernel's final EIO.
     let mut drained = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
+        let timeout = Timespec::try_from(
+            deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| panic!("terminal retirement expired; tail: {drained:?}")),
+        )
+        .unwrap();
+        let mut ready = [PollFd::new(&master, PollFlags::IN)];
+        assert_eq!(
+            poll(&mut ready, Some(&timeout)).unwrap(),
+            1,
+            "terminal retirement timed out; tail: {drained:?}"
+        );
         let mut bytes = [0; 64];
         match rustix::io::read(&master, &mut bytes) {
             Ok(n) if n > 0 => {
@@ -190,11 +205,16 @@ fn terminal_retired(master: impl AsFd) {
                 assert!(drained.len() < 256);
             }
             Err(rustix::io::Errno::IO) => break,
+            Err(rustix::io::Errno::AGAIN) => thread::sleep(Duration::from_millis(1)),
             result => panic!("retired PTY did not reach EIO: {result:?}"),
         }
     }
+    assert_eq!(
+        rustix::termios::tcgetsid(&master).err(),
+        Some(rustix::io::Errno::NOTTY)
+    );
     assert!(
-        drained.is_empty() || drained == b"^C",
+        drained.is_empty() || (interrupted && drained == b"^C"),
         "unexpected terminal tail: {drained:?}"
     );
 }
@@ -362,7 +382,7 @@ fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
                 }
             }
         }
-        terminal_retired(&master);
+        terminal_retired(&master, finish == "interrupt");
         unresolved(&store, profile, &run);
         drop(blocker);
         drop(store);
