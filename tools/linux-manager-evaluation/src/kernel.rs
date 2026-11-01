@@ -2,7 +2,7 @@
 //! Fault injection stays here; it is never a production observer operation.
 use crate::require;
 use agentswapper_linux_runtime::scope_observation as observed;
-pub(crate) use observed::{Child, initial_namespace};
+pub(crate) use observed::Child;
 use serde::Serialize;
 use std::{io, os::fd::OwnedFd};
 

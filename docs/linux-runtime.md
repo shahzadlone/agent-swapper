@@ -138,3 +138,38 @@ observation building block, not production managed execution.
 The reduced evaluation suite passes all 54 tests after moving the duplicated
 kernel cases. Strict core Clippy also passes with the Store qualification feature,
 and the dependency-boundary check confirms identical pinned graphs.
+
+
+## Separate authenticated manager transport
+
+`agentswapper-linux-manager` now contains the existing fixed system-bus path
+checks, root listener authentication, root PID-1 manager credentials, unique-owner
+reply checks and bounded read queries. The qualification client consumes it.
+The production core/CLI and the small helper runtime still do not depend on it;
+a dependency check enforces both boundaries. Other operating systems compile an
+empty library. No root installer, activation request, target launch, Store or
+retirement receipt is exposed by this crate.
+
+Connection admission revalidates protected paths and the initial namespace,
+checks that the socket identity did not change during connect, and authenticates
+the same unique manager before returning. Its own eight-second bound fits inside
+the consumer's existing whole-admission bound. Every property query still validates
+the reply sender and post-receive decoding size. Unique-name parsing also rejects
+well-known destination aliases before sending. GetUnit and GetUnitByInvocationID
+are explicit read operations; no arbitrary manager-method entry point is public.
+The caller retains responsibility for installation policy, service properties,
+original kernel handles and manager rechecks throughout the run.
+
+Path and transport diagnostics remain serializable measurement data. A successful
+connection is not a custody receipt. The existing report schema is unchanged;
+private fixture names, service template checks, launch messages and failure hooks
+remain in the evaluation workspace. The sender/framing/type regression moved into
+the new crate; a path-escaping case was added. Lockfile changes introduce only the
+local workspace package and its path edges; no registry package version changes.
+Native qualification of this extraction remains pending.
+
+Local manager extraction checks pass: both manager tests, all 53 remaining
+evaluation tests, strict manager/evaluation/core-feature Clippy, formatting,
+dependency boundaries and both locked license/advisory audits. No new registry
+package was introduced. Hosted authentication, scope/terminal composition and
+candidate rebuild results are still required for this revision.

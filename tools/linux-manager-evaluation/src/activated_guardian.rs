@@ -130,7 +130,7 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
     )?;
     protected_executable(prefix)?;
     private_directory(directory)?;
-    kernel::initial_namespace()?;
+    agentswapper_linux_runtime::scope_observation::initial_namespace()?;
     // The role is entered before async runtime/thread initialization. Mark all
     // inherited nonstandard descriptors before spawning the fixed writer.
     fuxix::io::cloexec_from(3, fuxix::io::Listed::now()).map_err(io::Error::from)?;
