@@ -98,6 +98,26 @@ both Ubuntu manager jobs in
 Its full platform/package pipeline and an independent implementation review
 remain separately tracked.
 
+### Nested foreground job
+
+The fixed target can additionally create one child in a separate foreground
+group within the same inner session. When Ctrl+Z stops that child, its parent
+target observes the stop, restores its own foreground group and handles the
+resume locally. Its temporary SIGTTOU mask is restored on success and error;
+neither the guardian nor the outer caller's terminal is modified by this handoff.
+
+The hosted case requires the nested child's stopped state while the direct
+target remains running. The guardian's stop-notice wait must expire for its
+specific no-packet reason, and the other descendant must continue writing.
+The target then foregrounds/resumes its nested child, waits for normal exit,
+restores its own group and returns to the existing direct-target stop/resume
+checks. This prevents a nested stop from being mistaken for an outer-session
+suspend request. All roles and commands are fixed; this is not a generic shell.
+
+Local compilation, strict Clippy and the existing 39 library/27 binary tests
+pass. The nested foreground case requires its own hosted execution and remains
+pending at this checkpoint.
+
 ### Descendant cleanup and stop scope
 
 The follow-up target can spawn one fixed descendant in its foreground group.

@@ -4,6 +4,7 @@
 mod activated_guardian;
 mod activated_job_control;
 mod activated_journal;
+mod activated_nested_terminal;
 mod activated_terminal;
 #[allow(
     dead_code,

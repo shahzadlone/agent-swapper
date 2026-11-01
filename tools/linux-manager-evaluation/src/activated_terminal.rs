@@ -79,7 +79,7 @@ pub(crate) fn shim(prefix: &str, directory: &Path, guardian_session: bool) -> io
     Err(command.exec())
 }
 
-fn line(input: BorrowedFd<'_>, deadline: Instant) -> io::Result<Vec<u8>> {
+pub(crate) fn line(input: BorrowedFd<'_>, deadline: Instant) -> io::Result<Vec<u8>> {
     let mut result = Vec::new();
     while result.len() < 256 {
         let remaining = deadline
@@ -222,6 +222,9 @@ pub(crate) fn target(
     let mut descendant = None;
     loop {
         match line(io::stdin().as_fd(), deadline)?.as_slice() {
+            b"nested" if guardian_session => {
+                crate::activated_nested_terminal::run(prefix, directory, &mut output)?;
+            }
             b"spawn" if guardian_session => {
                 require(descendant.is_none(), "fixed descendant already exists")?;
                 let mut command = Command::new("/proc/self/exe");
