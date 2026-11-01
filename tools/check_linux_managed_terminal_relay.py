@@ -55,13 +55,20 @@ def lease_path(root):
     for value in data.values():
         assert str(uuid.UUID(value)) == value
     database = root / 'state' / 'registry.sqlite3'
+    audited = (root / 'journal-audited').exists()
+    retired_before_read = (root / 'retired').exists()
     with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as connection:
-        record = connection.execute('SELECT profile, exit_code, outcome, requires_spawn_observation, local_scope FROM runs WHERE id=?', (data['run'],)).fetchone()
-        assert record is not None and record[:4] == (data['profile'], None, None, 1)
+        record = connection.execute('SELECT profile, exit_code, outcome, requires_spawn_observation, local_scope, linux_binding FROM runs WHERE id=?', (data['run'],)).fetchone()
+        assert record is not None and record[0] == data['profile'] and record[1] is None and record[3] == 1
+        assert record[2] in (None, 'local_scope_empty')
+        if audited or retired_before_read:
+            assert record[2] == 'local_scope_empty'
+        if record[2] == 'local_scope_empty':
+            assert isinstance(record[5], str) and isinstance(json.loads(record[5]), dict)
         assert json.loads(record[4])['backend'] == 'linux_cgroup'
         assert connection.execute('PRAGMA quick_check').fetchone() == ('ok',)
     if (root / 'retired').exists():
-        assert (root / 'journal-audited').read_text() == 'consistent and unresolved'
+        assert (root / 'journal-audited').read_text() == 'scope retired; target outcome unknown'
     return root / 'state' / 'locks' / (data['profile'] + '.lock')
 
 

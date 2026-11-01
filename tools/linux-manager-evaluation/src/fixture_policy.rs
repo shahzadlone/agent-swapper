@@ -82,16 +82,16 @@ pub(crate) fn activated_policy(
     prefix: &str,
 ) -> io::Result<agentswapper_linux_manager::ServicePolicy> {
     gate(prefix)?;
-    agentswapper_linux_manager::ServicePolicy::open(
-        Path::new(&format!("/run/systemd/system/{prefix}@.service")),
-        Path::new(&format!("/usr/lib/{prefix}.guardian")),
-        agentswapper_linux_runtime::process_policy::OrdinaryCredentials::new(
-            rustix::process::getuid().as_raw(),
-            rustix::process::getgid().as_raw(),
-            &rustix::process::getgroups()?
-                .iter()
-                .map(|id| id.as_raw())
-                .collect::<Vec<_>>(),
-        )?,
-    )
+    let image = format!("/usr/lib/{prefix}.guardian");
+    let template = format!("/run/systemd/system/{prefix}@.service");
+    let socket = format!("/run/systemd/system/{prefix}.socket");
+    let selection = agentswapper_linux_runtime::installed_selection::SelectedInstallation::open_paths_for_qualification(
+        Path::new(&format!("/run/{prefix}.selection.json")),
+        Path::new(&format!("/run/{prefix}.installation.json")),
+        // This single fixture executable contains all fixed test roles. It is
+        // not a production three-helper installation or a target launch grant.
+        [Path::new(&image); 3],
+        [Path::new(&template), Path::new(&socket)],
+    )?;
+    agentswapper_linux_manager::ServicePolicy::installed(selection)
 }

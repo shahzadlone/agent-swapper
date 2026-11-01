@@ -8,6 +8,9 @@ publish = false
 
 [workspace]
 
+[profile.dev.package."sha2@0.10.9"]
+opt-level = 3
+
 [dependencies]
 agentswapper-linux-manager = { path = "../../crates/agentswapper-linux-manager", version = "=0.1.0-dev", features = ["qualification"] }
 agentswapper-linux-runtime = { path = "../../crates/agentswapper-linux-runtime", version = "=0.1.0-dev" }

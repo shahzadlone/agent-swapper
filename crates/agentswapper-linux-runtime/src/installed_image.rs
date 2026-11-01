@@ -1,6 +1,7 @@
 //! Retain an executable image below protected root-owned ancestry.
 //! This checks filesystem protection, not installation authorization, version,
 //! protocol compatibility or permission to launch a target.
+use crate::file_stamp::Stamp;
 use rustix::fs::{Mode, OFlags, StatVfsMountFlags, fstat, fstatvfs, open};
 use std::{
     io,
@@ -18,7 +19,10 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 /// An open, read-only image descriptor. Its fields cannot be fabricated from
 /// pathname metadata. Root is trusted; no immutability against root is claimed.
 #[must_use = "keep the validated image handle through the operation it protects"]
-pub struct ProtectedImage(OwnedFd);
+pub struct ProtectedImage {
+    file: OwnedFd,
+    stamp: Stamp,
+}
 impl ProtectedImage {
     /// Check a fixed installed location in an independently trusted namespace.
     /// UID 0 metadata alone does not establish initial-user-namespace identity
@@ -28,7 +32,7 @@ impl ProtectedImage {
         let image = crate::protected_file::open(path)?;
         let stat = fstat(&image)?;
         require(
-            stat.st_mode & 0o7777 == 0o755,
+            stat.st_uid == 0 && stat.st_mode & 0o7777 == 0o755,
             "image is not a root-owned mode-0755 regular file",
         )?;
         require(
@@ -43,7 +47,38 @@ impl ProtectedImage {
             Ok(_) => return Err(io::Error::other("image has file capabilities")),
             Err(error) => return Err(error.into()),
         }
-        Ok(Self(image))
+        let stamp = Stamp::from_stat(stat);
+        let value = Self { file: image, stamp };
+        value.require_unchanged()?;
+        Ok(value)
+    }
+
+    fn require_unchanged(&self) -> io::Result<()> {
+        require(
+            self.stamp == Stamp::read(&self.file)?,
+            "installed image changed since admission began",
+        )
+    }
+
+    /// Hash at most 128 MiB from the retained descriptor using positional reads.
+    /// The caller supplies a trusted digest; root remains trusted to preserve
+    /// the inode after observation. No execution permission is granted here.
+    pub fn require_sha256(&self, expected: &str) -> io::Result<()> {
+        self.require_unchanged()?;
+        crate::asset_digest::image(&self.file, expected)?;
+        self.require_unchanged()
+    }
+
+    /// Reopen the protected path and require the original inode and metadata.
+    /// This detects replacement even when the new bytes have the same hash.
+    pub fn require_current(&self, path: &Path) -> io::Result<()> {
+        self.require_unchanged()?;
+        let current = Self::open(path)?;
+        require(
+            self.stamp == current.stamp,
+            "installed image changed since admission began",
+        )?;
+        self.require_unchanged()
     }
 
     /// Corroborate the current process against the retained image. The caller
@@ -59,17 +94,19 @@ impl ProtectedImage {
     }
 
     pub(crate) fn require_descriptor(&self, actual: impl AsFd) -> io::Result<()> {
-        let expected = fstat(&self.0)?;
+        self.require_unchanged()?;
+        let expected = fstat(&self.file)?;
         let actual = fstat(actual)?;
         require(
             (expected.st_dev, expected.st_ino) == (actual.st_dev, actual.st_ino),
             "running executable differs from the retained protected image",
-        )
+        )?;
+        self.require_unchanged()
     }
 }
 impl AsFd for ProtectedImage {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
+        self.file.as_fd()
     }
 }
 

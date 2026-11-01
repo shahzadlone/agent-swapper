@@ -419,8 +419,8 @@ fn validate_exit(
 }
 
 impl Bound {
-    pub fn service_key(&self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
-        self.0.binding.key()
+    pub fn claim_service_key(&mut self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
+        self.0.binding.claim_key()
     }
 
     pub fn connect(prefix: &str) -> io::Result<Self> {
@@ -507,8 +507,13 @@ impl Bound {
     pub fn close(self) -> Closed {
         self.0.close()
     }
-    pub fn prepare(mut self, lease: BorrowedFd<'_>) -> Result<Prepared, TransitionFailure> {
+    pub fn prepare(
+        mut self,
+        lease: BorrowedFd<'_>,
+        key: &agentswapper_linux_manager::ServiceKey,
+    ) -> Result<Prepared, TransitionFailure> {
         let result = (|| {
+            self.0.binding.require_claimed_key(key)?;
             self.0.recheck()?;
             transport::send_until(self.0.socket()?, transport::GO, &[lease], self.0.deadline)?;
             let (packet, terminal) = if self.0.terminal_requested {

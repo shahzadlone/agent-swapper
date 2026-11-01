@@ -18,6 +18,9 @@ fn main() -> std::process::ExitCode {
         fn bind_scope(&mut self, key: agentswapper_linux_manager::ServiceKey) -> io::Result<()> {
             self.0.bind_scope(key).map_err(io::Error::other)
         }
+        fn bound_key(&self) -> io::Result<&agentswapper_linux_manager::ServiceKey> {
+            self.0.bound_key().map_err(io::Error::other)
+        }
         fn confirm_intent(&mut self, pid: u32) -> io::Result<()> {
             self.0.confirm_intent(pid).map_err(io::Error::other)
         }

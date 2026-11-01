@@ -48,9 +48,8 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
 pub trait AdmissionJournal: Sized {
     fn open(directory: &Path) -> io::Result<Self>;
     fn lease(&self) -> io::Result<BorrowedFd<'_>>;
-    fn bind_scope(&mut self, _key: agentswapper_linux_manager::ServiceKey) -> io::Result<()> {
-        Ok(())
-    }
+    fn bind_scope(&mut self, key: agentswapper_linux_manager::ServiceKey) -> io::Result<()>;
+    fn bound_key(&self) -> io::Result<&agentswapper_linux_manager::ServiceKey>;
     fn confirm_intent(&mut self, pid: u32) -> io::Result<()>;
     fn observe_spawn(&mut self, pid: u32) -> io::Result<()>;
     fn release_lease(&mut self);
@@ -66,6 +65,7 @@ pub trait AdmissionJournal: Sized {
 pub struct FileJournal {
     directory: std::path::PathBuf,
     lease: Option<File>,
+    key: Option<agentswapper_linux_manager::ServiceKey>,
 }
 impl AdmissionJournal for FileJournal {
     fn open(directory: &Path) -> io::Result<Self> {
@@ -79,6 +79,7 @@ impl AdmissionJournal for FileJournal {
         Ok(Self {
             directory: directory.to_owned(),
             lease: Some(lease),
+            key: None,
         })
     }
     fn lease(&self) -> io::Result<BorrowedFd<'_>> {
@@ -89,6 +90,19 @@ impl AdmissionJournal for FileJournal {
     }
     fn confirm_intent(&mut self, pid: u32) -> io::Result<()> {
         durable_record(&self.directory, "intent", pid)
+    }
+    fn bind_scope(&mut self, key: agentswapper_linux_manager::ServiceKey) -> io::Result<()> {
+        require(
+            self.key.is_none(),
+            "fixture journal already has a service binding",
+        )?;
+        self.key = Some(key);
+        Ok(())
+    }
+    fn bound_key(&self) -> io::Result<&agentswapper_linux_manager::ServiceKey> {
+        self.key
+            .as_ref()
+            .ok_or_else(|| io::Error::other("fixture journal lacks a service binding"))
     }
     fn observe_spawn(&mut self, pid: u32) -> io::Result<()> {
         durable_record(&self.directory, "spawn-observed", pid)
@@ -469,11 +483,6 @@ fn retire_closed(
                 // error is diagnostic, not a reversal of that observation.
                 let _ = marker(directory, "retirement-connection-error", &error.to_string());
             }
-            marker(
-                directory,
-                "retired",
-                "original scope and child retired; journal policy unchanged",
-            )?;
             Ok(retired.into_service())
         }
         Err(failure) => {
@@ -495,20 +504,26 @@ struct AdmissionMode {
 
 fn admit<J: AdmissionJournal>(
     directory: &Path,
-    bound: Bound,
+    mut bound: Bound,
     journal: &mut J,
     terminal: &mut Terminal,
     cancelled: &Cell<Option<nix::sys::signal::Signal>>,
     mode: AdmissionMode,
 ) -> Result<Running, AdmissionFailure> {
-    if let Err(error) = bound.service_key().and_then(|key| journal.bind_scope(key)) {
+    if let Err(error) = bound
+        .claim_service_key()
+        .and_then(|key| journal.bind_scope(key))
+    {
         return Err(AdmissionFailure {
             error,
             closed: Box::new(bound.close()),
         });
     }
-    let prepared = match journal.lease() {
-        Ok(lease) => bound.prepare(lease).map_err(AdmissionFailure::from)?,
+    let prepared = match journal
+        .lease()
+        .and_then(|lease| Ok((lease, journal.bound_key()?)))
+    {
+        Ok((lease, key)) => bound.prepare(lease, key).map_err(AdmissionFailure::from)?,
         Err(error) => {
             return Err(AdmissionFailure {
                 error,
@@ -643,8 +658,15 @@ fn run<J: AdmissionJournal>(
         Ok(running) => running,
         Err(failure) => {
             let _ = marker(directory, "admission-error", &failure.error.to_string());
-            let retired = retire_closed(directory, *failure.closed, &identity)
-                .and_then(|retired| journal.audit_retired(retired));
+            let retired =
+                retire_closed(directory, *failure.closed, &identity).and_then(|retired| {
+                    journal.audit_retired(retired)?;
+                    marker(
+                        directory,
+                        "retired",
+                        "original scope and child retired; journal audited",
+                    )
+                });
             drop(terminal);
             signals.finish_after_cleanup(cancelled.get())?;
             return Err(match retired {
@@ -703,8 +725,14 @@ fn run<J: AdmissionJournal>(
         );
     }
     let target_exit = running.observed_exit();
-    let retired = retire_closed(directory, running.close(), &identity)
-        .and_then(|retired| journal.audit_retired(retired));
+    let retired = retire_closed(directory, running.close(), &identity).and_then(|retired| {
+        journal.audit_retired(retired)?;
+        marker(
+            directory,
+            "retired",
+            "original scope and child retired; journal audited",
+        )
+    });
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.

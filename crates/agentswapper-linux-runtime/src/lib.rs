@@ -26,7 +26,17 @@ pub mod child_waiter;
 pub mod installed_image;
 
 #[cfg(target_os = "linux")]
+mod asset_digest;
+#[cfg(target_os = "linux")]
+mod file_stamp;
+#[cfg(target_os = "linux")]
+pub mod installed_artifacts;
+#[cfg(target_os = "linux")]
 pub mod installed_config;
+#[cfg(target_os = "linux")]
+pub mod installed_manifest;
+#[cfg(target_os = "linux")]
+pub mod installed_selection;
 #[cfg(target_os = "linux")]
 pub mod process_policy;
 #[cfg(target_os = "linux")]

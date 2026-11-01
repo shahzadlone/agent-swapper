@@ -19,6 +19,55 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_installed_metadata_change_refuses_before_service_control(self):
+        prefix, directory = 'aswp-activation-123-1', Path('/tmp/aswp-fixture')
+        ownership = {'uid': 1000, 'gid': 1000, 'directory': str(directory),
+                     'units': probe.unit_files(prefix, directory, 1000, 1000), 'guardian_sha256': 'a' * 64,
+                     'installation_version': '0.1.0-dev'}
+        with patch.object(probe, 'fixture_prefix', return_value=prefix), \
+             patch.object(probe.os, 'geteuid', return_value=0), patch.object(probe, 'private_directory'), \
+             patch.object(probe.os.path, 'lexists', return_value=True), \
+             patch.object(Path, 'lstat', autospec=True, side_effect=lambda path: SimpleNamespace(
+                 st_mode=(stat.S_IFREG | 0o600) if path.name.endswith('.owner') else (stat.S_IFDIR | 0o755), st_uid=0)), \
+             patch.object(Path, 'read_text', return_value=json.dumps(ownership)), patch.object(probe, 'verify_image'), \
+             patch.object(probe, 'verify_config', side_effect=RuntimeError('installation metadata changed')), \
+             patch.object(Path, 'unlink') as unlink, patch.object(probe, 'systemctl') as control:
+            with self.assertRaisesRegex(RuntimeError, 'installation metadata changed'):
+                probe.admin('cleanup', directory, 1000, 1000)
+            control.assert_not_called()
+            unlink.assert_not_called()
+
+    def test_installation_metadata_refuses_different_bytes_mode_and_symlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'metadata'
+            path.write_text('owned metadata')
+            with patch.object(probe.os, 'fstat', return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=0)):
+                probe.verify_config(path, 'owned metadata')
+                with self.assertRaisesRegex(RuntimeError, 'metadata changed'):
+                    probe.verify_config(path, 'different bytes')
+                link = path.with_name('link')
+                link.symlink_to(path)
+                with self.assertRaises(OSError):
+                    probe.verify_config(link, 'owned metadata')
+            for mode, uid in [(stat.S_IFREG | 0o664, 0), (stat.S_IFREG | 0o644, 1000), (stat.S_IFIFO | 0o644, 0)]:
+                with patch.object(probe.os, 'fstat', return_value=SimpleNamespace(st_mode=mode, st_uid=uid)), \
+                     self.assertRaisesRegex(RuntimeError, 'root-owned mode 0644'):
+                    probe.verify_config(path, 'owned metadata')
+
+    def test_invalid_installation_version_refuses_before_creating_files(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(probe, 'fixture_prefix', return_value='aswp-activation-123-1'), \
+             patch.object(probe.os, 'geteuid', return_value=0), patch.object(probe, 'private_directory'), \
+             patch.object(Path, 'lstat', return_value=SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)), \
+             patch.object(probe.os.path, 'lexists', return_value=False), \
+             patch.object(probe.os, 'statvfs', return_value=SimpleNamespace(f_flag=0)), \
+             patch.object(probe, 'unit_properties', return_value={'LoadState': 'not-found'}), \
+             patch.object(probe, 'source_image', return_value=b'\x7fELF owned test bytes'), \
+             patch.object(probe.os, 'open') as create, patch.object(probe, 'systemctl') as control:
+            with self.assertRaisesRegex(RuntimeError, 'installation version'):
+                probe.admin('install', Path('/tmp/aswp-fixture'), 1000, 1000)
+            create.assert_not_called()
+            control.assert_not_called()
+
     def test_template_control_restores_mode_on_timeout_and_unexpected_success(self):
         refused = SimpleNamespace(returncode=125, stdout='', stderr='installed file is not a root-owned protected regular file')
         for failure in ('timeout', 'success', 'connected', 'none'):
@@ -241,7 +290,8 @@ time.sleep(20)
     def test_changed_installed_image_never_reaches_cleanup_commands(self):
         prefix, directory = 'aswp-activation-123-1', Path('/tmp/aswp-fixture')
         ownership = {'uid': 1000, 'gid': 1000, 'directory': str(directory),
-                     'units': probe.unit_files(prefix, directory, 1000, 1000), 'guardian_sha256': '0' * 64}
+                     'units': probe.unit_files(prefix, directory, 1000, 1000), 'guardian_sha256': '0' * 64,
+                     'installation_version': '0.1.0-dev'}
         with patch.object(probe, 'fixture_prefix', return_value=prefix), \
              patch.object(probe.os, 'geteuid', return_value=0), \
              patch.object(probe, 'private_directory'), \

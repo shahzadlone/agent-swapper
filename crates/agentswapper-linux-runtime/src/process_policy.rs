@@ -9,6 +9,22 @@ pub struct OrdinaryCredentials {
     groups: BTreeSet<u32>,
 }
 impl OrdinaryCredentials {
+    /// Capture the current ordinary identity and its existing group set. No
+    /// caller-supplied group expansion or effective-identity mismatch is allowed.
+    pub fn current() -> io::Result<Self> {
+        use rustix::process::{getegid, geteuid, getgid, getgroups, getuid};
+        if getuid() != geteuid() || getgid() != getegid() {
+            return Err(io::Error::other("ordinary credential identity mismatch"));
+        }
+        Self::new(
+            getuid().as_raw(),
+            getgid().as_raw(),
+            &getgroups()?
+                .iter()
+                .map(|id| id.as_raw())
+                .collect::<Vec<_>>(),
+        )
+    }
     pub fn new(user: u32, group: u32, supplementary: &[u32]) -> io::Result<Self> {
         let ordinary = |id: u32| id != 0 && id <= i32::MAX as u32;
         if !ordinary(user)

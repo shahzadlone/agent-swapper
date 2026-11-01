@@ -905,9 +905,12 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
         ProcessCustody::ExternalRuntimeUnknown => {
             "external runtime unknown; work may continue independently of this client"
         }
-        ProcessCustody::LocalScopeEmpty => {
-            "owned local Job observed empty; work outside that Job unverified"
-        }
+        ProcessCustody::LocalScopeEmpty => match run.local_scope {
+            Some(agentswapper_core::store::LocalScope::LinuxCgroup { .. }) => {
+                "owned Linux scope observed retired; work outside that scope unverified"
+            }
+            _ => "owned local Job observed empty; work outside that Job unverified",
+        },
         ProcessCustody::ExitedUncontained => "child exited; descendants unverified",
         ProcessCustody::NeverStarted => "native process did not start",
         ProcessCustody::AttestedStopped => "operator attested stopped; not independently verified",
@@ -933,8 +936,15 @@ fn run_line(run: &agentswapper_core::store::RunRecord) -> String {
         run.harness,
         terminal_text(&run.kind),
         terminal_text(&run.started_at),
-        run.exit_code
-            .map_or_else(|| "pending".to_owned(), |code| code.to_string()),
+        run.exit_code.map_or_else(
+            || if run.outcome.is_some() {
+                "unknown"
+            } else {
+                "pending"
+            }
+            .to_owned(),
+            |code| code.to_string()
+        ),
         terminal_text(run.outcome.as_deref().unwrap_or("pending")),
         custody,
         run.observed_pid
@@ -973,6 +983,32 @@ fn emit(json_mode: bool, data: &impl Serialize, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retired_linux_scope_does_not_invent_a_target_exit()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let run = agentswapper_core::store::RunRecord {
+            id: "00000000-0000-4000-8000-000000000001".into(),
+            profile_id: "00000000-0000-4000-8000-000000000002".parse()?,
+            alias: "work".parse()?,
+            harness: agentswapper_core::Harness::Codex,
+            kind: "run".into(),
+            started_at: "2026-01-01T00:00:00.000Z".into(),
+            spawned_at: None,
+            observed_pid: None,
+            exit_code: None,
+            outcome: Some("local_scope_empty".into()),
+            custody: agentswapper_core::store::ProcessCustody::LocalScopeEmpty,
+            gents_session: None,
+            local_scope: Some(agentswapper_core::store::LocalScope::LinuxCgroup {
+                id: "00000000-0000-4000-8000-000000000003".parse()?,
+            }),
+        };
+        let text = run_line(&run);
+        assert!(text.contains("exit=unknown"));
+        assert!(text.contains("Linux scope observed retired"));
+        assert!(!text.contains("exit=0") && !text.contains("exit=pending"));
+        Ok(())
+    }
     #[test]
     fn command_contract_is_internally_consistent() {
         Cli::command().debug_assert();

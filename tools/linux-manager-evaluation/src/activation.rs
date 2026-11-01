@@ -175,7 +175,7 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
                     .ok_or_else(|| io::Error::other("activation lacks unit identity"))?;
                 // A fresh witness of the same invocation has a different local
                 // key. It cannot replace the first observer after losing custody.
-                let other_bound = agentswapper_linux_manager::BoundService::bind(
+                let mut other_bound = agentswapper_linux_manager::BoundService::bind(
                     &other,
                     other_owner.as_str(),
                     activated_policy(prefix)?,
@@ -186,7 +186,7 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
                     },
                 )
                 .await?;
-                Ok::<_, io::Error>(other_bound.key())
+                other_bound.claim_key()
             }
             .await;
             let closed = other.close().await.map_err(io::Error::other);
@@ -201,7 +201,22 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
                 "manager substitution control expired",
             )
         })??;
-        let key = binding.key()?;
+        // A key from the independently admitted witness cannot grant a launch,
+        // even before the original key has been claimed.
+        require(
+            binding.require_claimed_key(&unrelated_key).is_err(),
+            "foreign key admitted an unclaimed service",
+        )?;
+        let key = binding.claim_key()?;
+        require(
+            binding.claim_key().is_err(),
+            "service key was claimed twice",
+        )?;
+        binding.require_claimed_key(&key)?;
+        require(
+            binding.require_claimed_key(&unrelated_key).is_err(),
+            "foreign key admitted a claimed service",
+        )?;
         let expired = binding
             .observe_retirement(&connection, tokio::time::Instant::now())
             .await

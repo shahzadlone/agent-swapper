@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{Alias, Error, Harness, Profile, ProfileId, Result, private_fs};
 
-const SCHEMA: i64 = 7;
+const SCHEMA: i64 = 9;
 // Initialization is serialized across connections and may include durable
 // schema setup or migration. Allow queued openers to outlast one connection's
 // SQLite busy window, while still refusing an indefinitely held bootstrap lock.
@@ -26,6 +26,7 @@ mod lease_transfer_tests;
 mod linux_activated_journal_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod linux_journal_guardian_tests;
+mod linux_scope;
 #[cfg(all(feature = "linux-journal-qualification", target_os = "linux"))]
 #[doc(hidden)]
 pub mod qualification;
@@ -86,6 +87,15 @@ enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stopped_scope: Option<Uuid>,
     },
+    LinuxScopeBound {
+        id: String,
+        binding: linux_scope::LinuxBinding,
+    },
+    LinuxScopeRetired {
+        id: String,
+        scope: Uuid,
+        binding: linux_scope::LinuxBinding,
+    },
     RunSpawned {
         id: String,
         pid: u32,
@@ -123,6 +133,8 @@ pub struct Store {
     // Connection-local only. Any future restore, deserialize, incremental-blob
     // mutation, or reconnect must clear this baseline before another write.
     verified: Option<journal::StateStamp>,
+    #[cfg(all(target_os = "linux", feature = "linux-journal-qualification"))]
+    scope_instance: std::sync::Arc<()>,
     #[cfg(test)]
     full_write_checks: u64,
 }
@@ -207,7 +219,7 @@ impl Store {
             tx.commit()?;
         }
         let current: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if matches!(current, 1..=6) {
+        if matches!(current, 1..=8) {
             journal::migrate(&mut db, &root, current)?;
         } else if current != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
@@ -218,6 +230,8 @@ impl Store {
             #[cfg(windows)]
             private_root,
             verified: None,
+            #[cfg(all(target_os = "linux", feature = "linux-journal-qualification"))]
+            scope_instance: std::sync::Arc::new(()),
             #[cfg(test)]
             full_write_checks: 0,
         })
@@ -372,7 +386,7 @@ impl Store {
     }
 
     pub fn unfinished(&self) -> Result<Vec<UnfinishedRun>> {
-        let mut query = self.db.prepare("SELECT r.id,p.alias,r.kind,r.started_at FROM main.runs r JOIN main.profiles p ON p.id=r.profile WHERE r.exit_code IS NULL ORDER BY r.started_at")?;
+        let mut query = self.db.prepare("SELECT r.id,p.alias,r.kind,r.started_at FROM main.runs r JOIN main.profiles p ON p.id=r.profile WHERE r.outcome IS NULL ORDER BY r.started_at")?;
         let rows = query.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -424,7 +438,7 @@ impl Store {
 
     fn ensure_no_unfinished_run(&self, id: ProfileId) -> Result<()> {
         let pending: bool = self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM main.runs WHERE profile=?1 AND exit_code IS NULL)",
+            "SELECT EXISTS(SELECT 1 FROM main.runs WHERE profile=?1 AND outcome IS NULL)",
             [id.to_string()],
             |r| r.get(0),
         )?;
@@ -442,7 +456,7 @@ impl Store {
         let profile: String = self
             .db
             .query_row(
-                "SELECT profile FROM main.runs WHERE id=?1 AND exit_code IS NULL",
+                "SELECT profile FROM main.runs WHERE id=?1 AND outcome IS NULL",
                 [&id],
                 |r| r.get(0),
             )
@@ -734,7 +748,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
         }
         Event::Rebound { id, binding } => {
             check_runtime_available(tx, *id, binding)?;
-            if tx.execute("UPDATE main.profiles SET gents=?1 WHERE id=?2 AND retired=0 AND harness='gents' AND NOT EXISTS(SELECT 1 FROM main.runs WHERE profile=?2 AND exit_code IS NULL)", params![serde_json::to_string(binding)?, id.to_string()])? != 1 {
+            if tx.execute("UPDATE main.profiles SET gents=?1 WHERE id=?2 AND retired=0 AND harness='gents' AND NOT EXISTS(SELECT 1 FROM main.runs WHERE profile=?2 AND outcome IS NULL)", params![serde_json::to_string(binding)?, id.to_string()])? != 1 {
                 return Err(Error::Busy);
             }
         }
@@ -766,7 +780,7 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
         }
         Event::Removed { id } => {
             let pending: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM main.runs WHERE profile=?1 AND exit_code IS NULL)",
+                "SELECT EXISTS(SELECT 1 FROM main.runs WHERE profile=?1 AND outcome IS NULL)",
                 [id.to_string()],
                 |row| row.get(0),
             )?;
@@ -816,16 +830,28 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
             stopped_scope,
         } => {
             if tx.execute(
-                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND exit_code IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2 NOT IN ('exited','external_client_exited') OR requires_spawn_observation=0 OR observed_pid IS NOT NULL) AND (?2<>'exited' OR profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')) AND (?2<>'external_client_exited' OR profile IN (SELECT id FROM main.profiles WHERE harness='gents')) AND (?2 NOT IN ('exited','external_client_exited','spawn_failed') OR local_scope IS NULL) AND (?2<>'local_scope_empty' OR (observed_pid IS NOT NULL AND local_scope IS NOT NULL AND json_extract(local_scope,'$.id')=?4 AND json_extract(local_scope,'$.backend')='windows_job' AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')))",
+                "UPDATE main.runs SET exit_code=?1,outcome=?2 WHERE id=?3 AND outcome IS NULL AND (?2<>'spawn_failed' OR observed_pid IS NULL) AND (?2 NOT IN ('exited','external_client_exited') OR requires_spawn_observation=0 OR observed_pid IS NOT NULL) AND (?2<>'exited' OR profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')) AND (?2<>'external_client_exited' OR profile IN (SELECT id FROM main.profiles WHERE harness='gents')) AND (?2 NOT IN ('exited','external_client_exited','spawn_failed') OR local_scope IS NULL) AND (?2<>'local_scope_empty' OR (observed_pid IS NOT NULL AND local_scope IS NOT NULL AND json_extract(local_scope,'$.id')=?4 AND json_extract(local_scope,'$.backend')='windows_job' AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')))",
                 params![exit_code, outcome, id, stopped_scope.map(|id| id.to_string())],
             )? != 1
             {
                 return Err(Error::CorruptRegistry);
             }
         }
+        Event::LinuxScopeBound { id, binding } => {
+            if tx.execute(
+                "UPDATE main.runs SET linux_binding=?1 WHERE id=?2 AND outcome IS NULL AND observed_pid IS NULL AND linux_binding IS NULL AND requires_spawn_observation=1 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')",
+                params![serde_json::to_string(binding)?, id],
+            )? != 1 { return Err(Error::CorruptRegistry); }
+        }
+        Event::LinuxScopeRetired { id, scope, binding } => {
+            if tx.execute(
+                "UPDATE main.runs SET outcome='local_scope_empty' WHERE id=?1 AND outcome IS NULL AND exit_code IS NULL AND linux_binding=?2 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND json_extract(local_scope,'$.id')=?3 AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')",
+                params![id, serde_json::to_string(binding)?, scope.to_string()],
+            )? != 1 { return Err(Error::CorruptRegistry); }
+        }
         Event::RunSpawned { id, pid } => {
             if tx.execute(
-                "UPDATE main.runs SET observed_pid=?1,spawned_at=?2 WHERE id=?3 AND exit_code IS NULL AND observed_pid IS NULL",
+                "UPDATE main.runs SET observed_pid=?1,spawned_at=?2 WHERE id=?3 AND outcome IS NULL AND observed_pid IS NULL",
                 params![pid, recorded_at, id],
             )? != 1 {
                 return Err(Error::CorruptRegistry);

@@ -298,14 +298,16 @@ jobs:
       - name: Build real journal integration fixture
         run: |
           python3 tools/check_manager_dependency_boundary.py
-          cargo +1.98.0 test --locked -p agentswapper-core --lib --no-run
+          cargo +1.98.0 test --locked -p agentswapper-core --features linux-journal-qualification --lib --no-run
       - name: Build and lint real Store terminal consumer
         run: |
           cargo +1.98.0 clippy --locked -p agentswapper-core --features linux-journal-qualification --example linux_managed_store_probe -- -D warnings
           cargo +1.98.0 build --locked -p agentswapper-core --features linux-journal-qualification --example linux_managed_store_probe
           python3 tools/check_linux_managed_terminal_relay.py target/debug/examples/linux_managed_store_probe --store-refusal
       - name: Verify fixed-user activation fixture guards
-        run: python3 -m unittest discover -s tools -p test_linux_socket_activation.py -v
+        run: |
+          python3 -m unittest discover -s tools -p test_linux_socket_activation.py -v
+          python3 -m unittest discover -s tools -p test_linux_managed_terminal_relay.py -v
       - name: Evaluate fixed-user socket activation
         timeout-minutes: 6
         env:

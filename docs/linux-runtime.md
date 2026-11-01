@@ -579,11 +579,21 @@ The manager dependency is optional behind `linux-journal-qualification`; default
 application graphs remain isolated. Local manager/doctests, 49 evaluation tests,
 strict evaluation/core-feature Clippy and the dependency boundary pass. Native
 qualification of this consumer is pending.
-
 Qualified integration: credential-policy revision `cb8ba94`, one-use receipt
 revision `6d183f4`, and consumer revision `49948c8` each passed their complete
 pipelines: [41296222108](https://github.com/shahzadlone/agent-swapper/actions/runs/41296222108),
 [41296385424](https://github.com/shahzadlone/agent-swapper/actions/runs/41296385424),
 and [41296785541](https://github.com/shahzadlone/agent-swapper/actions/runs/41296785541).
-This integrates the consumer without enabling production managed execution.
-Durable scope completion and installation policy remain separate checkpoints.
+
+The [durable scope-retirement consumer](linux-scope-retirement.md) now associates
+the original live binding with one run before preparation, consumes its opaque
+receipt, and records retirement separately from unknown target status. Schema 9
+also enforces unique invocation association and migrates existing intent
+conservatively. The [installation policy](linux-installation.md) retains the
+protected selector, manifest and all five hash-verified artifacts through
+admission. These changes through `9cff2a5` passed full CI and both native Ubuntu
+suites in [41303525675](https://github.com/shahzadlone/agent-swapper/actions/runs/41303525675).
+
+The APIs remain qualification-gated; the normal managed launcher is disabled.
+Installer/bootstrap, helper execution integration and the
+[review follow-up](linux-release-review.md) remain separate gates.
