@@ -117,7 +117,8 @@ Regression tests refuse an error from another sender or an unrelated error;
 At `08a5fd1`, both images passed the corrected retirement, name-reuse and
 activation-binding trials in
 [run 41169464915](https://github.com/shahzadlone/agent-swapper/actions/runs/41169464915).
-The complete pipeline is still being followed.
+The complete pipeline passed, as did the later hosted-fixture opt-in gate at
+`4ccd252` in [run 41170491804](https://github.com/shahzadlone/agent-swapper/actions/runs/41170491804).
 Local tests cover truncated, empty, late and uncredentialed packets, and prove
 that an unexpected transferred descriptor is closed on refusal. The distinction
 between connection-time peer credentials and message credentials is described
@@ -166,6 +167,46 @@ before the probe child validated it. An explicit ready byte now proves the
 child checked its real namespace before the parent installs any overlay.
 These are availability/refusal checks, not simulated manager-owner
 replacement or successful manager authentication.
+
+### Credential and disconnect follow-up
+
+The separate Opus activation-binding review of `33fefe0` required a clean-EOF
+marker on the BIND path too and verification of PID-zero decoding. The observer
+owner/authentication review of `4ccd252` requested a second `MainPID` and
+`ActiveState` read after kernel binding, inside the invocation bracket. Those
+checks are implemented. They do not establish an atomic manager snapshot or
+eliminate every numeric-PID reuse possibility.
+
+Pinned rustix 1.1.6 represents credential PIDs with `NonZeroI32`, while Linux
+can return zero for an unconnected peer or a packet queued before `SO_PASSCRED`
+was enabled. Reading those bytes into that type is unsound; the earlier passing
+late-enable test is withdrawn as evidence. The existing
+[upstream issue](https://github.com/bytecodealliance/rustix/issues/1698) describes
+the same representation problem. The isolated observer now uses integer-bearing
+credential decoders, with source-review scope and dependency pins recorded in
+[dependency decisions](dependencies.md#linux-activation-credential-decoding).
+New tests exercise both actual kernel PID-zero paths and explicitly refuse a
+zero message-sender PID after safe decoding.
+
+Offer validation also binds the manager-authenticated unit name to the client's
+PID and UID, using systemd's AF_UNIX instance format, verified in
+[v249](https://github.com/systemd/systemd/blob/v249/src/core/socket.c#L822) and
+[v255](https://github.com/systemd/systemd/blob/v255/src/core/socket.c#L797).
+It checks sender GID and matching real/effective identities. Tests use different
+client and guardian PIDs and mutate both kernel credentials and text claims.
+
+Linux permits a zero-length sequenced packet while its peer remains open.
+Both Rust guardian transport and Python fixture now require kernel-reported
+read-side shutdown before accepting EOF; unexpected descriptors are discarded
+and refused. BIND and GO negative controls send an actual empty record and an
+unexpected command while retaining the peer. Neither may write a clean-EOF
+marker, even if systemd subsequently removes the failed scope.
+
+Local validation passed 16 observer tests, six shared transport tests, 18 Python
+fixture tests, strict Clippy and the locked dependency audit. The guardian lease
+fixture passed parent descriptor closure and parent-group SIGKILL. Native CI for
+these changes and the independent replacement-decoder/kernel reviews remain
+pending. No production backend is enabled by these checks.
 
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready

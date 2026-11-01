@@ -24,10 +24,9 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod probe {
-    use super::admission_transport::{GO, pair, receive, send};
+    use super::admission_transport::{GO, eof, pair, receive, send};
     use rustix::{
         fd::AsFd,
-        net::{RecvFlags, recv},
         process::{
             Pid, Signal, WaitOptions, getpgid, getpgrp, getpid, kill_process_group,
             set_child_subreaper, waitpid,
@@ -145,12 +144,7 @@ mod probe {
         )?;
         let lease = File::from(receive(io::stdin())?);
         publish(dir, "ready", &getpid().to_string())?;
-        let mut unexpected = [0_u8; 1];
-        // The inherited socket has a bounded receive timeout. Only EOF is accepted.
-        require(
-            recv(io::stdin(), &mut unexpected, RecvFlags::empty())?.0 == 0,
-            "expected parent channel EOF",
-        )?;
+        until(|| Ok(eof(io::stdin())?.then_some(())))?;
         publish(dir, "parent-gone", "EOF observed; lease retained")?;
         await_marker(dir, "release")?;
         drop(lease);

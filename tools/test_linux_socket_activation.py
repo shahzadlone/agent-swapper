@@ -1,6 +1,8 @@
 """Guard and fixed-user unit-rendering checks; no privileged operations."""
 from pathlib import Path
 import stat
+import socket
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,6 +11,25 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux sequenced-packet EOF semantics')
+    def test_empty_record_is_not_read_side_eof(self):
+        sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        with sender, receiver:
+            receiver.settimeout(1)
+            self.assertEqual(sender.send(b''), 0)
+            with self.assertRaisesRegex(RuntimeError, 'not EOF'):
+                probe.require_clean_eof(receiver, 'not EOF')
+            sender.send(b'X')
+            with self.assertRaisesRegex(RuntimeError, 'not EOF'):
+                probe.require_clean_eof(receiver, 'not EOF')
+            sender.shutdown(socket.SHUT_WR)
+            probe.require_clean_eof(receiver, 'not EOF')
+        sender, receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        with receiver:
+            receiver.settimeout(1)
+            sender.close()
+            probe.require_clean_eof(receiver, 'not EOF')
+
     def test_cleanup_without_matching_root_ownership_never_controls_units(self):
         directory_meta = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
         marker_meta = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0)

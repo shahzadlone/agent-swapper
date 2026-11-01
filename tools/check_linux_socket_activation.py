@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import socket
 import stat
 import struct
@@ -21,6 +22,17 @@ PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,A
 def require(ok, message):
     if not ok:
         raise RuntimeError(message)
+
+
+def require_clean_eof(connection, message):
+    data, ancillary, flags, _ = connection.recvmsg(1, 0)
+    watcher = select.poll()
+    watcher.register(connection, select.POLLRDHUP | select.POLLHUP)
+    closed = any(events & (select.POLLRDHUP | select.POLLHUP) for _, events in watcher.poll(0))
+    # SOCK_SEQPACKET permits an empty record while the peer remains open.
+    # Only kernel-reported read-side shutdown distinguishes EOF from it.
+    require(not data and not ancillary and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC)
+            and closed, message)
 
 
 def fixture_prefix():
@@ -195,7 +207,8 @@ def service(directory, uid, unit):
             # This branch accepts no launch request and creates no worker.
             connection.sendall(json.dumps(report).encode() + b'\n')
             connection.settimeout(12)
-            require(connection.recv(1) == b'', 'bind-only probe sent launch data')
+            require_clean_eof(connection, 'bind-only probe sent launch data')
+            (directory / (invocation + '.bind-clean-eof')).write_text(invocation)
             return
         run = directory / invocation
         run.mkdir(mode=0o700)
@@ -205,7 +218,7 @@ def service(directory, uid, unit):
         wait_for(lambda: (run / 'heartbeat').exists(), seconds=5)
         connection.sendall(json.dumps(report).encode() + b'\n')
         connection.settimeout(40)
-        require(connection.recv(1) == b'', 'unexpected fixture activation command')
+        require_clean_eof(connection, 'unexpected fixture activation command')
         (run / 'guardian-clean-eof').write_text(invocation)
     # Exiting the main service process lets KillMode=control-group retire its
     # detached writer. The client never sends a numeric process kill request.
@@ -342,8 +355,26 @@ def suite():
                     and records[1]['retirement']['original_directory_removed'] is True
                     and records[1]['retirement']['main_pidfd_exited'] is True,
                     'Rust activation binding or retirement evidence differs')
-            require(not any(directory.iterdir()), 'bind-only observation started a worker')
-            print('::notice title=Linux activation binding::kernel message sender matched manager MainPID and invocation; original scope retired after disconnect; no launch data or worker', flush=True)
+            invocation = records[0]['unit']['invocation']
+            bind_marker = directory / (invocation + '.bind-clean-eof')
+            require(set(directory.iterdir()) == {bind_marker} and bind_marker.read_text() == invocation,
+                    'bind-only guardian did not record clean EOF or created unexpected files')
+            bind_marker.unlink()
+            print('::notice title=Linux activation binding::kernel message sender matched manager MainPID and invocation; guardian recorded clean EOF and original scope retired; no launch data or worker', flush=True)
+            for packet in (b'X', b''):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as invalid_bind:
+                    invalid_bind.settimeout(8)
+                    invalid_bind.connect(str(endpoint(prefix)))
+                    invalid_bind.sendall(b'BIND\n')
+                    offer = json.loads(invalid_bind.recv(4096))
+                    require(re.fullmatch(re.escape(prefix) + r'@[A-Za-z0-9_.:\\-]+\.service', offer['unit']),
+                            'invalid bind negative-control unit')
+                    require(invalid_bind.send(packet) == len(packet), 'incomplete bind fault packet')
+                    require(b'bind-only probe sent launch data' in invalid_bind.recv(4096),
+                            'bind fault did not reach the intended refusal')
+                wait_for(lambda: not (Path('/sys/fs/cgroup/system.slice') / offer['unit']).exists(), seconds=5)
+                require(not any(directory.iterdir()), 'failed bind created an EOF marker or worker')
+            print('::notice title=Linux activation bind EOF control::unexpected and empty records refused while peer remained open; no clean EOF marker or worker', flush=True)
             with open('/dev/null', 'rb') as harmless:
                 faults = [('oversized control packet', b'GO\nextra', []),
                           ('unexpected descriptor', b'GO\n',
@@ -358,22 +389,26 @@ def suite():
                                 label + ' was not refused at its framing check')
                         require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
                     print('::notice title=Linux fixed-user activation::' + label + ' refused before worker creation', flush=True)
-            faulty, faulty_report, faulty_fd = activate(prefix, directory)
-            connections.append(faulty)
-            descriptors.append(faulty_fd)
-            live_before_disconnect(directory, faulty_report)
-            faulty.sendall(b'X')
-            require(b'unexpected fixture activation command' in faulty.recv(4096),
-                    'guardian error control did not reach the intended protocol refusal')
-            faulty.close()
-            try:
-                retired(directory, faulty_report, faulty_fd)
-            except RuntimeError as error:
-                require(str(error) == 'guardian did not record clean client EOF before original scope retirement',
-                        'guardian error control failed at a different observation')
-            else:
-                raise RuntimeError('guardian error was accepted as clean client EOF')
-            print('::notice title=Linux activation EOF control::guardian error stopped its worker and removed scope but was refused as clean EOF evidence', flush=True)
+            for label, packet in [('unexpected command', b'X'), ('empty record on open peer', b'')]:
+                faulty, faulty_report, faulty_fd = activate(prefix, directory)
+                connections.append(faulty)
+                descriptors.append(faulty_fd)
+                live_before_disconnect(directory, faulty_report)
+                # sendall(b'') performs no send syscall; send is needed to
+                # create an actual zero-length sequenced-packet record.
+                require(faulty.send(packet) == len(packet), 'incomplete guardian error control')
+                require(b'unexpected fixture activation command' in faulty.recv(4096),
+                        'guardian error control did not reach the intended protocol refusal')
+                faulty.close()
+                try:
+                    retired(directory, faulty_report, faulty_fd)
+                except RuntimeError as error:
+                    require(str(error) == 'guardian did not record clean client EOF before original scope retirement',
+                            'guardian error control failed at a different observation')
+                else:
+                    raise RuntimeError('guardian error was accepted as clean client EOF')
+                print('::notice title=Linux activation EOF control::' + label
+                      + ': worker stopped and scope removed but refused as clean EOF evidence', flush=True)
             first, first_report, first_fd = activate(prefix, directory)
             connections.append(first)
             descriptors.append(first_fd)

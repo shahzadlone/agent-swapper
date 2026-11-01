@@ -92,6 +92,20 @@ fn valid_instance(unit: &str, prefix: &str) -> bool {
             })
 }
 
+// systemd's AF_UNIX Accept=yes instance includes the client credentials:
+// <connection counter>-<client PID>-<client UID>. Unknown credentials refuse.
+fn connection_instance(unit: &str, prefix: &str, pid: u32, uid: u32) -> bool {
+    valid_instance(unit, prefix)
+        && unit
+            .strip_prefix(&format!("{prefix}@"))
+            .and_then(|instance| instance.strip_suffix(&format!("-{pid}-{uid}.service")))
+            .is_some_and(|counter| {
+                counter
+                    .parse::<u32>()
+                    .is_ok_and(|value| counter == value.to_string())
+            })
+}
+
 pub(crate) fn valid_scope_unit(unit: &str) -> bool {
     unit.split_once('@')
         .is_some_and(|(prefix, _)| valid_prefix(prefix) && valid_instance(unit, prefix))
@@ -114,6 +128,11 @@ pub(crate) fn protected_fragment(fragment: &str) -> io::Result<()> {
 
 fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
     require(valid_prefix(prefix), "invalid activation fixture prefix")?;
+    require(
+        rustix::process::getuid() == rustix::process::geteuid()
+            && rustix::process::getgid() == rustix::process::getegid(),
+        "activation requires matching real and effective identities",
+    )?;
     protected_fragment(&format!("/run/systemd/system/{prefix}@.service"))?;
     let path = format!("/run/{prefix}.sock");
     let before = fs::symlink_metadata(&path)?;
@@ -131,13 +150,13 @@ fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
     )?;
     net::sockopt::set_socket_passcred(&socket, true)?;
     net::connect(&socket, &SocketAddrUnix::new(&path)?)?;
-    let peer = net::sockopt::socket_peercred(&socket)?;
+    let peer = activation_packet::peer(&socket)?;
     let after = fs::symlink_metadata(&path)?;
     require(
         before.dev() == after.dev()
             && before.ino() == after.ino()
-            && peer.pid.as_raw_nonzero().get() == 1
-            && peer.uid.is_root(),
+            && peer.pid() == 1
+            && peer.uid() == 0,
         "activation listener is not the original system-manager endpoint",
     )?;
     require(
@@ -150,15 +169,15 @@ fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
     )?;
     let packet = activation_packet::receive(&socket, Instant::now() + Duration::from_secs(4))?;
     let offer = validate_offer(&packet, prefix)?;
-    let sender_pid = packet.sender.pid.as_raw_nonzero().get() as u32;
+    let sender_pid = packet.sender.pid() as u32;
     Ok((
         socket,
         Fact {
             listener_pid: 1,
             listener_uid: 0,
             sender_pid,
-            sender_uid: packet.sender.uid.as_raw(),
-            sender_gid: packet.sender.gid.as_raw(),
+            sender_uid: packet.sender.uid(),
+            sender_gid: packet.sender.gid(),
             launch_data_sent: false,
         },
         offer,
@@ -167,17 +186,17 @@ fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
 
 fn validate_offer(packet: &activation_packet::Packet, prefix: &str) -> io::Result<Offer> {
     let offer: Offer = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
-    let sender_pid = packet.sender.pid.as_raw_nonzero().get() as u32;
     let own_uid = rustix::process::getuid().as_raw();
     require(
-        packet.sender.uid.as_raw() == own_uid
+        packet.sender.uid() == own_uid
+            && packet.sender.gid() == rustix::process::getgid().as_raw()
             && own_uid != 0
-            && sender_pid > 1
-            && offer.pid == sender_pid
+            && packet.sender.pid() > 1
+            && offer.pid == packet.sender.pid() as u32
             && offer.uid == own_uid
             && offer.peer_uid == own_uid
             && offer.peer_pid == std::process::id()
-            && valid_instance(&offer.unit, prefix)
+            && connection_instance(&offer.unit, prefix, std::process::id(), own_uid)
             && crate::valid_invocation(&offer.invocation)
             && offer.group == format!("/system.slice/{}", offer.unit),
         "activation offer disagrees with kernel sender or connection identity",
@@ -205,7 +224,7 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
                     "activation manager binding timed out",
                 )
             })??;
-    let result = async {
+    let result: io::Result<Report> = async {
         let binding = binding
             .as_ref()
             .ok_or_else(|| io::Error::other("activation lacks retained kernel binding"))?;
@@ -220,14 +239,21 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
             .unit
             .as_ref()
             .ok_or_else(|| io::Error::other("activation lacks unit binding"))?;
-        report.retirement =
-            Some(crate::watch::retire(&connection, owner.as_str(), unit, binding).await?);
+        report.retirement = Some(
+            crate::watch::retire(&connection, owner.as_str(), unit, binding)
+                .await
+                .map_err(|error| {
+                    io::Error::new(error.kind(), format!("activation retirement: {error}"))
+                })?,
+        );
         report.phase = "activation_retired";
         Ok(report)
     }
     .await;
-    connection.close().await.map_err(io::Error::other)?;
-    result
+    let closed = connection.close().await.map_err(io::Error::other);
+    let report = result?;
+    closed?;
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -260,17 +286,16 @@ mod tests {
     #[test]
     fn offer_claims_cannot_replace_the_kernel_sender_or_calling_connection() -> io::Result<()> {
         let prefix = "aswp-activation-123-1";
-        let credentials = net::UCred {
-            pid: rustix::process::getpid(),
-            uid: rustix::process::getuid(),
-            gid: rustix::process::getgid(),
-        };
+        let own = unix_ancillary::ScmCredentials::for_this_process();
+        let sender_pid = if own.pid() == 4242 { 4243 } else { 4242 };
+        let credentials = unix_ancillary::ScmCredentials::new(sender_pid, own.uid(), own.gid());
+        let unit = format!("{prefix}@0-{}-{}.service", own.pid(), own.uid());
         let offer = serde_json::json!({
-            "unit": "aswp-activation-123-1@0-1000.service",
-            "invocation": "0123456789abcdef0123456789abcdef", "pid": std::process::id(),
-            "uid": credentials.uid.as_raw(), "peer_uid": credentials.uid.as_raw(),
+            "unit": unit,
+            "invocation": "0123456789abcdef0123456789abcdef", "pid": sender_pid,
+            "uid": credentials.uid(), "peer_uid": credentials.uid(),
             "peer_pid": std::process::id(), "started": 1.0,
-            "group": "/system.slice/aswp-activation-123-1@0-1000.service"
+            "group": format!("/system.slice/{unit}")
         });
         let packet = |value: &serde_json::Value| -> io::Result<activation_packet::Packet> {
             Ok(activation_packet::Packet {
@@ -279,6 +304,33 @@ mod tests {
             })
         };
         assert!(validate_offer(&packet(&offer)?, prefix).is_ok());
+        for changed in [
+            unix_ancillary::ScmCredentials::new(0, own.uid(), own.gid()),
+            unix_ancillary::ScmCredentials::new(-1, own.uid(), own.gid()),
+            unix_ancillary::ScmCredentials::new(1, own.uid(), own.gid()),
+            own,
+            unix_ancillary::ScmCredentials::new(sender_pid, 0, own.gid()),
+            unix_ancillary::ScmCredentials::new(sender_pid, own.uid() + 1, own.gid()),
+            unix_ancillary::ScmCredentials::new(sender_pid, own.uid(), own.gid() + 1),
+        ] {
+            let mut forged = packet(&offer)?;
+            forged.sender = changed;
+            assert!(validate_offer(&forged, prefix).is_err());
+        }
+        // Change both text claims together: only authenticated manager identity
+        // and the independently checked connection instance may corroborate them.
+        for instance in [
+            format!("0-{}-{}", sender_pid, own.uid()),
+            format!("0-{}-0", own.pid()),
+            format!("01-{}-{}", own.pid(), own.uid()),
+            "0-unknown".to_owned(),
+        ] {
+            let mut changed = offer.clone();
+            let unit = format!("{prefix}@{instance}.service");
+            changed["unit"] = serde_json::json!(unit);
+            changed["group"] = serde_json::json!(format!("/system.slice/{unit}"));
+            assert!(validate_offer(&packet(&changed)?, prefix).is_err());
+        }
         for (field, value) in [
             ("pid", serde_json::json!(1)),
             ("uid", serde_json::json!(0)),

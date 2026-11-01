@@ -2,18 +2,30 @@
 use crate::require;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
-    net::{self, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, UCred},
+    net,
 };
 use std::{
     io::{self, IoSliceMut},
-    mem::MaybeUninit,
-    os::fd::OwnedFd,
+    os::fd::{AsFd, OwnedFd},
     time::Instant,
 };
+use unix_ancillary::{AncillaryData, ScmCredentials, SocketAncillary};
 
 pub(crate) struct Packet {
     pub bytes: Vec<u8>,
-    pub sender: UCred,
+    pub sender: ScmCredentials,
+}
+
+/// Keep the kernel's integer PID representable until policy validates it.
+/// rustix 1.1.6 UCred embeds NonZeroI32 and cannot safely decode PID zero.
+pub(crate) fn peer(socket: impl AsFd) -> io::Result<ScmCredentials> {
+    let credentials =
+        nix::sys::socket::getsockopt(&socket, nix::sys::socket::sockopt::PeerCredentials)?;
+    Ok(ScmCredentials::new(
+        credentials.pid(),
+        credentials.uid(),
+        credentials.gid(),
+    ))
 }
 
 /// SO_PASSCRED must be enabled before the other endpoint can send a packet.
@@ -22,8 +34,9 @@ pub(crate) struct Packet {
 pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet> {
     require(
         net::sockopt::socket_type(socket)? == net::SocketType::SEQPACKET
-            && net::sockopt::socket_passcred(socket)?,
-        "activation requires a credential-enabled sequenced-packet socket",
+            && net::sockopt::socket_passcred(socket)?
+            && rustix::fs::fcntl_getfl(socket)?.contains(rustix::fs::OFlags::NONBLOCK),
+        "activation requires a nonblocking credential-enabled sequenced-packet socket",
     )?;
     let remaining = deadline
         .checked_duration_since(Instant::now())
@@ -41,22 +54,23 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
         "activation packet did not arrive before deadline",
     )?;
     let mut bytes = [0_u8; 4096];
-    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmCredentials(1), ScmRights(1))];
-    let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-    let received = net::recvmsg(
-        socket,
+    let size =
+        SocketAncillary::buffer_size_for_credentials() + SocketAncillary::buffer_size_for_rights(1);
+    let mut space = vec![0_u8; size];
+    let mut ancillary = SocketAncillary::new(&mut space);
+    let received = unix_ancillary::cmsg_recvmsg(
+        socket.as_fd(),
         &mut [IoSliceMut::new(&mut bytes)],
         &mut ancillary,
-        RecvFlags::CMSG_CLOEXEC | RecvFlags::DONTWAIT,
     )?;
     let mut sender = None;
     let mut unexpected = false;
-    for message in ancillary.drain() {
+    for message in ancillary.messages() {
         match message {
-            RecvAncillaryMessage::ScmCredentials(credentials) if sender.is_none() => {
+            AncillaryData::Credentials(credentials) if sender.is_none() => {
                 sender = Some(credentials);
             }
-            RecvAncillaryMessage::ScmRights(rights) => {
+            AncillaryData::ScmRights(rights) => {
                 // Closing every received capability is part of refusal, even
                 // when the packet is otherwise valid or the control is truncated.
                 drop(rights.collect::<Vec<OwnedFd>>());
@@ -67,34 +81,36 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
     }
     require(
         !unexpected
-            && !received
-                .flags
-                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-            && received.bytes > 0
+            && !received.truncated
+            && !received.data_truncated
+            && received.bytes_read > 0
             && Instant::now() < deadline,
         "invalid or late activation packet",
     )?;
+    let sender =
+        sender.ok_or_else(|| io::Error::other("activation message lacks kernel credentials"))?;
+    require(sender.pid() > 0, "activation sender PID is unavailable")?;
     Ok(Packet {
-        bytes: bytes[..received.bytes].to_vec(),
-        sender: sender
-            .ok_or_else(|| io::Error::other("activation message lacks kernel credentials"))?,
+        bytes: bytes[..received.bytes_read].to_vec(),
+        sender,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustix::net::RecvFlags;
     use rustix::net::{
         AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
         SocketType, send, sendmsg, socketpair,
     };
-    use std::{io::IoSlice, os::fd::AsFd, time::Duration};
+    use std::{io::IoSlice, mem::MaybeUninit, os::fd::AsFd, time::Duration};
 
     fn pair() -> io::Result<(OwnedFd, OwnedFd)> {
         let (sender, receiver) = socketpair(
             AddressFamily::UNIX,
             SocketType::SEQPACKET,
-            SocketFlags::CLOEXEC,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
             None,
         )?;
         net::sockopt::set_socket_passcred(&receiver, true)?;
@@ -111,9 +127,21 @@ mod tests {
         send(&sender, b"offer", SendFlags::NOSIGNAL)?;
         let packet = receive(&receiver, deadline())?;
         assert_eq!(packet.bytes, b"offer");
-        assert_eq!(packet.sender.pid, rustix::process::getpid());
-        assert_eq!(packet.sender.uid, rustix::process::getuid());
-        assert_eq!(packet.sender.gid, rustix::process::getgid());
+        assert_eq!(packet.sender.pid(), rustix::process::getpid().as_raw_pid());
+        assert_eq!(packet.sender.uid(), rustix::process::getuid().as_raw());
+        assert_eq!(packet.sender.gid(), rustix::process::getgid().as_raw());
+        Ok(())
+    }
+
+    #[test]
+    fn unconnected_peer_pid_zero_remains_a_valid_integer() -> io::Result<()> {
+        let socket = net::socket_with(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC,
+            None,
+        )?;
+        assert_eq!(peer(&socket)?.pid(), 0);
         Ok(())
     }
 
@@ -155,11 +183,15 @@ mod tests {
         net::sockopt::set_socket_passcred(&receiver, false)?;
         send(&sender, b"offer", SendFlags::NOSIGNAL)?;
         assert!(receive(&receiver, deadline()).is_err());
+        // Linux synthesizes PID zero for a packet queued before SO_PASSCRED.
+        // The replacement decoder preserves that valid integer and our policy
+        // rejects it; no NonZeroI32 is constructed from those kernel bytes.
         drop(sender);
         net::sockopt::set_socket_passcred(&receiver, true)?;
-        // A packet sent without credential passing enabled is not upgraded to
-        // authenticated evidence just by changing the receive option later.
-        assert!(receive(&receiver, deadline()).is_err());
+        let error = receive(&receiver, deadline())
+            .err()
+            .ok_or_else(|| io::Error::other("unavailable sender PID was accepted"))?;
+        assert_eq!(error.to_string(), "activation sender PID is unavailable");
         Ok(())
     }
 }

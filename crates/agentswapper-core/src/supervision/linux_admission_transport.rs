@@ -35,6 +35,48 @@ pub(crate) fn pair() -> io::Result<(OwnedFd, OwnedFd)> {
     Ok((a, b))
 }
 
+/// Check for read-side shutdown without blocking. An empty sequenced packet
+/// from an open peer is a protocol error, not evidence of parent disconnect.
+#[allow(dead_code, reason = "some fixture binaries do not wait for disconnect")]
+pub(crate) fn eof(socket: impl AsFd) -> io::Result<bool> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let mut bytes = [0_u8; 1];
+    // No control data is accepted here. A zero-sized control buffer makes the
+    // kernel close any transferred descriptors and report CTRUNC.
+    let mut ancillary = RecvAncillaryBuffer::new(&mut []);
+    let received = match net::recvmsg(
+        &socket,
+        &mut [IoSliceMut::new(&mut bytes)],
+        &mut ancillary,
+        RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+    ) {
+        Ok(received) => received,
+        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    require(
+        received.bytes == 0
+            && !received
+                .flags
+                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC),
+        "unexpected guardian control message",
+    )?;
+    let closed = PollFlags::RDHUP | PollFlags::HUP;
+    let mut readiness = [PollFd::new(&socket, closed)];
+    poll(
+        &mut readiness,
+        Some(&Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        }),
+    )?;
+    require(
+        readiness[0].revents().intersects(closed),
+        "empty guardian packet is not read-side EOF",
+    )?;
+    Ok(true)
+}
+
 pub(crate) fn send(socket: &OwnedFd, packet: &[u8], files: &[BorrowedFd<'_>]) -> io::Result<()> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(16))];
     let mut ancillary = SendAncillaryBuffer::new(&mut space);
@@ -247,6 +289,46 @@ pub(crate) fn receive_control(socket: impl AsFd, expected: &[u8]) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eof_requires_read_side_shutdown_and_refuses_empty_open_peer_records() -> io::Result<()> {
+        let (sender, receiver) = pair()?;
+        assert!(!eof(&receiver)?);
+        send(&sender, b"", &[])?;
+        let error = eof(&receiver)
+            .err()
+            .ok_or_else(|| io::Error::other("empty packet accepted"))?;
+        assert_eq!(
+            error.to_string(),
+            "empty guardian packet is not read-side EOF"
+        );
+        for packet in [b"X".as_slice(), b"too long"] {
+            send(&sender, packet, &[])?;
+            assert!(eof(&receiver).is_err());
+        }
+        net::shutdown(&sender, net::Shutdown::Write)?;
+        assert!(eof(&receiver)?);
+        let (sender, receiver) = pair()?;
+        drop(sender);
+        assert!(eof(&receiver)?);
+        Ok(())
+    }
+
+    #[test]
+    fn eof_refusal_discards_all_transferred_capabilities_even_after_peer_closes() -> io::Result<()>
+    {
+        for count in [1, 16] {
+            let (sender, receiver) = pair()?;
+            let (capability, witness) = pair()?;
+            send(&sender, b"", &vec![capability.as_fd(); count])?;
+            drop(capability);
+            drop(sender);
+            assert!(!eof(&witness)?);
+            assert!(eof(&receiver).is_err());
+            assert!(eof(&witness)?);
+        }
+        Ok(())
+    }
 
     #[test]
     fn control_packets_require_exact_bytes_and_no_descriptors() -> io::Result<()> {

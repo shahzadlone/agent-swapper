@@ -405,13 +405,19 @@ async fn snapshot(
     )?;
     let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
     let invocation_xattr = invocation_xattr(kernel.directory(), &first, &invocation)?;
+    let bound_pid =
+        u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
+            .map_err(io::Error::other)?;
+    let bound_active =
+        String::try_from(property(connection, owner, &path, UNIT_INTERFACE, "ActiveState").await?)
+            .map_err(io::Error::other)?;
     let corroborated = Vec::<u8>::try_from(
         property(connection, owner, &path, UNIT_INTERFACE, "InvocationID").await?,
     )
     .map_err(io::Error::other)?;
     require(
-        corroborated == first,
-        "invocation changed during kernel observation",
+        corroborated == first && bound_pid == pid && bound_active == "active",
+        "manager state changed during kernel observation",
     )?;
     let fact = UnitFact {
         unit: id,
@@ -455,14 +461,14 @@ async fn admit(
 )> {
     let before = fs::symlink_metadata(SOCKET)?;
     let stream = tokio::net::UnixStream::connect(SOCKET).await?.into_std()?;
-    let peer = rustix::net::sockopt::socket_peercred(&stream)?;
+    let peer = activation_packet::peer(&stream)?;
     let after = fs::symlink_metadata(SOCKET)?;
     require(
         before.dev() == after.dev() && before.ino() == after.ino(),
         "bus path changed while connecting",
     )?;
     require(
-        peer.uid.is_root(),
+        peer.uid() == 0,
         "bus listener peer is not root; record platform before widening policy",
     )?;
     let connection = zbus::connection::Builder::unix_stream(stream)
@@ -512,8 +518,8 @@ async fn admit(
             phase: "snapshot",
             scope: "read-only transport measurement; no custody receipt",
             paths,
-            peer_uid: peer.uid.as_raw(),
-            peer_pid: peer.pid.as_raw_nonzero().get(),
+            peer_uid: peer.uid(),
+            peer_pid: peer.pid(),
             manager_uid: 0,
             manager_pid: 1,
             process_fd: credentials.process_fd().is_some(),
@@ -528,7 +534,9 @@ async fn admit(
     match result {
         Ok((owner, report, kernel)) => Ok((connection, owner, report, kernel)),
         Err(error) => {
-            connection.close().await.map_err(io::Error::other)?;
+            // Closing remains bounded by the caller's deadline, but should
+            // not replace the observation error with a secondary close error.
+            let _ = connection.close().await;
             Err(error)
         }
     }
@@ -552,7 +560,7 @@ async fn inspect(
             .map_err(|_| {
                 io::Error::new(io::ErrorKind::TimedOut, "manager binding deadline exceeded")
             })??;
-    let result = async {
+    let result: io::Result<Report> = async {
         if watch {
             let unit = report
                 .unit
@@ -575,8 +583,10 @@ async fn inspect(
         Ok(report)
     }
     .await;
-    connection.close().await.map_err(io::Error::other)?;
-    result
+    let closed = connection.close().await.map_err(io::Error::other);
+    let report = result?;
+    closed?;
+    Ok(report)
 }
 
 fn run() -> io::Result<Report> {

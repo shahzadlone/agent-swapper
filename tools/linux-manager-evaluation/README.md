@@ -151,9 +151,14 @@ measurement before selecting a production peer policy. Later checkpoints need
 production API separation, broader live refusal/replacement fixtures and
 independent source review. The design review
 does not qualify this implementation. No production backend is enabled.
-The requested follow-up implementation review could not run because Claude
-reported its subscription session limit. It remains outstanding; the failed
-request is not source-review evidence.
+A later focused Opus source review of `main.rs` and `watch.rs` at `4ccd252`
+completed. Its post-bind manager-state recheck and primary-error preservation
+are implemented; the separate kernel review is still pending. The activation
+review found a real PID-zero representation problem in the former credential
+decoder. Its replacement and disconnect follow-up are recorded in
+[the activation evidence](../../docs/linux-managed-launch.md#credential-and-disconnect-follow-up).
+Earlier quota-limited or interrupted review requests are not counted as
+completed audits. No production backend is enabled.
 
 References: [systemd's D-Bus interface](https://www.freedesktop.org/software/systemd/man/262/org.freedesktop.systemd1.html),
 [D-Bus credentials](https://dbus.freedesktop.org/doc/dbus-specification.html#bus-messages-get-connection-credentials),

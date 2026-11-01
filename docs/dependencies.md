@@ -243,6 +243,40 @@ suspended process. The CLI now installs that root for the explicit Windows
 containment option; its new crash-window fixture awaits hosted validation.
 No new advisory or licensing exception was added.
 
+## Linux activation credential decoding
+
+The separate `tools/linux-manager-evaluation` workspace pins `nix = 0.31.3`
+(MIT, only `socket` enabled) for `SO_PEERCRED`, and `unix-ancillary = 0.6.1`
+(MIT, default features disabled) for credential-bearing packet receive. Root
+workspace dependencies are unchanged. These add three locked packages to the
+evaluation graph: nix, unix-ancillary and nix's build-time cfg_aliases; their
+other dependencies were already locked.
+
+This avoids the credential PID representation in rustix 1.1.6, which embeds a
+nonzero integer even though the kernel can supply PID zero. See
+[rustix issue 1698](https://github.com/bytecodealliance/rustix/issues/1698).
+The evaluation tool no longer uses rustix `UCred` or `socket_peercred`.
+The root guardian transport does not enable credential reception; its rights
+receiver and credential-free EOF check have different contracts.
+
+Source inspection covered nix's integer-only `UnixCredentials`, peer-credential
+sockopt wrapper, and unix-ancillary's low-level receive, checked byte parser,
+integer credential representation, descriptor ownership and Linux CLOEXEC path.
+The published unix-ancillary archive was verified against SHA-256
+`5b8acd22a6c7aa27eb5b947514b22601274a86d56fe671ec1e15960e536d6d6d`.
+Only fresh kernel receive output is converted to owned descriptors; unread
+rights close on drop, and Linux receive uses atomic `MSG_CMSG_CLOEXEC`.
+Version 0.6.1 also closes unexposed `SCM_PIDFD` descriptors. The observer enables
+only `SO_PASSCRED`; it does not obtain an authoritative sender pidfd or assert
+that every possible control-message type is exposed by the library.
+
+The socket must be nonblocking and packet receive has an absolute deadline.
+Tests cover kernel PID-zero credentials, payload/control truncation and release
+of rejected transferred capabilities. The locked license/advisory/source audit
+passes without a new exception. Independent review of this replacement is still
+pending; unused dependency APIs and complete production qualification are
+outside this source inspection's scope.
+
 ## Licensing and distribution
 
 BSD-3-Clause is allowed for the RustCrypto/Dalek dependencies. The existing
