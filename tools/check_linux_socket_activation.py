@@ -88,7 +88,16 @@ def endpoint(prefix):
 
 
 def guardian_image(prefix):
-    return Path('/run') / (prefix + '.guardian')
+    # /run is commonly noexec. Keep executable fixture content in a protected
+    # executable parent; sockets and ownership metadata still belong in /run.
+    return Path('/usr/lib') / (prefix + '.guardian')
+
+
+def protected_image_parent(prefix):
+    for path in reversed(guardian_image(prefix).parents):
+        metadata = path.lstat()
+        require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0,
+                f'guardian image parent is not root-owned and protected: {path}')
 
 
 def source_image(uid):
@@ -228,9 +237,10 @@ def admin(verb, directory, uid, gid):
     require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0,
             'runtime unit directory is not root-owned and protected')
     if verb == 'install':
+        protected_image_parent(prefix)
         require(not os.path.lexists(endpoint(prefix)), 'fixture activation endpoint already exists')
-        require(not os.statvfs('/run').f_flag & os.ST_NOEXEC,
-                'disposable Rust fixture requires an executable /run mount; no host mount will be changed')
+        require(not os.statvfs(guardian_image(prefix).parent).f_flag & os.ST_NOEXEC,
+                'disposable Rust fixture requires an executable /usr/lib mount; no host mount will be changed')
         require(not os.path.lexists(guardian_image(prefix)), 'fixture guardian image already exists')
         for name in files:
             require(not os.path.lexists(parent / name), 'fixture unit name already exists')
@@ -272,6 +282,7 @@ def admin(verb, directory, uid, gid):
             and isinstance(ownership['guardian_sha256'], str)
             and re.fullmatch(r'[0-9a-f]{64}', ownership['guardian_sha256']),
             'fixture ownership marker differs from this run')
+    protected_image_parent(prefix)
     if os.path.lexists(guardian_image(prefix)):
         verify_image(guardian_image(prefix), ownership['guardian_sha256'])
     for name, contents in files.items():
@@ -571,8 +582,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 34,
-                        'managed relay did not pass all thirty-four owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 47,
+                        'managed relay did not pass all forty-seven owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
                 result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
                                         str(relay), '--long-session'], environment=test_env)

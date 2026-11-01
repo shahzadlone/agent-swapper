@@ -217,25 +217,36 @@ enum ControlReadiness {
 }
 fn control_readiness(socket: impl AsFd) -> io::Result<ControlReadiness> {
     let mut byte = [0_u8];
-    match rustix::net::recv(
-        &socket,
-        &mut byte,
-        rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT,
-    ) {
-        Ok((0, _)) => {
-            require(transport::eof(&socket)?, "empty job control record")?;
-            Ok(ControlReadiness::Closed)
+    let mut reset_consumed = false;
+    loop {
+        match rustix::net::recv(
+            &socket,
+            &mut byte,
+            rustix::net::RecvFlags::PEEK | rustix::net::RecvFlags::DONTWAIT,
+        ) {
+            // A peer closing with an unread request sets SO_ERROR before the
+            // kernel exposes its queued final reply. Consume that error once,
+            // then inspect the actual queue. Reset alone proves no outcome.
+            Err(rustix::io::Errno::CONNRESET) if !reset_consumed => reset_consumed = true,
+            Ok((0, _)) => {
+                require(transport::eof(&socket)?, "empty job control record")?;
+                return Ok(ControlReadiness::Closed);
+            }
+            Ok(_) => return Ok(ControlReadiness::Packet),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                return Ok(ControlReadiness::Pending);
+            }
+            Err(error) => return Err(error.into()),
         }
-        Ok(_) => Ok(ControlReadiness::Packet),
-        Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(ControlReadiness::Pending),
-        Err(error) => Err(error.into()),
     }
 }
+#[must_use = "closed control retains witnesses; attempt explicit retirement"]
 pub struct Closed(Session);
 /// Independent read-only witness; it never owns a copy of the activation socket.
 pub struct Witness(Session);
 
 /// A failed transition retains the original witnesses for explicit retirement.
+#[must_use = "transition failure retains witnesses for explicit retirement"]
 pub struct TransitionFailure {
     pub error: io::Error,
     pub closed: Box<Closed>,
@@ -254,6 +265,7 @@ pub enum StartCause<E> {
     Journal(E),
     Transport(io::Error),
 }
+#[must_use = "start failure retains witnesses; never infer that delivery was withheld"]
 pub struct StartFailure<E> {
     pub cause: StartCause<E>,
     pub live_at_refusal: Option<io::Result<()>>,
@@ -267,6 +279,7 @@ impl<E: std::fmt::Debug> std::fmt::Debug for StartFailure<E> {
             .finish_non_exhaustive()
     }
 }
+#[must_use = "failed observation is unresolved and retains its original witnesses"]
 pub struct RetireFailure {
     pub error: io::Error,
     pub closed: Box<Closed>,
@@ -664,9 +677,21 @@ impl Prepared {
     /// confirming an earlier committed intent in exec-gated mode). A transport
     /// failure afterwards must be treated as GO possibly having been delivered.
     pub fn start_after<E>(
+        self,
+        nonce: [u8; 16],
+        journal: impl FnOnce(u32) -> Result<(), E>,
+    ) -> Result<Running, StartFailure<E>> {
+        self.start_after_checked(nonce, journal, || Ok(()))
+    }
+
+    /// Check withdrawal again after manager observation, immediately before GO.
+    /// The synchronous check must be bounded; a later signal/send race still
+    /// leaves delivery uncertain and cannot authorize a no-exec inference.
+    pub fn start_after_checked<E>(
         mut self,
         nonce: [u8; 16],
         journal: impl FnOnce(u32) -> Result<(), E>,
+        permit: impl FnOnce() -> io::Result<()>,
     ) -> Result<Running, StartFailure<E>> {
         if let Err(error) = self.session.recheck() {
             return Err(StartFailure {
@@ -694,6 +719,7 @@ impl Prepared {
             });
         }
         let result = self.session.recheck().and_then(|()| {
+            permit()?;
             // The client socket is nonblocking. A full queue fails immediately;
             // send_until bounds the attempt but does not wait for queue space.
             transport::send_until(
@@ -978,8 +1004,18 @@ impl ExecStopped {
     /// Commit the spawn observation while the kernel exec stop is held. Any
     /// send failure afterwards leaves release uncertain, never safe to retry.
     pub fn release_after<E>(
+        self,
+        journal: impl FnOnce(u32) -> Result<(), E>,
+    ) -> Result<Running, StartFailure<E>> {
+        self.release_after_checked(journal, || Ok(()))
+    }
+
+    /// Check withdrawal after the final recheck, immediately before releasing
+    /// the held exec. This does not make a successful send atomic with signals.
+    pub fn release_after_checked<E>(
         mut self,
         journal: impl FnOnce(u32) -> Result<(), E>,
+        permit: impl FnOnce() -> io::Result<()>,
     ) -> Result<Running, StartFailure<E>> {
         let before = self.0.recheck().and_then(|()| {
             self.0
@@ -1013,6 +1049,7 @@ impl ExecStopped {
                 .job
                 .as_ref()
                 .ok_or_else(|| io::Error::other("exec state absent"))?;
+            permit()?;
             transport::send_until(
                 self.0.socket()?,
                 &journal_protocol::exec_release_packet(&job.nonce, job.child),
@@ -1251,6 +1288,48 @@ mod tests {
         ] {
             assert!(validate_exec(&packet(&value, sender)?, &expected).is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn queued_final_packet_survives_peer_reset_before_readiness() -> io::Result<()> {
+        let (guardian, client) = transport::pair()?;
+        rustix::fs::fcntl_setfl(
+            &client,
+            rustix::fs::fcntl_getfl(&client)? | rustix::fs::OFlags::NONBLOCK,
+        )?;
+        rustix::net::sockopt::set_socket_passcred(&client, true)?;
+        transport::send(&client, b"unread-resume", &[])?;
+        transport::send(&guardian, b"final-report", &[])?;
+        drop(guardian);
+        assert_eq!(control_readiness(&client)?, ControlReadiness::Packet);
+        let packet = activation_packet::receive(&client, Instant::now() + Duration::from_secs(1))?;
+        assert_eq!(packet.bytes, b"final-report");
+        assert_eq!(packet.sender.pid(), std::process::id() as i32);
+        assert_eq!(control_readiness(&client)?, ControlReadiness::Closed);
+        assert!(rustix::net::sockopt::socket_passcred(&client)?);
+        Ok(())
+    }
+
+    #[test]
+    fn reset_without_a_final_packet_never_fabricates_one() -> io::Result<()> {
+        let (guardian, client) = transport::pair()?;
+        rustix::net::sockopt::set_socket_passcred(&client, true)?;
+        transport::send(&client, b"unread-resume", &[])?;
+        drop(guardian);
+        assert_eq!(control_readiness(&client)?, ControlReadiness::Closed);
+        Ok(())
+    }
+
+    #[test]
+    fn an_empty_record_before_reset_is_still_not_eof() -> io::Result<()> {
+        let (guardian, client) = transport::pair()?;
+        rustix::net::sockopt::set_socket_passcred(&client, true)?;
+        transport::send(&client, b"unread-resume", &[])?;
+        rustix::net::send(&guardian, b"", rustix::net::SendFlags::NOSIGNAL)?;
+        drop(guardian);
+        assert!(control_readiness(&client).is_err());
+        assert!(rustix::net::sockopt::socket_passcred(&client)?);
         Ok(())
     }
 

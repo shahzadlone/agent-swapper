@@ -62,6 +62,16 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<u8> {
         .env_clear()
         .env("ASWP_OWNED_OUTER_PTY", "1");
     if managed {
+        if let Some(value) = std::env::var_os("ASWP_CI_ADMISSION_HOLD") {
+            require(
+                matches!(
+                    value.to_str(),
+                    Some("go" | "release" | "go-send" | "release-send")
+                ),
+                "invalid admission fixture barrier",
+            )?;
+            command.env("ASWP_CI_ADMISSION_HOLD", value);
+        }
         if let Some(value) = std::env::var_os("ASWP_CI_EXEC_GATE") {
             require(value == "1", "invalid managed exec-gate mode")?;
             command.env("ASWP_CI_EXEC_GATE", value);
