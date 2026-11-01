@@ -256,6 +256,9 @@ jobs:
       - name: Evaluate fixed-child final-exec observation
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_event
+      - name: Qualify advisory signals before held exec
+        timeout-minutes: 1
+        run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_advisory_signals
       - name: Compare read-only executable identity observation
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_identity
