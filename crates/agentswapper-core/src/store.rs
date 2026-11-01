@@ -26,6 +26,9 @@ mod lease_transfer_tests;
 mod linux_activated_journal_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod linux_journal_guardian_tests;
+#[cfg(all(feature = "linux-journal-qualification", target_os = "linux"))]
+#[doc(hidden)]
+pub mod qualification;
 mod runs;
 mod sessions;
 #[cfg(all(test, windows))]
