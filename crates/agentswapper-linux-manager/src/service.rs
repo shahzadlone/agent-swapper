@@ -5,7 +5,8 @@ use crate::{
     linux::{self, Manager, SERVICE_INTERFACE, UNIT_INTERFACE, property, require},
 };
 use agentswapper_linux_runtime::{
-    installed_config::ProtectedConfig, installed_image::ProtectedImage, scope_observation,
+    installed_config::ProtectedConfig, installed_image::ProtectedImage,
+    process_policy::OrdinaryCredentials, scope_observation,
 };
 use std::{io, os::fd::OwnedFd, path::Path, sync::Arc};
 use zbus::OwnedObjectPath;
@@ -16,13 +17,23 @@ pub struct ServicePolicy {
     template_path: String,
     template: ProtectedConfig,
     image: ProtectedImage,
-    user: u32,
+    credentials: OrdinaryCredentials,
 }
 impl ServicePolicy {
-    pub fn open(template: &Path, image: &Path, user: u32) -> io::Result<Self> {
+    pub fn open(
+        template: &Path,
+        image: &Path,
+        credentials: OrdinaryCredentials,
+    ) -> io::Result<Self> {
         require(
-            user != 0 && user <= i32::MAX as u32,
-            "invalid service policy user",
+            template
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.strip_suffix("@.service")
+                        .is_some_and(|stem| !stem.is_empty() && !stem.contains('@'))
+                }),
+            "service policy requires an instantiated service template",
         )?;
         let config = ProtectedConfig::open(template)?;
         let template_path = template
@@ -38,7 +49,7 @@ impl ServicePolicy {
             template_path,
             template: config,
             image: ProtectedImage::open(image)?,
-            user,
+            credentials,
         })
     }
 }
@@ -71,20 +82,68 @@ struct Properties {
     last: Vec<u8>,
     pid: u32,
     user: String,
+    cgroup: String,
     group: String,
     delegate: bool,
     kill_mode: String,
 }
 impl Properties {
+    async fn read(manager: &Manager, sender: &str, path: &OwnedObjectPath) -> io::Result<Self> {
+        let text = async |interface, name| -> io::Result<String> {
+            String::try_from(property(manager, sender, path, interface, name).await?)
+                .map_err(io::Error::other)
+        };
+        let bytes = async || -> io::Result<Vec<u8>> {
+            Vec::<u8>::try_from(
+                property(manager, sender, path, UNIT_INTERFACE, "InvocationID").await?,
+            )
+            .map_err(io::Error::other)
+        };
+        let first = bytes().await?;
+        let fields = Self {
+            id: text(UNIT_INTERFACE, "Id").await?,
+            active: text(UNIT_INTERFACE, "ActiveState").await?,
+            transient: bool::try_from(
+                property(manager, sender, path, UNIT_INTERFACE, "Transient").await?,
+            )
+            .map_err(io::Error::other)?,
+            fragment: text(UNIT_INTERFACE, "FragmentPath").await?,
+            drop_ins: Vec::<String>::try_from(
+                property(manager, sender, path, UNIT_INTERFACE, "DropInPaths").await?,
+            )
+            .map_err(io::Error::other)?,
+            need_reload: bool::try_from(
+                property(manager, sender, path, UNIT_INTERFACE, "NeedDaemonReload").await?,
+            )
+            .map_err(io::Error::other)?,
+            first,
+            pid: u32::try_from(
+                property(manager, sender, path, SERVICE_INTERFACE, "MainPID").await?,
+            )
+            .map_err(io::Error::other)?,
+            user: text(SERVICE_INTERFACE, "User").await?,
+            cgroup: text(SERVICE_INTERFACE, "ControlGroup").await?,
+            group: text(SERVICE_INTERFACE, "Group").await?,
+            delegate: bool::try_from(
+                property(manager, sender, path, SERVICE_INTERFACE, "Delegate").await?,
+            )
+            .map_err(io::Error::other)?,
+            kill_mode: text(SERVICE_INTERFACE, "KillMode").await?,
+            last: bytes().await?,
+        };
+        Ok(fields)
+    }
     fn require(
         &self,
         claim: &ServiceClaim<'_>,
         invocation: &[u8],
         template: &str,
         user: u32,
+        group: u32,
     ) -> io::Result<()> {
         require(
-            !self.transient
+            template_instance(template, claim.unit)
+                && !self.transient
                 && self.fragment == template
                 && self.drop_ins.is_empty()
                 && !self.need_reload,
@@ -95,7 +154,8 @@ impl Properties {
                 && self.active == "active"
                 && self.pid == claim.main_pid
                 && self.user == user.to_string()
-                && self.group == format!("/system.slice/{}", claim.unit)
+                && self.group == group.to_string()
+                && self.cgroup == format!("/system.slice/{}", claim.unit)
                 && !self.delegate
                 && self.kill_mode == "control-group"
                 && self.first == invocation
@@ -103,6 +163,24 @@ impl Properties {
             "activated service disagrees with its expected identity",
         )
     }
+}
+
+fn template_instance(template: &str, unit: &str) -> bool {
+    let Some(stem) = Path::new(template)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix("@.service"))
+    else {
+        return false;
+    };
+    let Some((prefix, instance)) = unit.split_once('@') else {
+        return false;
+    };
+    !stem.is_empty()
+        && prefix == stem
+        && instance
+            .strip_suffix(".service")
+            .is_some_and(|value| !value.is_empty() && !value.contains('@'))
 }
 
 /// One admitted activation with original kernel handles and protected assets.
@@ -157,54 +235,25 @@ impl BoundService {
                     "bound guardian invocation is absent",
                 )
             })?;
-        let text = async |interface, name| -> io::Result<String> {
-            String::try_from(property(manager, sender, &path, interface, name).await?)
-                .map_err(io::Error::other)
-        };
-        let bytes = async || -> io::Result<Vec<u8>> {
-            Vec::<u8>::try_from(
-                property(manager, sender, &path, UNIT_INTERFACE, "InvocationID").await?,
-            )
-            .map_err(io::Error::other)
-        };
-        let first = bytes().await?;
-        let fields = Properties {
-            id: text(UNIT_INTERFACE, "Id").await?,
-            active: text(UNIT_INTERFACE, "ActiveState").await?,
-            transient: bool::try_from(
-                property(manager, sender, &path, UNIT_INTERFACE, "Transient").await?,
-            )
-            .map_err(io::Error::other)?,
-            fragment: text(UNIT_INTERFACE, "FragmentPath").await?,
-            drop_ins: Vec::<String>::try_from(
-                property(manager, sender, &path, UNIT_INTERFACE, "DropInPaths").await?,
-            )
-            .map_err(io::Error::other)?,
-            need_reload: bool::try_from(
-                property(manager, sender, &path, UNIT_INTERFACE, "NeedDaemonReload").await?,
-            )
-            .map_err(io::Error::other)?,
-            first,
-            pid: u32::try_from(
-                property(manager, sender, &path, SERVICE_INTERFACE, "MainPID").await?,
-            )
-            .map_err(io::Error::other)?,
-            user: text(SERVICE_INTERFACE, "User").await?,
-            group: text(SERVICE_INTERFACE, "ControlGroup").await?,
-            delegate: bool::try_from(
-                property(manager, sender, &path, SERVICE_INTERFACE, "Delegate").await?,
-            )
-            .map_err(io::Error::other)?,
-            kill_mode: text(SERVICE_INTERFACE, "KillMode").await?,
-            last: bytes().await?,
-        };
-        fields.require(&claim, &invocation, &policy.template_path, policy.user)?;
+        let fields = Properties::read(manager, sender, &path).await?;
+        fields.require(
+            &claim,
+            &invocation,
+            &policy.template_path,
+            policy.credentials.user(),
+            policy.credentials.group(),
+        )?;
         crate::require_direct_lifecycle(manager, sender, &path).await?;
         policy
             .template
             .require_current(Path::new(&policy.template_path))?;
-        let kernel = scope_observation::Binding::bind(claim.unit, policy.user, claim.main_pid)?;
+        let kernel = scope_observation::Binding::bind(
+            claim.unit,
+            policy.credentials.user(),
+            claim.main_pid,
+        )?;
         kernel.require_main_image(&policy.image)?;
+        kernel.require_main_credentials(&policy.credentials)?;
         let value = Self {
             connection_id: Arc::clone(&manager.identity),
             owner: sender.to_owned(),
@@ -214,7 +263,7 @@ impl BoundService {
                 invocation: invocation
                     .try_into()
                     .map_err(|_| io::Error::other("invalid invocation size"))?,
-                user: policy.user,
+                user: policy.credentials.user(),
                 main_pid: claim.main_pid,
             },
             kernel,
@@ -244,20 +293,34 @@ impl BoundService {
             linux::owner(manager).await?.as_str() == self.owner,
             "manager owner changed",
         )?;
-        invocation::require_active_path(
-            manager,
-            &self.owner,
-            &self.path,
-            &self.identity.unit,
-            &self.identity.invocation,
-            self.identity.main_pid,
-        )
-        .await?;
+        let invocation = self
+            .identity
+            .invocation
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let claim = ServiceClaim {
+            unit: &self.identity.unit,
+            invocation: &invocation,
+            main_pid: self.identity.main_pid,
+        };
+        Properties::read(manager, &self.owner, &self.path)
+            .await?
+            .require(
+                &claim,
+                &self.identity.invocation,
+                &self.policy.template_path,
+                self.policy.credentials.user(),
+                self.policy.credentials.group(),
+            )?;
+        crate::require_direct_lifecycle(manager, &self.owner, &self.path).await?;
         self.policy
             .template
             .require_current(Path::new(&self.policy.template_path))?;
         self.kernel.observe()?;
         self.kernel.require_main_image(&self.policy.image)?;
+        self.kernel
+            .require_main_credentials(&self.policy.credentials)?;
         require(
             linux::owner(manager).await?.as_str() == self.owner,
             "manager owner changed after service observation",
@@ -320,6 +383,24 @@ impl BoundService {
 mod tests {
     use super::*;
     #[test]
+    fn template_requires_its_own_nonempty_instance() {
+        let template = "/run/systemd/system/aswp@.service";
+        assert!(template_instance(template, "aswp@1-42-1000.service"));
+        for unit in [
+            "other@1.service",
+            "aswp@.service",
+            "aswp.service",
+            "aswp@1.socket",
+            "aswp@1@2.service",
+        ] {
+            assert!(!template_instance(template, unit));
+        }
+        assert!(!template_instance(
+            "/run/systemd/system/aswp.service",
+            "aswp@1.service"
+        ));
+    }
+    #[test]
     fn activated_binding_refuses_each_policy_and_identity_mismatch() -> io::Result<()> {
         let claim = ServiceClaim {
             unit: "aswp@1.service",
@@ -339,12 +420,13 @@ mod tests {
             last: expected.clone(),
             pid: 42,
             user: "1000".into(),
-            group: format!("/system.slice/{}", claim.unit),
+            cgroup: format!("/system.slice/{}", claim.unit),
+            group: "1001".into(),
             delegate: false,
             kill_mode: "control-group".into(),
         };
-        good().require(&claim, &expected, template, 1000)?;
-        for change in 0..14 {
+        good().require(&claim, &expected, template, 1000, 1001)?;
+        for change in 0..16 {
             let mut fields = good();
             match change {
                 0 => fields.id = "other.service".into(),
@@ -358,11 +440,17 @@ mod tests {
                 8 => fields.pid += 1,
                 9 => fields.user = "0".into(),
                 10 => fields.user = "01000".into(),
-                11 => fields.group = "/user.slice/other".into(),
+                11 => fields.cgroup = "/user.slice/other".into(),
                 12 => fields.delegate = true,
-                _ => fields.kill_mode = "process".into(),
+                13 => fields.kill_mode = "process".into(),
+                14 => fields.group = "0".into(),
+                _ => fields.group = "01001".into(),
             }
-            assert!(fields.require(&claim, &expected, template, 1000).is_err());
+            assert!(
+                fields
+                    .require(&claim, &expected, template, 1000, 1001)
+                    .is_err()
+            );
         }
         Ok(())
     }

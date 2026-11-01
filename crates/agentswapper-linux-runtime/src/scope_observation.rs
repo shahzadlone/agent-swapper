@@ -365,6 +365,16 @@ pub struct Retirement {
 }
 
 impl Binding {
+    /// Observe credentials through the original proc directory while requiring
+    /// the original guardian pidfd to remain live on both sides of the read.
+    pub fn require_main_credentials(
+        &self,
+        policy: &crate::process_policy::OrdinaryCredentials,
+    ) -> io::Result<()> {
+        self.main.check()?;
+        policy.require_status(&read_at(&self.main.proc_dir, "status", 65536)?)?;
+        self.main.live()
+    }
     /// Corroborate the original guardian's executable through its retained proc
     /// directory and pidfd. The caller supplies a policy-approved installed image;
     /// this observation is not exec confirmation or a whole-scope receipt.

@@ -499,3 +499,33 @@ four doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-featu
 Clippy, the dependency boundary, and the Python fixture checks pass. This still
 does not enable a production managed launcher, install local services or consume
 real provider accounts.
+
+## Ordinary guardian credentials and loaded-policy rechecks
+
+The activation policy now binds the primary GID as well as the UID. The original
+guardian's retained proc directory must report matching real/effective/saved/
+filesystem IDs, supplementary groups contained in the caller's existing group
+set, empty inheritable/permitted/effective/bounding/ambient capabilities, and
+`NoNewPrivs: 1`. Original pidfd liveness brackets this read. The fixture template
+explicitly clears the capability bounding and ambient sets and sets `Restart=no`.
+
+Supplementary groups cannot simply be assumed empty: systemd initializes them
+from the user's group database, and `SupplementaryGroups=` extends that list.
+The policy therefore permits a subset of the ordinary caller's groups, including
+its primary group, and refuses group expansion or root group membership. See
+[systemd's group semantics](https://www.freedesktop.org/software/systemd/man/255/systemd.exec.html#SupplementaryGroups=)
+and the [kernel's process-status fields](https://docs.kernel.org/filesystems/proc.html).
+
+Admission and every active recheck now read the complete loaded-policy snapshot,
+including primary group, drop-ins, reload state, delegation and kill mode, plus
+direct lifecycle and `Restart=no`. The claimed unit must be a nonempty instance
+of the retained template's own stem. Existing connection/owner, invocation,
+configuration-stamp, executable, cgroup and original-process checks remain
+required. This does not add delegated-work custody or crash-recovery authority.
+
+Local checks pass 39 runtime tests, thirteen manager tests, nine combined
+doctests, 49 evaluation tests, strict runtime/manager/evaluation/core-feature
+Clippy, dependency boundaries and 15 activation-harness checks. Native results
+for this new credential policy remain pending. The requested follow-up Opus
+review of predecessor `3ae40ee` could not run because the CLI reported its session
+quota exhausted; it supplies no additional review evidence.
