@@ -31,6 +31,18 @@ All 65 isolated Rust tests and strict qualification Clippy pass locally for
 this correction. Hosted evidence remains pending. It introduces no production
 receipt or profile-reuse authority.
 
+The terminal-guard branch's Ubuntu 24.04 job in
+[run 41280763165](https://github.com/shahzadlone/agent-swapper/actions/runs/41280763165)
+refused installation because that runner's `/run` mount was noexec. Its local
+terminal cases and Ubuntu 22.04 manager job passed. The disposable fixture now
+puts its executable image under protected `/opt`; its socket, unit files and
+ownership marker stay under `/run`. Both the installer and Rust guardian check
+the new root-owned, non-writable parent. Installation still refuses a noexec
+image filesystem; no host mount is changed. Exclusive creation, recorded image
+hash, ownership-bound cleanup and unrelated-file preservation are unchanged.
+Fourteen coordinator tests pass, including the noexec-runtime case, a noexec
+image refusal and untrusted image-parent refusals. New hosted evidence is pending.
+
 The review recommends wiring the real Store through the shared runtime with
 fixed targets before accepting arbitrary launch envelopes. Production also
 needs a policy for signals before the exec event, executable/wrapper identity,
