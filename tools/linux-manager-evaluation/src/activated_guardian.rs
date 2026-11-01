@@ -1,6 +1,8 @@
 //! Disposable fixed-user service. Only BIND and a fixed fixture writer exist;
 //! this is not the production guardian or a general target-execution API.
-use crate::{activation, activation_packet, admission_transport, kernel, require};
+use crate::{
+    activation_packet, admission_transport, fixture_policy as activation, kernel, require,
+};
 use rustix::net::{self, RecvAncillaryBuffer, RecvFlags, ReturnFlags, SendFlags, sockopt};
 use std::{
     fs,

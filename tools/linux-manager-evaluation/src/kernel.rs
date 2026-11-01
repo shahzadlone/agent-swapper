@@ -284,7 +284,8 @@ impl Binding {
         require(
             !unit.contains('/')
                 && unit.ends_with(".service")
-                && (unit.starts_with("aswp-managed-") || crate::activation::valid_scope_unit(unit)),
+                && (unit.starts_with("aswp-managed-")
+                    || crate::fixture_policy::valid_scope_unit(unit)),
             "invalid scope leaf",
         )?;
         let mut dir = rustix::fs::open("/", DIRECTORY, Mode::empty())?;
