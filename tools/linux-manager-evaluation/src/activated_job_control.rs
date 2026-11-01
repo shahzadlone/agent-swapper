@@ -176,41 +176,53 @@ pub(crate) fn serve(
     let until = Instant::now() + Duration::from_secs(55);
     let mut sequence = 0_u64;
     let mut stopped = false;
+    let report_terminal = |raw: rustix::process::WaitStatus, sequence| -> io::Result<bool> {
+        let status = std::process::ExitStatus::from_raw(raw.as_raw());
+        let exit = if let Some(code) = status.code() {
+            Some(journal_protocol::TargetExit::Code {
+                code: u8::try_from(code).map_err(io::Error::other)?,
+            })
+        } else if let Some(signal) = status.signal() {
+            Some(journal_protocol::TargetExit::Signal {
+                signal: u8::try_from(signal).map_err(io::Error::other)?,
+                core_dumped: status.core_dumped(),
+            })
+        } else {
+            None
+        };
+        let Some(exit) = exit else {
+            return Ok(false);
+        };
+        if exec_gate {
+            report_exit(
+                channel,
+                invocation,
+                u32::try_from(group.as_raw_pid()).map_err(io::Error::other)?,
+                &nonce,
+                sequence,
+                exit,
+                until,
+            )?;
+        }
+        // A diagnostic write cannot suppress the authenticated terminal result.
+        if let Err(error) = record_exit(directory, status.code(), status.signal()) {
+            let _ = fs::write(
+                directory.join("guardian-exit-record-error"),
+                error.to_string(),
+            );
+        }
+        Ok(true)
+    };
     activated_guardian::wait_until(until, || {
+        let raw = child.poll_raw()?;
+        if let Some(raw) = raw
+            && report_terminal(raw, sequence)?
+        {
+            return Ok(true);
+        }
         if hangup(&slave)? {
             fs::write(directory.join("guardian-terminal-hangup"), invocation)?;
             return Ok(true);
-        }
-        let raw = child.poll_raw()?;
-        if let Some(raw) = raw {
-            let status = std::process::ExitStatus::from_raw(raw.as_raw());
-            let exit = if let Some(code) = status.code() {
-                Some(journal_protocol::TargetExit::Code {
-                    code: u8::try_from(code).map_err(io::Error::other)?,
-                })
-            } else if let Some(signal) = status.signal() {
-                Some(journal_protocol::TargetExit::Signal {
-                    signal: u8::try_from(signal).map_err(io::Error::other)?,
-                    core_dumped: status.core_dumped(),
-                })
-            } else {
-                None
-            };
-            if let Some(exit) = exit {
-                record_exit(directory, status.code(), status.signal())?;
-                if exec_gate {
-                    report_exit(
-                        channel,
-                        invocation,
-                        child.pid.as_raw() as u32,
-                        &nonce,
-                        sequence,
-                        exit,
-                        until,
-                    )?;
-                }
-                return Ok(true);
-            }
         }
         // Only nonterminal stops/continuations need nix's named-signal enum.
         // Raw terminal status has already revoked numeric PID authority and
@@ -248,10 +260,22 @@ pub(crate) fn serve(
         let eof = if stopped && readable(channel)? {
             match journal_protocol::receive_resume(channel, &nonce, sequence, until) {
                 Ok(()) => {
-                    require(
-                        child.poll()? == WaitStatus::StillAlive,
-                        "stopped job changed state before resume",
-                    )?;
+                    // Hosted fault boundary: prove a terminal wait observed
+                    // inside the resume path is reported, never discarded.
+                    if directory.join("resume-hold").exists() {
+                        fs::write(directory.join("resume-held"), "before owned wait")?;
+                        activated_guardian::wait_until(
+                            until.min(Instant::now() + Duration::from_secs(3)),
+                            || Ok(directory.join("resume-release").exists()),
+                        )?;
+                    }
+                    let raw = child.poll_raw()?;
+                    if let Some(raw) = raw
+                        && report_terminal(raw, sequence)?
+                    {
+                        return Ok(true);
+                    }
+                    require(raw.is_none(), "stopped job changed state before resume")?;
                     rustix::termios::tcsetpgrp(&slave, group)?;
                     child.resume()?;
                     stopped = false;
