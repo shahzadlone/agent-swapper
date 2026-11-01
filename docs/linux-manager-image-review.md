@@ -64,7 +64,9 @@ These results include the shared manager and child-waiter changes, native scope
 and terminal controls, cross-platform checks and unsigned package rebuilds.
 
 Protected configuration handles were added after those reviewed snapshots.
-They retain the opened root-owned regular file, require mode 0644 and read at
+Image admission also now uses the extracted file opener; that image path and
+the new FIFO control require this revision's native evidence too. Config handles
+retain the opened root-owned regular file, require mode 0644 and read at
 most 16 KiB without changing the shared file offset. They do not establish
 configuration semantics, an atomic administrative update or production manifest
 provenance. Their eleven-case installed-asset harness has separate pending CI
@@ -119,3 +121,28 @@ cleanup never recursively deletes a mounted path. Production manager reload and
 re-exec policy, versioned installation and removal, and an opaque Store completion
 receipt remain open. No qualification result enables managed production launch,
 automatic profile reuse or completion from a diagnostic boolean.
+
+## Protected-file follow-up at `e8cc4e8`
+
+Opus 5.5 xhigh reviewed the retained-config consumer and prior corrections using
+source only. It found no high-severity defect reachable through fixed callers.
+It identified that the shared leaf open needed O_NOCTTY: a session leader opening
+a terminal device could acquire it before fstat refused the non-regular file.
+The opener now prevents that process-wide side effect. A fresh-session subprocess
+allocates its own PTY, reaches the exact leaf refusal and checks that it still
+has no controlling terminal. Removing O_NOCTTY made that test fail; restoring it
+passes. No user's terminal or privileged fixture is involved.
+
+The executable-as-config control now asserts its exact mode refusal, and the
+bounded-reader test proves the shared offset remains at seven. Admission decoder
+failures now use the retained raw outcome to report the actual terminating signal;
+the active exit-report protocol remains unchanged. The native-qualified status
+is explicitly scoped to `7ca3650`, rather than implying these subsequent changes
+were already covered by that earlier run.
+
+Local checks pass 36 runtime tests, five compile-fail doctests, eight manager
+tests, 49 evaluation tests and strict runtime/manager/consumer Clippy. Two ignored
+helper roles are invoked by their passing subprocess tests. The current changes
+still require native qualification. The review recommends an opaque activated
+service binding as the next extraction, consumed by the existing qualification
+client and witness before installation or Store receipt work.

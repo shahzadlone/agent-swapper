@@ -59,7 +59,13 @@ mod tests {
         assert!(!bytes.is_empty());
         assert_eq!(file.read()?, bytes);
         assert!(rustix::io::fcntl_getfd(&file)?.contains(rustix::io::FdFlags::CLOEXEC));
-        assert!(ProtectedConfig::open(&std::fs::canonicalize("/usr/bin/true")?).is_err());
+        let error = ProtectedConfig::open(&std::fs::canonicalize("/usr/bin/true")?)
+            .err()
+            .ok_or_else(|| io::Error::other("executable accepted as configuration"))?;
+        assert_eq!(
+            error.to_string(),
+            "installed configuration is not mode 0644"
+        );
         Ok(())
     }
     #[test]
@@ -72,6 +78,7 @@ mod tests {
         assert_eq!(read_bounded(&file)?, vec![b'x'; LIMIT]);
         file.seek(SeekFrom::Start(7))?;
         assert_eq!(read_bounded(&file)?, vec![b'x'; LIMIT]);
+        assert_eq!(file.stream_position()?, 7);
         file.seek(SeekFrom::End(0))?;
         file.write_all(b"x")?;
         assert!(read_bounded(&file).is_err());
