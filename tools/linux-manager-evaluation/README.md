@@ -6,7 +6,11 @@ manager. The separate `--activation-probe` mode connects to a preinstalled
 fixture socket and thereby activates its service; it requires explicit opt-in
 on a disposable hosted runner and the matching run/attempt prefix. It installs
 no units, requests no privileges, reads no login data and issues no
-process-custody receipt. See [the activation evaluation](../../docs/linux-managed-launch.md).
+process-custody receipt. Its private `--activation-guardian` and
+`--activation-writer` roles implement only the fixed hosted-CI fixture; they
+require its opted-in environment and protected temporary executable. They do
+not accept provider launch data or install services. See
+[the activation evaluation](../../docs/linux-managed-launch.md).
 
 This is the first checkpoint toward an authenticated managed-invocation
 observer. The existing core parser validates text structure only. This tool

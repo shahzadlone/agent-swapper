@@ -284,6 +284,14 @@ the library would otherwise silently discard their type. The nix struct getter's
 initialization and size check were also inspected directly. Unused dependency
 APIs and complete production qualification remain outside this review's scope.
 
+The Rust activation fixture also pins the already-reviewed `fuxix = 0.8.0`
+for the same single-threaded CLOEXEC operation used by the core shim above.
+It adds that package only to the evaluation workspace and enables rustix's
+existing `time` feature for a shared Linux monotonic timestamp. The already
+locked tempfile package is now a direct development dependency because the
+fixture compiles the core's shared transport regression tests. No root runtime
+dependency changes or new policy exceptions are introduced.
+
 ## Licensing and distribution
 
 BSD-3-Clause is allowed for the RustCrypto/Dalek dependencies. The existing

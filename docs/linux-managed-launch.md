@@ -98,7 +98,7 @@ images in [run 41167663744](https://github.com/shahzadlone/agent-swapper/actions
 An added control sends an otherwise valid packet with an unexpected harmless
 descriptor. At `e957bd0`, that refusal and the complete branch pipeline passed in
 [run 41167963827](https://github.com/shahzadlone/agent-swapper/actions/runs/41167963827).
-This experiment does not yet use the Rust guardian or carry real launch data.
+At that revision the service was Python and carried no real launch data.
 
 The next isolated Rust probe enables `SO_PASSCRED` before connecting, checks the
 root-manager listener, and receives a bounded offer with the actual message
@@ -152,7 +152,7 @@ seconds for asynchronous scope removal. These review changes passed on both
 Ubuntu versions at `c8979bf` in
 [run 41169986563](https://github.com/shahzadlone/agent-swapper/actions/runs/41169986563).
 
-The Python fixture continues to trust the CI checkout and its local helper
+The Python coordinator continues to trust the CI checkout and its local helper
 imports. Adding Python isolated mode while explicitly reintroducing that
 same import path would not remove this trust. Production must instead use a
 reviewed, root-owned Rust guardian executable and validated installation.
@@ -249,9 +249,37 @@ freshness. Kernel retirement alone likewise never proves manager retirement.
 The reviewed model trusts the kernel/root and excludes hostile same-UID code;
 it is not production or arbitrary-service qualification.
 
+### Rust activated service checkpoint
+
+The service and fixed writer now run from
+[`activated_guardian.rs`](../tools/linux-manager-evaluation/src/activated_guardian.rs).
+The Python coordinator exclusively creates a temporary root-owned executable
+under `/run`, records its SHA-256 alongside exact unit contents, and verifies
+ownership, mode and hash before startup and cleanup. A changed image refuses
+cleanup commands. This is disposable CI setup, not a host installer.
+
+The service checks its image, fixed identity, client peer, invocation and
+root-managed cgroup. It accepts only BIND or GO for its own bounded fixture
+writer. The shared Rust transport supplies strict EOF discrimination. A private
+five-second barrier makes fault trials deterministic: all empty/trailing records
+and half-close are queued before the guardian reads them.
+
+Before spawning, the single-threaded service applies the same reviewed fuxix
+CLOEXEC operation used by the core shim. The fixed writer replaces standard
+streams with null devices, starts a separate session, and refuses any surviving
+nonstandard descriptor before writing a heartbeat. This checks the fixture's
+actual inherited descriptors; it does not qualify future arbitrary providers.
+
+Local validation passed 24 Rust tests, seven Python guard tests, strict Clippy
+and the locked dependency audit. After correcting the concurrent-fork timing
+assumption, the parallel Rust suite passed 30/30 stress runs. Native CI and an
+independent source review of the service/image lifecycle are pending. Real
+profile lease transfer, durable journal-before-GO ordering and an inner PTY
+remain the next integration work. No normal launch path uses this service.
+
 Root-owned launch installation on a user's machine comes later, after the
 exact files, removal procedure, platform evidence and source review are ready
-for review. The next implementation gates are a Rust activated guardian,
-lease/journal/GO ordering, inherited descriptor hygiene and the service's inner
+for review. The next implementation gates are qualifying the Rust activated
+guardian, lease/journal/GO ordering, inherited descriptor hygiene and the service's inner
 PTY plus client relay. Neither this design nor successful read-only observation
 enables automatic switching.
