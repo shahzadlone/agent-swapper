@@ -119,21 +119,40 @@ impl Signals {
         Ok(notices)
     }
     pub fn suspend(&self) -> io::Result<Notices> {
-        let before = self.drain()?;
-        if before.terminate.is_some() {
-            return Ok(before);
+        let mut observed = self.drain()?;
+        loop {
+            if observed.terminate.is_some() {
+                return Ok(observed);
+            }
+            self.suspend_blocked()?;
+            // SIGCONT resumes a process even while blocked. A discarded orphaned
+            // SIGTSTP returns without a corresponding continuation notification.
+            let resumed = self.drain()?;
+            observed.terminate = resumed.terminate;
+            observed.continued |= resumed.continued;
+            observed.resized |= resumed.resized;
+            observed.stop = resumed.stop;
+            if !observed.stop {
+                return Ok(observed);
+            }
+            // A distinct stop queued after continuation must not be discarded.
         }
+    }
+    // Kept crate-private so the signal regression can compile this exact
+    // source into its fresh single-threaded process fixture.
+    pub(crate) fn suspend_blocked(&self) -> io::Result<()> {
         let mut stop = SigSet::empty();
         stop.add(Signal::SIGTSTP);
+        // Queue our thread-directed stop while it is still blocked. A copy
+        // already pending for the process is delivered in the same stop cycle;
+        // SIGCONT clears both queues before we return. Raising after unmasking
+        // could instead stop once on the queued copy and then a second time.
+        raise(Signal::SIGTSTP)?;
         let saved = stop.thread_swap_mask(SigmaskHow::SIG_UNBLOCK)?;
-        let result = raise(Signal::SIGTSTP);
-        let restored = saved.thread_set_mask();
-        result?;
-        restored?;
-        // SIGCONT resumes a process even while blocked. A discarded orphaned
-        // SIGTSTP returns without a corresponding continuation notification.
-        self.drain()
+        saved.thread_set_mask()?;
+        Ok(())
     }
+
     /// Finish an ending helper after terminal restoration and a cleanup attempt.
     /// Consume queued suspension requests during this final return path. This
     /// does not establish target success or scope retirement. A queued fatal

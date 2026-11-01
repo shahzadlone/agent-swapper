@@ -424,50 +424,13 @@ impl From<StartFailure<io::Error>> for AdmissionFailure {
         }
     }
 }
-fn cancellation(
-    signals: &Signals,
-    cancelled: &Cell<Option<nix::sys::signal::Signal>>,
-    terminal: &Terminal,
-    until: Instant,
-) -> io::Result<()> {
-    loop {
-        let notices = signals.drain()?;
-        if cancelled.get().is_none() {
-            cancelled.set(notices.terminate);
-        }
-        if notices.stop && cancelled.get().is_none() {
-            // Admission is still cooked and provider execution remains gated.
-            // A shell `bg` may continue us without returning the foreground.
-            let resumed = signals.suspend()?;
-            cancelled.set(resumed.terminate);
-        }
-        if cancelled.get().is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "managed admission cancelled",
-            ));
-        }
-        if Instant::now() >= until {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "managed admission expired before foreground release",
-            ));
-        }
-        if terminal.foreground()? {
-            return Ok(());
-        }
-        // No target grant, terminal I/O or mode mutation in the background.
-        // Waiting for fg does not extend the manager/client admission budget.
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
 fn admission_barrier(directory: &Path, phase: &str) -> io::Result<()> {
     match std::env::var("ASWP_CI_ADMISSION_HOLD") {
         Err(std::env::VarError::NotPresent) => return Ok(()),
         Ok(value)
             if matches!(
                 value.as_str(),
-                "go" | "release" | "go-send" | "release-send"
+                "go" | "release" | "go-send" | "release-send" | "raw-entry"
             ) =>
         {
             if value != phase {
@@ -523,8 +486,7 @@ fn admit<J: AdmissionJournal>(
     directory: &Path,
     bound: Bound,
     journal: &mut J,
-    terminal: &Terminal,
-    signals: &Signals,
+    terminal: &mut Terminal,
     cancelled: &Cell<Option<nix::sys::signal::Signal>>,
     mode: AdmissionMode,
 ) -> Result<Running, AdmissionFailure> {
@@ -553,7 +515,7 @@ fn admit<J: AdmissionJournal>(
                 "session":rustix::process::getsid(None)?.as_raw_pid(), "target":target,
                 "guardian":identity.guardian_pid, "invocation":identity.invocation}).to_string())?;
             admission_barrier(directory, "go")?;
-            cancellation(signals, cancelled, terminal, until)
+            terminal.wait_for_admission(until, cancelled)
         })();
     if let Err(error) = ready {
         return Err(AdmissionFailure {
@@ -564,14 +526,17 @@ fn admit<J: AdmissionJournal>(
     let mut running = prepared
         .start_after_checked(
             [0x41; 16],
-            |pid| {
-                cancellation(signals, cancelled, terminal, until)?;
-                journal.confirm_intent(pid)?;
-                cancellation(signals, cancelled, terminal, until)
-            },
+            // Journaling is synchronous; pending signals stay queued until
+            // the final permit, after the transaction and manager recheck.
+            |pid| journal.confirm_intent(pid),
             || {
                 admission_barrier(directory, "go-send")?;
-                cancellation(signals, cancelled, terminal, until)
+                terminal.wait_for_admission(until, cancelled)?;
+                if mode.exec_gate {
+                    return Ok(());
+                }
+                admission_barrier(directory, "raw-entry")?;
+                terminal.enter_for_admission(until, cancelled)
             },
         )
         .map_err(AdmissionFailure::from)?;
@@ -581,7 +546,7 @@ fn admit<J: AdmissionJournal>(
             held.observe_held()?;
             marker(directory, "exec-held", &target.to_string())?;
             admission_barrier(directory, "release")?;
-            cancellation(signals, cancelled, terminal, until)
+            terminal.wait_for_admission(until, cancelled)
         })();
         if let Err(error) = observed {
             return Err(AdmissionFailure {
@@ -591,14 +556,12 @@ fn admit<J: AdmissionJournal>(
         }
         running = held
             .release_after_checked(
-                |pid| {
-                    cancellation(signals, cancelled, terminal, until)?;
-                    journal.observe_spawn(pid)?;
-                    cancellation(signals, cancelled, terminal, until)
-                },
+                |pid| journal.observe_spawn(pid),
                 || {
                     admission_barrier(directory, "release-send")?;
-                    cancellation(signals, cancelled, terminal, until)
+                    terminal.wait_for_admission(until, cancelled)?;
+                    admission_barrier(directory, "raw-entry")?;
+                    terminal.enter_for_admission(until, cancelled)
                 },
             )
             .map_err(AdmissionFailure::from)?;
@@ -651,8 +614,7 @@ fn run<J: AdmissionJournal>(
         directory,
         bound,
         &mut journal,
-        &terminal,
-        &signals,
+        &mut terminal,
         &cancelled,
         AdmissionMode {
             owned: owner.is_some(),
@@ -684,7 +646,10 @@ fn run<J: AdmissionJournal>(
                 .terminal()
                 .ok_or_else(|| io::Error::other("running terminal absent"))?,
         )?;
-        terminal.enter()?;
+        require(
+            terminal.is_raw(),
+            "final grant did not commit raw terminal entry",
+        )?;
         marker(directory, "relay-ready", "raw")?;
         if owner.is_some() {
             marker(directory, "child-ready", &std::process::id().to_string())?;

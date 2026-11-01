@@ -131,10 +131,14 @@ a service-leaf traversal/control-character/length regression was added. No kerne
 coverage was removed: duplicate copies formerly compiled in both evaluation
 library and binary are now one runtime suite. Local runtime validation passed
 26 tests plus three compile-fail doctests, with one receiver role invoked by its
-cross-process test. Strict runtime and qualification Clippy pass. Native combined
-terminal/Store qualification of this extraction remains pending. This is a shared
-observation building block, not production managed execution.
+cross-process test. Strict runtime and qualification Clippy pass. The extraction passed both native Linux runners and the complete cross-platform
+pipeline in [run 41286269736](https://github.com/shahzadlone/agent-swapper/actions/runs/41286269736).
+This is a shared observation building block, not production managed execution.
 
 The reduced evaluation suite passes all 54 tests after moving the duplicated
 kernel cases. Strict core Clippy also passes with the Store qualification feature,
 and the dependency-boundary check confirms identical pinned graphs.
+
+Cooked foreground admission and final raw entry now share this runtime too.
+The [suspension review](linux-suspension-review.md) records the three corrected
+job-control defects, actual negative control and pending native evidence.
