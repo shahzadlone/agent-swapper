@@ -251,6 +251,7 @@ pub(crate) fn target(
     let mut descendant = None;
     loop {
         match line(io::stdin().as_fd(), deadline)?.as_slice() {
+            b"exit-7" if guardian_session => std::process::exit(7),
             b"exit-125" if guardian_session => std::process::exit(125),
             b"finish" if guardian_session => {
                 output.write_all("FINAL:\u{1b}[34m→\u{1b}[0m\n".as_bytes())?;
