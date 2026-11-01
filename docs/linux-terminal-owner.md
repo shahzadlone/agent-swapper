@@ -1,6 +1,6 @@
 # Surviving owner for terminal restoration
 
-Status: five local cases passed; hosted qualification pending. No production
+Status: seven local cases passed; hosted qualification pending. No production
 integration or combined manager/terminal-owner claim.
 
 The two-terminal relay now passes its normal and loss cases on both Ubuntu
@@ -35,7 +35,14 @@ ownership; it now waits for the original foreground group before re-entering
 raw mode. The child has a parent-death signal with parent checks around its
 installation, but parent-loss behavior remains separately unqualified.
 
-Later gates include combining this parent with the managed relay, cancellation during child stops,
+Two additional cases cancel the parent after `bg`, including a child resumed
+from SIGSTOP. Before cancellation, the shell changes its flow-control setting.
+The parent and child terminate without restoring over that new foreground
+owner's settings. An exit in the background records that distinction instead
+of claiming a final mode restoration. Both retained process handles must show
+exit, and complete shell snapshots must preserve the deliberate change.
+
+Later gates include combining this parent with the managed relay, cancellation before continuation,
 parent loss, whole-group death, and the production entry-point and descriptor
 handoff. No surviving-owner guarantee is possible if every process able to
 restore the terminal is killed; the caller's shell remains an independent

@@ -62,7 +62,7 @@ def direct(binary, scenario):
             owned.close()
 
 
-def shell_job(binary, forced):
+def shell_job(binary, forced, cancel=False):
     with tempfile.TemporaryDirectory(prefix='aswp-terminal-owner-shell-') as path:
         root = Path(path)
         owned = OwnedPty(binary, root, shell=True)
@@ -90,6 +90,20 @@ def shell_job(binary, forced):
             owned.send(b'/usr/bin/stty -g > background-mode\n')
             owned.wait(lambda: (root / 'background-mode').exists())
             assert (root / 'background-mode').read_text() == (root / 'before').read_text()
+            if cancel:
+                owned.send(b'/usr/bin/stty -ixon; /usr/bin/stty -g > changed-mode\n')
+                owned.wait(lambda: (root / 'changed-mode').exists())
+                assert (root / 'changed-mode').read_text() != (root / 'before').read_text()
+                signal.pidfd_send_signal(owned.probe_fd, signal.SIGTERM)
+                owned.wait(lambda: select.select([owned.probe_fd], [], [], 0)[0] and (root / 'owner-background-exit').exists())
+                assert select.select([child], [], [], 0)[0]
+                assert not (root / 'owner-restored-exit').exists()
+                owned.send(b'/usr/bin/stty -g > after-cancellation\n')
+                owned.wait(lambda: (root / 'after-cancellation').exists())
+                assert (root / 'after-cancellation').read_text() == (root / 'changed-mode').read_text()
+                assert os.tcgetpgrp(owned.master) == owned.pid
+                print(f'terminal-owner-background-cancel-{"sigstop" if forced else "self-stop"}: pass', flush=True)
+                return
             owned.send(b'fg\n')
             if forced:
                 owned.wait(lambda: os.tcgetpgrp(owned.master) == data['group'] and termios.tcgetattr(owned.master)[3] & (termios.ICANON | termios.ECHO | termios.ISIG) == 0)
@@ -115,7 +129,9 @@ def main():
         direct(binary, scenario)
     shell_job(binary, False)
     shell_job(binary, True)
-    print('::notice::surviving terminal owner: five owned-PTY cases passed; individual child death and shell stop/bg/fg only; no combined manager or whole-group loss guarantee', flush=True)
+    shell_job(binary, False, cancel=True)
+    shell_job(binary, True, cancel=True)
+    print('::notice::surviving terminal owner: seven owned-PTY cases passed; background cancellation preserves subsequent shell mode changes; individual child death only; no combined manager or whole-group loss guarantee', flush=True)
 
 
 if __name__ == '__main__':

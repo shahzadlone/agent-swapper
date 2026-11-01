@@ -63,7 +63,9 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
         require(Instant::now() < until, "owned child deadline expired")?;
         let notices = signals.drain()?;
         if let Some(signal) = notices.terminate {
-            terminal.restore()?;
+            if terminal.foreground()? {
+                terminal.restore()?;
+            }
             drop(terminal);
             return signals.finish(Some(signal));
         }
@@ -208,12 +210,22 @@ fn owner(directory: &Path) -> io::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    terminal.0.restore_saved()?;
-    marker(
-        directory,
-        "owner-restored-exit",
-        &format!("{:?}:{:?}", result.0, result.1.map(|s| s as i32)),
-    )?;
+    if terminal.0.foreground()? {
+        terminal.0.restore_saved()?;
+        marker(
+            directory,
+            "owner-restored-exit",
+            &format!("{:?}:{:?}", result.0, result.1.map(|s| s as i32)),
+        )?;
+    } else {
+        // The shell may have changed its modes after bg. We already restored
+        // at the child's stop and must not overwrite the new foreground owner.
+        marker(
+            directory,
+            "owner-background-exit",
+            "foreground owner unchanged",
+        )?;
+    }
     drop(child);
     drop(terminal);
     signals.finish(cancellation.or(result.1))?;
