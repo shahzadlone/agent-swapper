@@ -105,7 +105,7 @@ def shell_job(binary, forced, cancel=False, fresh=False):
             prompt = b'__ASWP_OUTER_PROMPT__ '
             owned.wait(lambda: prompt in owned.output)
             role = '--fresh-entry ' if fresh else ''
-            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {role}{shlex.quote(str(root))}\n'.encode())
+            owned.send(f'/usr/bin/stty -g > before.tmp && mv before.tmp before; {shlex.quote(str(binary))} {role}{shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'OWNED-CHILD-READY\r\n')
             if fresh:
                 fresh_observed(root, data)
@@ -124,20 +124,20 @@ def shell_job(binary, forced, cancel=False, fresh=False):
             owned.send(b'bg\n')
             owned.wait(lambda: prompt in owned.output[offset:])
             assert not (root / 'child-foreground').exists()
-            owned.send(b'/usr/bin/stty -g > background-mode\n')
+            owned.send(b'/usr/bin/stty -g > background-mode.tmp && mv background-mode.tmp background-mode\n')
             owned.wait(lambda: (root / 'background-mode').exists())
-            assert (root / 'background-mode').read_text() == (root / 'before').read_text()
+            assert (root / 'background-mode').read_text() == (root / 'before').read_text(), f"terminal snapshots differ: before={(root / 'before').read_text()!r}; background-mode={(root / 'background-mode').read_text()!r}"
             if cancel:
-                owned.send(b'/usr/bin/stty -ixon; /usr/bin/stty -g > changed-mode\n')
+                owned.send(b'/usr/bin/stty -ixon; /usr/bin/stty -g > changed-mode.tmp && mv changed-mode.tmp changed-mode\n')
                 owned.wait(lambda: (root / 'changed-mode').exists())
                 assert (root / 'changed-mode').read_text() != (root / 'before').read_text()
                 signal.pidfd_send_signal(owned.probe_fd, signal.SIGTERM)
                 owned.wait(lambda: select.select([owned.probe_fd], [], [], 0)[0] and (root / 'owner-background-exit').exists())
                 assert select.select([child], [], [], 0)[0]
                 assert not (root / 'owner-restored-exit').exists()
-                owned.send(b'/usr/bin/stty -g > after-cancellation\n')
+                owned.send(b'/usr/bin/stty -g > after-cancellation.tmp && mv after-cancellation.tmp after-cancellation\n')
                 owned.wait(lambda: (root / 'after-cancellation').exists())
-                assert (root / 'after-cancellation').read_text() == (root / 'changed-mode').read_text()
+                assert (root / 'after-cancellation').read_text() == (root / 'changed-mode').read_text(), f"terminal snapshots differ: changed-mode={(root / 'changed-mode').read_text()!r}; after-cancellation={(root / 'after-cancellation').read_text()!r}"
                 assert os.tcgetpgrp(owned.master) == owned.pid
                 print(f'terminal-owner-background-cancel-{"sigstop" if forced else "self-stop"}: pass', flush=True)
                 return
@@ -149,9 +149,9 @@ def shell_job(binary, forced, cancel=False, fresh=False):
             offset = len(owned.output)
             owned.send(b'exit\n')
             owned.wait(lambda: prompt in owned.output[offset:] and (root / 'owner-restored-exit').exists())
-            owned.send(b'/usr/bin/stty -g > after\n')
+            owned.send(b'/usr/bin/stty -g > after.tmp && mv after.tmp after\n')
             owned.wait(lambda: (root / 'after').exists())
-            assert (root / 'after').read_text() == (root / 'before').read_text()
+            assert (root / 'after').read_text() == (root / 'before').read_text(), f"terminal snapshots differ: before={(root / 'before').read_text()!r}; after={(root / 'after').read_text()!r}"
             assert select.select([child], [], [], 0)[0]
             print(f'{"fresh-" if fresh else ""}terminal-owner-shell-{"sigstop" if forced else "self-stop"}: pass', flush=True)
         finally:
@@ -168,7 +168,7 @@ def stopped_parent_loss(binary):
             prompt = b'__ASWP_OUTER_PROMPT__ '
             owned.wait(lambda: prompt in owned.output)
             assert (root / 'subreaper-shell').read_text() == str(owned.pid)
-            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'.encode())
+            owned.send(f'/usr/bin/stty -g > before.tmp && mv before.tmp before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'OWNED-CHILD-READY\r\n')
             child = child_handle(binary, data)
             assert data['session'] == owned.pid and data['group'] != owned.pid
@@ -183,9 +183,9 @@ def stopped_parent_loss(binary):
             owned.wait(lambda: select.select([child], [], [], 0)[0])
             assert select.select([owned.probe_fd], [], [], 0)[0]
             assert not (root / 'owner-restored-exit').exists()
-            owned.send(b'/usr/bin/stty -g > after-parent-loss\n')
+            owned.send(b'/usr/bin/stty -g > after-parent-loss.tmp && mv after-parent-loss.tmp after-parent-loss\n')
             owned.wait(lambda: (root / 'after-parent-loss').exists())
-            assert (root / 'after-parent-loss').read_text() == (root / 'before').read_text()
+            assert (root / 'after-parent-loss').read_text() == (root / 'before').read_text(), f"terminal snapshots differ: before={(root / 'before').read_text()!r}; after-parent-loss={(root / 'after-parent-loss').read_text()!r}"
             assert os.tcgetpgrp(owned.master) == owned.pid
             print('terminal-owner-stopped-parent-loss-under-subreaper: pass', flush=True)
         finally:

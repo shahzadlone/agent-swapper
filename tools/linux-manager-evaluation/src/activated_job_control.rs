@@ -193,7 +193,7 @@ pub(crate) fn serve(
         let Some(exit) = exit else {
             return Ok(false);
         };
-        if exec_gate {
+        let reported = if exec_gate {
             report_exit(
                 channel,
                 invocation,
@@ -202,9 +202,12 @@ pub(crate) fn serve(
                 sequence,
                 exit,
                 until,
-            )?;
-        }
-        // A diagnostic write cannot suppress the authenticated terminal result.
+            )
+        } else {
+            Ok(())
+        };
+        // Neither a failed send nor a failed diagnostic write may suppress the
+        // other observation. Marker files still carry no completion authority.
         if let Err(error) = record_exit(directory, status.code(), status.signal()) {
             let _ = fs::write(
                 directory.join("guardian-exit-record-error"),
@@ -216,6 +219,7 @@ pub(crate) fn serve(
         if matches!(hangup(&slave), Ok(true)) {
             let _ = fs::write(directory.join("guardian-terminal-hangup"), invocation);
         }
+        reported?;
         Ok(true)
     };
     activated_guardian::wait_until(until, || {
@@ -226,6 +230,14 @@ pub(crate) fn serve(
             return Ok(true);
         }
         if hangup(&slave)? {
+            // The target can exit between the first poll and the HUP check.
+            // Preserve a status already observable now; an eventual destructor
+            // reap remains cleanup only, never an inferred target outcome.
+            if let Some(raw) = child.poll_raw()?
+                && report_terminal(raw, sequence)?
+            {
+                return Ok(true);
+            }
             fs::write(directory.join("guardian-terminal-hangup"), invocation)?;
             return Ok(true);
         }

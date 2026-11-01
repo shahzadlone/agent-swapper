@@ -77,7 +77,7 @@ fn receive_frame(channel: impl AsFd, expected: &[u8], deadline: Instant) -> io::
     let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
     net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
     let result = (|| {
-        if withdrawn(&channel)? {
+        if withdrawn(&channel, deadline)? {
             return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
         }
         crate::admission_transport::receive_control_until(&channel, expected, deadline)
@@ -106,17 +106,36 @@ pub(crate) fn is_withdrawal(error: &io::Error) -> bool {
 // capacity: every queued record (even empty/late) has CTRUNC; true EOF does
 // not. No credential PID representation is decoded. Restore PASSCRED before
 // consuming a real record so the normal zero-control framing rejects rights.
-fn withdrawn(channel: impl AsFd) -> io::Result<bool> {
+fn withdrawn(channel: impl AsFd, deadline: Instant) -> io::Result<bool> {
     net::sockopt::set_socket_passcred(&channel, true)?;
     let result = (|| -> io::Result<bool> {
-        let mut byte = [0_u8; 1];
-        let mut ancillary = RecvAncillaryBuffer::new(&mut []);
-        let peek = net::recvmsg(
-            &channel,
-            &mut [IoSliceMut::new(&mut byte)],
-            &mut ancillary,
-            RecvFlags::PEEK | RecvFlags::CMSG_CLOEXEC,
-        )?;
+        let peek = loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|value| !value.is_zero())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::TimedOut, "fixture control gate expired")
+                })?;
+            net::sockopt::set_socket_timeout(
+                &channel,
+                net::sockopt::Timeout::Recv,
+                Some(remaining),
+            )?;
+            let mut byte = [0_u8; 1];
+            let mut ancillary = RecvAncillaryBuffer::new(&mut []);
+            match net::recvmsg(
+                &channel,
+                &mut [IoSliceMut::new(&mut byte)],
+                &mut ancillary,
+                RecvFlags::PEEK | RecvFlags::CMSG_CLOEXEC,
+            ) {
+                // The pre-exec shim may be resumed after a suppressed advisory
+                // signal. Timed recvmsg returns EINTR in that case. No record
+                // was consumed; retry only the peek under the original deadline.
+                Err(rustix::io::Errno::INTR) => continue,
+                result => break result?,
+            }
+        };
         if peek.bytes == 0
             && !peek
                 .flags
@@ -156,7 +175,7 @@ pub(crate) fn receive_start(channel: impl AsFd, deadline: Instant) -> io::Result
     let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
     net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
     let result = (|| -> io::Result<[u8; 16]> {
-        if withdrawn(&channel)? {
+        if withdrawn(&channel, deadline)? {
             return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
         }
         let mut bytes = [0_u8; START.len() + 16];

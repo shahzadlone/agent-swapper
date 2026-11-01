@@ -176,7 +176,7 @@ def shell_job(binary, external=False):
         try:
             prompt = b'__ASWP_OUTER_PROMPT__ '
             owned.wait(lambda: prompt in owned.output)
-            command = f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'
+            command = f'/usr/bin/stty -g > before.tmp && mv before.tmp before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'
             owned.send(command.encode())
             data = owned.ready()
             offset = len(owned.output)
@@ -192,9 +192,9 @@ def shell_job(binary, external=False):
             owned.send(b'bg\n')
             owned.wait(lambda: (root / 'continued').exists() and prompt in owned.output[offset:])
             assert not (root / 'resumed-foreground').exists(), 'background resume entered raw mode'
-            owned.send(b'/usr/bin/stty -g > background-mode\n')
+            owned.send(b'/usr/bin/stty -g > background-mode.tmp && mv background-mode.tmp background-mode\n')
             owned.wait(lambda: (root / 'background-mode').exists())
-            assert (root / 'background-mode').read_text() == (root / 'before').read_text()
+            assert (root / 'background-mode').read_text() == (root / 'before').read_text(), f"terminal snapshots differ: before={(root / 'before').read_text()!r}; background-mode={(root / 'background-mode').read_text()!r}"
             offset = len(owned.output)
             owned.send(b'fg\n')
             owned.wait(lambda: b'OUTER-RESUMED\r\n' in owned.output[offset:])
@@ -203,9 +203,9 @@ def shell_job(binary, external=False):
             offset = len(owned.output)
             owned.send(b'exit\n')
             owned.wait(lambda: prompt in owned.output[offset:] and (root / 'restored').exists())
-            owned.send(b'/usr/bin/stty -g > after\n')
+            owned.send(b'/usr/bin/stty -g > after.tmp && mv after.tmp after\n')
             owned.wait(lambda: (root / 'after').exists())
-            assert (root / 'after').read_text() == (root / 'before').read_text()
+            assert (root / 'after').read_text() == (root / 'before').read_text(), f"terminal snapshots differ: before={(root / 'before').read_text()!r}; after={(root / 'after').read_text()!r}"
             print(f'outer-shell-{"signal" if external else "command"}-stop-bg-fg: pass', flush=True)
         finally:
             owned.close()
