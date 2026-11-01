@@ -128,6 +128,209 @@ fn unresolved(store: &Store, profile: ProfileId, run: &str) {
     assert!(record.exit_code.is_none());
 }
 
+fn exec_held(scope: &Path, pid: u32, guardian: u32, master: impl AsFd) {
+    assert!(!scope.join("final-exec").exists());
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+    assert_eq!(
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("TracerPid:"))
+            .map(str::trim),
+        Some(guardian.to_string().as_str())
+    );
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    assert_eq!(
+        stat.rsplit_once(") ").unwrap().1.split_whitespace().next(),
+        Some("t")
+    );
+    let args = fs::read(format!("/proc/{pid}/cmdline")).unwrap();
+    assert_eq!(
+        args.split(|b| *b == 0).nth(1),
+        Some(b"--activation-job-target".as_slice())
+    );
+    let mut watched = [rustix::event::PollFd::new(
+        &master,
+        rustix::event::PollFlags::IN,
+    )];
+    assert_eq!(
+        rustix::event::poll(
+            &mut watched,
+            Some(&rustix::event::Timespec {
+                tv_sec: 0,
+                tv_nsec: 0
+            })
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+#[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
+fn exec_stop_precedes_spawn_journal_and_release_or_retirement() {
+    let (prefix, directory) = environment();
+    for finish in ["release", "journal", "disconnect", "guardian", "deadline"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let mut store = Store::open(&root).unwrap();
+        let (profile, run, prepared) = prepare_using(
+            &mut store,
+            "exec-gate",
+            &prefix,
+            Bound::connect_exec_control,
+        );
+        let id = prepared.identity();
+        let pid = prepared.pid();
+        let scope = directory.join(&id.invocation);
+        let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
+        quiescent(&prepared, &directory);
+        let nonce = *Uuid::new_v4().as_bytes();
+        let mut awaiting = prepared
+            .start_after(nonce, |child| {
+                assert_eq!(child, pid);
+                let intent = store.run(&run)?;
+                assert!(intent.observed_pid.is_none() && intent.exit_code.is_none());
+                assert!(store.verify()?.consistent);
+                assert!(!scope.join("final-exec").exists());
+                Ok::<(), Error>(())
+            })
+            .unwrap();
+        // Job-control requests must not consume the exec notice or release it.
+        assert!(awaiting.poll_job().is_err());
+        assert!(awaiting.wait_stopped().is_err());
+        assert!(awaiting.resume().is_err());
+        let held = awaiting.hold_exec().unwrap();
+        assert_eq!(held.identity(), id);
+        held.observe_held().unwrap();
+        exec_held(&scope, pid, id.guardian_pid, &master);
+        assert!(store.run(&run).unwrap().observed_pid.is_none());
+        let witness =
+            aswp_linux_manager_evaluation::journal_client::Witness::bind(&prefix, &id, pid)
+                .unwrap();
+        let blocker = Connection::open(root.join("registry.sqlite3")).unwrap();
+        let closed = match finish {
+            "release" => {
+                let mut running = held
+                    .release_after(|child| {
+                        assert_eq!(child, pid);
+                        store.observe_spawn(&run, child)?;
+                        thread::sleep(Duration::from_millis(100));
+                        assert_eq!(store.run(&run)?.observed_pid, Some(pid));
+                        assert!(store.verify()?.consistent);
+                        exec_held(&scope, pid, id.guardian_pid, &master);
+                        Ok::<(), Error>(())
+                    })
+                    .unwrap();
+                let encoded: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+                assert_eq!(
+                    terminal_output(&master, b"\x1b[0m\r\n"),
+                    format!("\x1b[32mREADY:{pid}:{encoded}:→\x1b[0m\r\n").as_bytes()
+                );
+                assert_eq!(
+                    fs::read_to_string(scope.join("final-exec")).unwrap(),
+                    format!("{pid}:{encoded}")
+                );
+                let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+                assert_eq!(
+                    status
+                        .lines()
+                        .find_map(|line| line.strip_prefix("TracerPid:"))
+                        .map(str::trim),
+                    Some("0")
+                );
+                terminal_input(&master, b"suspend\n");
+                assert_eq!(
+                    terminal_output(&master, b"SUSPEND>"),
+                    b"suspend\r\nSUSPEND>"
+                );
+                assert_eq!(running.wait_stopped().unwrap(), 20);
+                job_topology(&master, pid, id.guardian_pid, pid, true);
+                running.resume().unwrap();
+                assert_eq!(terminal_output(&master, b"RESUMED\r\n"), b"RESUMED\r\n");
+                terminal_input(&master, b"size\n");
+                assert_eq!(
+                    terminal_output(&master, b"SIZE:24:80\r\n"),
+                    b"size\r\nSIZE:24:80\r\n"
+                );
+                terminal_input(&master, b"\x03");
+                let until = Instant::now() + Duration::from_secs(3);
+                while !scope.join("target-exit").exists() {
+                    assert!(Instant::now() < until, "released target did not interrupt");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                assert_eq!(
+                    fs::read_to_string(scope.join("target-exit")).unwrap(),
+                    "None:Some(2)"
+                );
+                running.close()
+            }
+            "journal" => {
+                store.db.busy_timeout(Duration::from_millis(20)).unwrap();
+                blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+                let failure = match held.release_after(|child| store.observe_spawn(&run, child)) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("failed spawn journal released exec stop"),
+                };
+                assert!(matches!(failure.live_at_refusal, Some(Ok(()))));
+                assert!(
+                    matches!(failure.cause, StartCause::Journal(Error::Database(rusqlite::Error::SqliteFailure(ref error, _))) if error.code == rusqlite::ErrorCode::DatabaseBusy)
+                );
+                *failure.closed
+            }
+            "guardian" => held.crash_guardian().unwrap(),
+            "deadline" => {
+                // Keep control and master open. Manager retirement must follow
+                // the bounded release gate, not client-channel shutdown.
+                assert!(witness.retire().unwrap().connection_close_error.is_none());
+                let failure = match held.release_after(|_| -> Result<()> {
+                    panic!("expired exec gate invoked journal callback")
+                }) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("expired exec gate accepted release"),
+                };
+                assert!(matches!(failure.cause, StartCause::Transport(_)));
+                assert!(
+                    failure
+                        .closed
+                        .retire()
+                        .unwrap()
+                        .connection_close_error
+                        .is_none()
+                );
+                terminal_retired(&master, false);
+                assert!(!scope.join("final-exec").exists());
+                unresolved(&store, profile, &run);
+                drop(store);
+                let reopened = Store::open(&root).unwrap();
+                unresolved(&reopened, profile, &run);
+                assert!(reopened.run(&run).unwrap().observed_pid.is_none());
+                assert!(reopened.verify().unwrap().consistent);
+                continue;
+            }
+            _ => held.close(),
+        };
+        assert!(closed.retire().unwrap().connection_close_error.is_none());
+        assert!(witness.retire().unwrap().connection_close_error.is_none());
+        terminal_retired(&master, finish == "release");
+        if finish != "release" {
+            assert!(!scope.join("final-exec").exists());
+        }
+        if finish == "journal" {
+            blocker.execute_batch("ROLLBACK").unwrap();
+        }
+        unresolved(&store, profile, &run);
+        drop(blocker);
+        drop(store);
+        let reopened = Store::open(&root).unwrap();
+        unresolved(&reopened, profile, &run);
+        assert_eq!(
+            reopened.run(&run).unwrap().observed_pid,
+            if finish == "release" { Some(pid) } else { None }
+        );
+        assert!(reopened.verify().unwrap().consistent);
+    }
+}
+
 fn terminal_output(master: impl AsFd, suffix: &[u8]) -> Vec<u8> {
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     let deadline = Instant::now() + Duration::from_secs(4);

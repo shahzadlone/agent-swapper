@@ -4,7 +4,10 @@ Status: the local negative control reproduced the bug. The correction at
 `75f3f61` passed both Ubuntu manager jobs in
 [run 41277981298](https://github.com/shahzadlone/agent-swapper/actions/runs/41277981298),
 including the regression, standalone exec-event cases and managed terminal
-suite. The full platform/package pipeline remains pending. This affects
+suite. The complete exec-gate composition at `58b5696` subsequently passed all platform,
+package and rebuild checks in
+[run 41277990876](https://github.com/shahzadlone/agent-swapper/actions/runs/41277990876).
+This affects
 qualification helpers; no production process-launch implementation uses their
 waiter.
 

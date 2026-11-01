@@ -60,6 +60,7 @@ pub(crate) fn serve(
     prefix: &str,
     directory: &Path,
     invocation: &str,
+    exec_gate: bool,
 ) -> io::Result<()> {
     let admission_deadline = Instant::now() + Duration::from_secs(15);
     let _lease =
@@ -90,7 +91,14 @@ pub(crate) fn serve(
     let (grant, input) = transport::pair()?;
     let mut command = Command::new("/proc/self/exe");
     command
-        .args(["--activation-job-shim", prefix])
+        .args([
+            if exec_gate {
+                "--activation-exec-shim"
+            } else {
+                "--activation-job-shim"
+            },
+            prefix,
+        ])
         .arg(directory)
         .env_clear()
         .process_group(0)
@@ -100,6 +108,9 @@ pub(crate) fn serve(
     activated_journal::fixture_environment(&mut command)?;
     let mut child = OwnedChild::new(command.spawn()?)?;
     drop(command);
+    if exec_gate {
+        child.arm_exec(admission_deadline)?;
+    }
     activated_guardian::wait_until(admission_deadline, || {
         require(
             child.poll()? == WaitStatus::StillAlive,
@@ -144,6 +155,24 @@ pub(crate) fn serve(
         admission_deadline,
     )?;
     drop(grant);
+    if exec_gate {
+        child.hold_exec(admission_deadline)?;
+        let held = serde_json::to_vec(&serde_json::json!({
+            "kind": "aswp-fixture-exec-held-1", "child": child.pid.as_raw(),
+            "invocation": invocation, "nonce": journal_protocol::encoded(&nonce),
+        }))
+        .map_err(io::Error::other)?;
+        transport::send_until(channel, &held, &[], admission_deadline)?;
+        // A distinct frame is required after durable spawn observation. EOF,
+        // ordinary job resume, wrong identities and deadline loss all refuse.
+        journal_protocol::receive_exec_release(
+            channel,
+            &nonce,
+            child.pid.as_raw() as u32,
+            admission_deadline,
+        )?;
+        child.release_exec()?;
+    }
     let until = Instant::now() + Duration::from_secs(35);
     let mut sequence = 0_u64;
     let mut stopped = false;
