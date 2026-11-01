@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import stat
 import struct
@@ -22,6 +23,35 @@ PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,A
 def require(ok, message):
     if not ok:
         raise RuntimeError(message)
+
+
+def owned_fixture(command, environment, seconds=90):
+    """Bound the owned cargo/test/client group, retaining timeout diagnostics."""
+    process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        output, errors = process.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired as expired:
+        # No poll/wait has reaped the session leader before this group signal.
+        # These fixed test roles do not leave their session; systemd workers
+        # are separately bounded and stopped by the administrator teardown.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            output, errors = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired as remaining:
+            def decoded(value):
+                return value.decode(errors='replace') if isinstance(value, bytes) else (value or '')
+            output, errors = decoded(remaining.stdout), decoded(remaining.stderr)
+            process.stdout.close()
+            process.stderr.close()
+            process.wait(timeout=2)
+        raise RuntimeError('owned activation test group timed out; output: '
+                           + output[-3000:] + '; stderr: ' + errors[-3000:]) from expired
+    return subprocess.CompletedProcess(command, process.returncode, output, errors)
 
 
 def read_bind_refusal(connection, directory, invocation):
@@ -513,10 +543,10 @@ def suite():
                              'invalid_or_independently_locked_lease_never_spawns_writer',
                              'guardian_sigkill_retires_writer_without_clearing_journal',
                              'client_sigkill_retires_writer_without_running_client_cleanup'):
-                    result = subprocess.run(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
+                    result = owned_fixture(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
                                     '--lib', 'store::linux_activated_journal_tests::' + test,
                                     '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],
-                                   env=test_env, check=False, timeout=55, capture_output=True, text=True)
+                                   environment=test_env)
                     print(result.stdout[-16000:], end='', flush=True)
                     print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
                     require(result.returncode == 0

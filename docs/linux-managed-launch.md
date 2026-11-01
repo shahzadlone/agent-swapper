@@ -466,3 +466,39 @@ cleanup. Both native manager jobs passed all four journal tests at `45cd72b` in
 [run 41264264431](https://github.com/shahzadlone/agent-swapper/actions/runs/41264264431).
 The coordinator requires exactly one passed test for each requested case.
 Focused review and the remaining platform/packaging checks are pending. No production custody receipt is added.
+
+### Abrupt-loss review follow-up
+
+The focused Opus review of `45cd72b` confirmed retained-pidfd signalling, owned
+unreaped-child signalling and independent witnesses without a socket copy.
+The follow-up checks lock release in the original open store, requires the EOF
+marker to be absent immediately before client SIGKILL, matches specific
+identity-refusal errors and adds the guardian-as-writer case to isolate the
+PPid check. Reports now live beside the store, and failed fault injection
+explicitly attempts retirement before reporting the original failure.
+
+A runtime owner now uses nonblocking shutdown from construction onward;
+post-admission claim validation runs only after the Session owns the connection
+and witnesses. A local test drops it from inside another runtime while blocking
+work is held. This covers failed independent binding as well as normal teardown.
+
+The test harness starts a new session for each fixed cargo/test/client group.
+A ninety-second outer timeout kills that owned group and preserves partial
+output; manager-owned workers remain separately bounded and are stopped by
+fixture teardown. A local grandchild/pidfd regression verifies the timeout's
+process and diagnostic behavior. This is fixture orchestration, not a general
+process-containment claim.
+
+Exit attribution remains deliberately limited. The template already collects
+failed instances, and retirement requires disappearance of the original scope
+plus pidfd exit and authenticated manager retirement. A collected service does
+not retain an authoritative `ExecMainStatus` for later observation. The test
+therefore reports a SIGKILL request through the retained pidfd followed by
+observed retirement; it does not claim a recovered manager exit status or prove
+that no concurrent error could have preceded the signal. The EOF marker means
+the guardian reached that protocol path, not that systemd recorded exit zero.
+The fixed writer sets no parent-death signal. No `SuccessExitStatus=KILL` or
+weaker retirement policy is introduced to make the tests pass.
+
+Local verification passes 33 client tests, 22 binary tests, 12 Python guards and
+strict Clippy. Native validation of these later changes remains pending.

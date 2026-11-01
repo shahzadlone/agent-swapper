@@ -310,15 +310,19 @@ fn guardian_sigkill_retires_writer_without_clearing_journal() {
     assert!(matches!(store.acquire_lease(profile), Err(Error::Busy)));
     // This signal is sent before the sole client channel is closed. No
     // guardian destructor or cooperative EOF path can be responsible.
-    assert!(
-        running
-            .crash_guardian()
-            .unwrap()
-            .retire()
-            .unwrap()
-            .connection_close_error
-            .is_none()
-    );
+    let closed = match running.crash_guardian() {
+        Ok(closed) => closed,
+        Err(failure) => {
+            let reason = failure.error.to_string();
+            let retirement = failure.closed.retire();
+            panic!(
+                "guardian fault refused: {reason}; retirement error: {:?}",
+                retirement.err()
+            );
+        }
+    };
+    assert!(closed.retire().unwrap().connection_close_error.is_none());
+    unresolved(&store, profile, &run);
     assert!(
         !directory
             .join(&id.invocation)
@@ -336,7 +340,7 @@ fn guardian_sigkill_retires_writer_without_clearing_journal() {
     unresolved(&reopened, profile, &run);
     assert!(reopened.verify().unwrap().consistent);
     println!(
-        "::notice title=Linux activated guardian loss::retained-pidfd SIGKILL stopped the live writer through manager cleanup; raw lock released but reopened journal still refuses launch"
+        "::notice title=Linux activated guardian loss::SIGKILL requested through retained pidfd; original scope and writer retired; raw lock released but reopened journal still refuses launch"
     );
 }
 
@@ -361,6 +365,7 @@ const CLIENT_ROLE: &str = "store::linux_activated_journal_tests::client_crash_ro
 fn client_crash_role() {
     let (prefix, directory) = environment();
     let root = PathBuf::from(std::env::var_os("ASWP_ACTIVATION_CLIENT_ROOT").unwrap());
+    let reports = PathBuf::from(std::env::var_os("ASWP_ACTIVATION_REPORTS").unwrap());
     let mut store = Store::open(&root).unwrap();
     let (profile, run, prepared) = prepare(&mut store, "client-crash", &prefix);
     let id = prepared.identity();
@@ -383,13 +388,17 @@ fn client_crash_role() {
         nonce,
     };
     fs::write(
-        root.join("client-ready.tmp"),
+        reports.join("client-ready.tmp"),
         serde_json::to_vec(&report).unwrap(),
     )
     .unwrap();
-    fs::rename(root.join("client-ready.tmp"), root.join("client-ready")).unwrap();
+    fs::rename(
+        reports.join("client-ready.tmp"),
+        reports.join("client-ready"),
+    )
+    .unwrap();
     thread::sleep(Duration::from_secs(60));
-    fs::write(root.join("client-voluntary"), "deadline").unwrap();
+    fs::write(reports.join("client-voluntary"), "deadline").unwrap();
     panic!("client fault controller did not kill its owned child");
 }
 
@@ -412,11 +421,15 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
     let (prefix, directory) = environment();
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("state");
+    let reports = temporary.path().join("reports");
+    private_fs::directory(&reports, true).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", CLIENT_ROLE, "--ignored", "--nocapture"])
         .env_clear()
         .env("ASWP_ACTIVATION_CLIENT_ROOT", &root)
+        .env("ASWP_ACTIVATION_REPORTS", &reports)
+        .env("RUST_BACKTRACE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(
@@ -436,7 +449,7 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
     }
     let mut client = Owned(command.spawn().unwrap());
     let deadline = Instant::now() + Duration::from_secs(15);
-    while !root.join("client-ready").exists() {
+    while !reports.join("client-ready").exists() {
         assert!(
             client.0.try_wait().unwrap().is_none(),
             "client failed: {}",
@@ -445,7 +458,7 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
         assert!(Instant::now() < deadline, "client readiness expired");
         thread::sleep(Duration::from_millis(10));
     }
-    let bytes = fs::read(root.join("client-ready")).unwrap();
+    let bytes = fs::read(reports.join("client-ready")).unwrap();
     assert!(bytes.len() <= 4096);
     let report: ClientReport = serde_json::from_slice(&bytes).unwrap();
     let id = Identity {
@@ -459,11 +472,36 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
     // witness corroborates every claim before the client is killed.
     let mut wrong = id.clone();
     wrong.invocation = Uuid::new_v4().simple().to_string();
-    assert!(Witness::bind(&prefix, &wrong, report.writer).is_err());
+    assert_eq!(
+        Witness::bind(&prefix, &wrong, report.writer)
+            .err()
+            .unwrap()
+            .to_string(),
+        "invocation changed"
+    );
     wrong = id.clone();
     wrong.directory_inode ^= 1;
-    assert!(Witness::bind(&prefix, &wrong, report.writer).is_err());
-    assert!(Witness::bind(&prefix, &id, std::process::id()).is_err());
+    assert_eq!(
+        Witness::bind(&prefix, &wrong, report.writer)
+            .err()
+            .unwrap()
+            .to_string(),
+        "independent manager/kernel facts differ from claims"
+    );
+    assert_eq!(
+        Witness::bind(&prefix, &id, std::process::id())
+            .err()
+            .unwrap()
+            .to_string(),
+        "main process is outside the bound cgroup"
+    );
+    assert_eq!(
+        Witness::bind(&prefix, &id, report.guardian)
+            .err()
+            .unwrap()
+            .to_string(),
+        "writer is not the bound guardian's direct child"
+    );
     let witness = Witness::bind(&prefix, &id, report.writer).unwrap();
     let store = Store::open(&root).unwrap();
     assert_eq!(
@@ -476,6 +514,12 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
     ));
     let before = heartbeat(&directory, &id, report.writer, &report.nonce, None);
     heartbeat(&directory, &id, report.writer, &report.nonce, Some(&before));
+    assert!(
+        !directory
+            .join(&id.invocation)
+            .join("guardian-clean-eof")
+            .exists()
+    );
     client.0.kill().unwrap();
     let status = client
         .0
@@ -494,7 +538,7 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
             .join("voluntary-exit")
             .exists()
     );
-    assert!(!root.join("client-voluntary").exists());
+    assert!(!reports.join("client-voluntary").exists());
     drop(store);
     let reopened = Store::open(&root).unwrap();
     unresolved(&reopened, report.profile, &report.run);

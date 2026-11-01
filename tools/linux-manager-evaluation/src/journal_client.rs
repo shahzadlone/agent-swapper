@@ -24,6 +24,29 @@ impl Drop for Control {
     }
 }
 
+struct RuntimeGuard(Option<tokio::runtime::Runtime>);
+impl RuntimeGuard {
+    fn new() -> io::Result<Self> {
+        Ok(Self(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
+        )))
+    }
+    fn get(&self) -> io::Result<&tokio::runtime::Runtime> {
+        self.0
+            .as_ref()
+            .ok_or_else(|| io::Error::other("fixture runtime is closed"))
+    }
+}
+impl Drop for RuntimeGuard {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 struct Session {
     control: Control,
     connection: Option<Connection>,
@@ -32,18 +55,15 @@ struct Session {
     binding: kernel::Binding,
     child: Option<kernel::Child>,
     deadline: Instant,
-    runtime: Option<tokio::runtime::Runtime>,
+    runtime: RuntimeGuard,
     _same_thread: PhantomData<Rc<()>>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
         drop(std::mem::replace(&mut self.control, Control(None)));
-        if let Some(runtime) = self.runtime.take() {
-            {
-                let _entered = runtime.enter();
-                drop(self.connection.take());
-            }
-            runtime.shutdown_background();
+        if let Some(runtime) = self.runtime.0.as_ref() {
+            let _entered = runtime.enter();
+            drop(self.connection.take());
         } else {
             drop(self.connection.take());
         }
@@ -66,9 +86,7 @@ impl Session {
     }
     fn runtime(&self) -> io::Result<&tokio::runtime::Runtime> {
         outside_runtime()?;
-        self.runtime
-            .as_ref()
-            .ok_or_else(|| io::Error::other("fixture runtime is closed"))
+        self.runtime.get()
     }
     fn connection(&self) -> io::Result<&Connection> {
         self.connection
@@ -270,10 +288,8 @@ impl Bound {
                 fragment: format!("/run/systemd/system/{prefix}@.service"),
             },
         };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let (connection, owner, report, binding) = runtime.block_on(async {
+        let runtime = RuntimeGuard::new()?;
+        let (connection, owner, report, binding) = runtime.get()?.block_on(async {
             tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
                 crate::admit(paths, Some(expected)),
@@ -284,10 +300,9 @@ impl Bound {
         let (unit, binding) = match (report.unit, binding) {
             (Some(unit), Some(binding)) => (unit, binding),
             _ => {
-                runtime.block_on(async {
+                runtime.get()?.block_on(async {
                     let _ = tokio::time::timeout(Duration::from_secs(2), connection.close()).await;
                 });
-                runtime.shutdown_background();
                 return Err(io::Error::other(
                     "fixture admission lacks unit or kernel binding",
                 ));
@@ -301,7 +316,7 @@ impl Bound {
             binding,
             child: None,
             deadline,
-            runtime: Some(runtime),
+            runtime,
             _same_thread: PhantomData,
         }))
     }
@@ -367,11 +382,9 @@ impl Witness {
                 fragment: format!("/run/systemd/system/{prefix}@.service"),
             },
         };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = RuntimeGuard::new()?;
         let deadline = Instant::now() + Duration::from_secs(8);
-        let (connection, owner, report, binding) = runtime.block_on(async {
+        let (connection, owner, report, binding) = runtime.get()?.block_on(async {
             tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
                 crate::admit(paths, Some(expected)),
@@ -384,22 +397,29 @@ impl Witness {
                 )
             })?
         })?;
-        let binding =
-            binding.ok_or_else(|| io::Error::other("independent kernel binding absent"))?;
-        let child = binding.child(child_pid, claimed.guardian_pid)?;
-        let session = Session {
+        let (unit, binding) = match (report.unit, binding) {
+            (Some(unit), Some(binding)) => (unit, binding),
+            _ => {
+                runtime.get()?.block_on(async {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), connection.close()).await;
+                });
+                return Err(io::Error::other(
+                    "independent admission lacks unit or kernel binding",
+                ));
+            }
+        };
+        let mut session = Session {
             control: Control(None),
             connection: Some(connection),
             owner,
-            unit: report
-                .unit
-                .ok_or_else(|| io::Error::other("independent unit absent"))?,
+            unit,
             binding,
-            child: Some(child),
+            child: None,
             deadline,
-            runtime: Some(runtime),
+            runtime,
             _same_thread: PhantomData,
         };
+        session.child = Some(session.binding.child(child_pid, claimed.guardian_pid)?);
         require(
             identity(&session) == *claimed,
             "independent manager/kernel facts differ from claims",
@@ -545,6 +565,29 @@ impl Closed {
 mod tests {
     use super::*;
     use std::os::fd::AsFd;
+
+    #[test]
+    fn runtime_guard_drops_inside_another_runtime_without_waiting_for_blocking_work()
+    -> io::Result<()> {
+        let runtime = RuntimeGuard::new()?;
+        let (ready, started) = std::sync::mpsc::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let worker = runtime.get()?.spawn_blocking(move || {
+            let _ = ready.send(());
+            held.recv_timeout(Duration::from_secs(3))
+        });
+        started
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(io::Error::other)?;
+        let outer = tokio::runtime::Builder::new_current_thread().build()?;
+        outer.block_on(async {
+            drop(runtime);
+        });
+        // A blocking destructor could not get here until the receive expired.
+        release.send(()).map_err(io::Error::other)?;
+        drop(worker);
+        Ok(())
+    }
 
     #[test]
     fn prepared_packets_bind_version_sender_invocation_and_child() -> io::Result<()> {

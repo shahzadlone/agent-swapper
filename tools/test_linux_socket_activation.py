@@ -2,9 +2,14 @@
 from pathlib import Path
 import hashlib
 import json
+import os
+import select
 import stat
 import socket
 import tempfile
+import sys
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -13,6 +18,43 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_owned_fixture_timeout_stops_grandchild_and_keeps_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_path = Path(temporary) / 'child.pid'
+            source = """import pathlib, subprocess, sys, time
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(20)'])
+path = pathlib.Path(sys.argv[1])
+pending = path.with_suffix('.tmp')
+pending.write_text(str(child.pid))
+pending.replace(path)
+print('fixture-timeout-diagnostic', flush=True)
+time.sleep(20)
+"""
+            errors = []
+            def invoke():
+                try:
+                    probe.owned_fixture([sys.executable, '-c', source, str(pid_path)], dict(os.environ), seconds=2)
+                except RuntimeError as error:
+                    errors.append(str(error))
+            worker = threading.Thread(target=invoke)
+            worker.start()
+            deadline = time.monotonic() + 1.5
+            while not pid_path.exists():
+                self.assertLess(time.monotonic(), deadline, 'grandchild did not start')
+                time.sleep(0.01)
+            descriptor = os.pidfd_open(int(pid_path.read_text()))
+            try:
+                worker.join(timeout=10)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIn('owned activation test group timed out', errors[0])
+                self.assertIn('fixture-timeout-diagnostic', errors[0])
+                poller = select.poll()
+                poller.register(descriptor, select.POLLIN)
+                self.assertTrue(poller.poll(1000), 'owned grandchild survived timeout cleanup')
+            finally:
+                os.close(descriptor)
+
     def test_partial_file_creation_rolls_back_only_exclusively_created_inodes(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
