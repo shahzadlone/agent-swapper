@@ -525,3 +525,45 @@ and the subsequent crash/harness follow-up at `60d67bb`
 ([run 41265660485](https://github.com/shahzadlone/agent-swapper/actions/runs/41265660485)).
 Their remaining platform/packaging results, and the latest small wake-up
 follow-up, are tracked separately before integration.
+
+### Inner terminal and final-exec checkpoint
+
+The full journal follow-up pipeline at `2f87dc8` passed in
+[run 41265192617](https://github.com/shahzadlone/agent-swapper/actions/runs/41265192617),
+including all platform suites, dependency policies, candidate packaging and
+reproducible rebuilds. It was integrated into main as `d19371d`. The later
+crash/wake-up checkpoint remains separately tracked.
+
+The next isolated `PTY1` fixture adds an inner PTY. Terminal bytes travel on its
+master descriptor; the credential-bearing control connection remains separate.
+The prepared response requires exactly one close-on-exec, nonblocking PTY
+master and the bound guardian's credentials. Wrong descriptors, excess rights,
+missing rights and truncated controls are refused; received capabilities close
+on every refusal. Validation opens the peer with `NOCTTY`, so it cannot acquire
+a controlling terminal for the client.
+
+The guardian starts a fixed shim behind the existing gate and transfers the
+terminal slave only after the real Store callback commits the observed PID.
+The shim creates its session, acquires the controlling terminal without stealing
+one, sets the foreground group and execs the fixed target at that same PID.
+Only standard streams survive exec; no lease, control socket or manager witness
+is inherited. No arbitrary target, environment or provider data is accepted.
+
+The new hosted case tests three endings: control disconnect, terminal Ctrl-C
+and an actual SQLite write conflict. It keeps an independent master open
+through retirement to exclude PTY hangup as an alternative cleanup cause.
+Before GO and during the successful journal callback the target's final-exec
+marker must be absent; afterwards the target reports the journaled PID and
+nonce. Checks cover controlling session/foreground group, resize dimensions,
+echo-off fake password input, UTF-8/escape bytes and raw-mode Ctrl-C bytes,
+then normal Ctrl-C signal termination after restoring terminal modes. The
+write-conflict case must retire without final exec. Every case retains an
+unresolved journal record after lease release and Store reopening.
+
+Local validation passes 37 library and 25 binary tests plus strict Clippy;
+the existing 12 coordinator guard/timeout tests also pass. Hosted terminal
+execution and the focused Opus source review are pending at this checkpoint.
+These checks do not qualify a caller-terminal relay, SIGWINCH handling,
+suspend/resume, shell foreground restoration, long sessions, arbitrary exec
+failure reporting or provider login/refresh behavior. Normal Linux launches
+remain uncontained.

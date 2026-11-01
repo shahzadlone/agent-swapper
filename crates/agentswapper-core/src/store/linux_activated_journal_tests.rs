@@ -16,11 +16,25 @@ fn environment() -> (String, PathBuf) {
 }
 
 fn prepare(store: &mut Store, alias: &str, prefix: &str) -> (ProfileId, String, Prepared) {
+    prepare_mode(store, alias, prefix, false)
+}
+
+fn prepare_mode(
+    store: &mut Store,
+    alias: &str,
+    prefix: &str,
+    terminal: bool,
+) -> (ProfileId, String, Prepared) {
     let profile = store
         .register(Harness::Claude, alias.parse().unwrap())
         .unwrap();
     let lease = store.lease(profile.id).unwrap();
-    let bound = Bound::connect(prefix).unwrap();
+    let bound = if terminal {
+        Bound::connect_terminal(prefix)
+    } else {
+        Bound::connect(prefix)
+    }
+    .unwrap();
     let logical = Uuid::new_v4();
     assert_ne!(logical.simple().to_string(), bound.identity().invocation);
     let run = store
@@ -99,6 +113,170 @@ fn unresolved(store: &Store, profile: ProfileId, run: &str) {
     let record = store.run(run).unwrap();
     assert_eq!(record.custody, ProcessCustody::Unknown);
     assert!(record.exit_code.is_none());
+}
+
+fn terminal_output(master: impl AsFd, suffix: &[u8]) -> Vec<u8> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut output = Vec::new();
+    while !output.ends_with(suffix) {
+        assert!(output.len() < 4096, "terminal output exceeds fixture bound");
+        let timeout =
+            Timespec::try_from(deadline.checked_duration_since(Instant::now()).unwrap()).unwrap();
+        let mut ready = [PollFd::new(&master, PollFlags::IN)];
+        assert_eq!(
+            poll(&mut ready, Some(&timeout)).unwrap(),
+            1,
+            "terminal output timed out: {output:?}"
+        );
+        let mut bytes = [0; 512];
+        let read = rustix::io::read(&master, &mut bytes).unwrap();
+        assert!(
+            read > 0,
+            "terminal closed before expected output: {output:?}"
+        );
+        output.extend_from_slice(&bytes[..read]);
+    }
+    output
+}
+
+fn terminal_input(master: impl AsFd, input: &[u8]) {
+    assert_eq!(rustix::io::write(master, input).unwrap(), input.len());
+}
+
+#[test]
+#[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
+fn inner_terminal_exec_is_journal_gated_and_retires_with_master_open() {
+    let (prefix, directory) = environment();
+    for finish in ["disconnect", "interrupt", "journal"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let mut store = Store::open(&root).unwrap();
+        let (profile, run, prepared) = prepare_mode(&mut store, "terminal", &prefix, true);
+        let id = prepared.identity();
+        let pid = prepared.pid();
+        let scope = directory.join(&id.invocation);
+        // Retain an independent master even across retirement, so a PTY hangup
+        // cannot masquerade as successful control-channel cleanup.
+        let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
+        quiescent(&prepared, &directory);
+        assert!(!scope.join("final-exec").exists());
+        let blocker = Connection::open(root.join("registry.sqlite3")).unwrap();
+        if finish == "journal" {
+            store.db.busy_timeout(Duration::from_millis(20)).unwrap();
+            blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        }
+        let nonce = *Uuid::new_v4().as_bytes();
+        let start = prepared.start_after(nonce, |child| {
+            assert_eq!(child, pid);
+            journal_while_gated(&mut store, &run, child, &directory, &id)?;
+            assert!(!scope.join("final-exec").exists());
+            Ok::<(), Error>(())
+        });
+        if finish == "journal" {
+            let failure = match start {
+                Err(failure) => failure,
+                Ok(_) => panic!("SQLite failure released terminal GO"),
+            };
+            assert!(matches!(failure.live_at_refusal, Some(Ok(()))));
+            assert!(matches!(failure.cause,
+                StartCause::Journal(Error::Database(rusqlite::Error::SqliteFailure(ref error, _)))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy));
+            assert!(
+                failure
+                    .closed
+                    .retire()
+                    .unwrap()
+                    .connection_close_error
+                    .is_none()
+            );
+            assert_eq!(
+                fs::read_to_string(scope.join("guardian-withdrawn-before-go")).unwrap(),
+                id.invocation
+            );
+            assert!(!scope.join("final-exec").exists());
+            blocker.execute_batch("ROLLBACK").unwrap();
+        } else {
+            let running = start.unwrap();
+            let nonce: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+            let output = terminal_output(&master, b"\x1b[0m\r\n");
+            assert_eq!(
+                output,
+                format!("\x1b[32mREADY:{pid}:{nonce}:→\x1b[0m\r\n").as_bytes()
+            );
+            assert_eq!(
+                fs::read_to_string(scope.join("final-exec")).unwrap(),
+                format!("{pid}:{nonce}")
+            );
+            rustix::termios::tcsetwinsize(
+                &master,
+                rustix::termios::Winsize {
+                    ws_row: 41,
+                    ws_col: 113,
+                    ws_xpixel: 0,
+                    ws_ypixel: 0,
+                },
+            )
+            .unwrap();
+            terminal_input(&master, b"size\n");
+            terminal_output(&master, b"SIZE:41:113\r\n");
+            terminal_input(&master, b"secret\n");
+            terminal_output(&master, b"SECRET>");
+            terminal_input(&master, b"fake-password-123\n");
+            assert_eq!(terminal_output(&master, b"SECRET-OK\r\n"), b"SECRET-OK\r\n");
+            terminal_input(&master, b"raw\n");
+            terminal_output(&master, b"RAW>");
+            let bytes = "é→\x1b[A\x03".as_bytes();
+            terminal_input(&master, &[bytes, b"\n"].concat());
+            let encoded: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(
+                terminal_output(&master, b"\r\n"),
+                format!("RAW:{encoded}\r\n").as_bytes()
+            );
+            assert!(matches!(store.acquire_lease(profile), Err(Error::Busy)));
+            if finish == "interrupt" {
+                terminal_input(&master, b"\x03");
+                let deadline = Instant::now() + Duration::from_secs(4);
+                while !scope.join("target-exit").exists() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Ctrl-C did not terminate the foreground target"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                assert_eq!(
+                    fs::read_to_string(scope.join("target-exit")).unwrap(),
+                    "None:Some(2)"
+                );
+            }
+            assert!(
+                running
+                    .close()
+                    .retire()
+                    .unwrap()
+                    .connection_close_error
+                    .is_none()
+            );
+            if finish == "disconnect" {
+                assert_eq!(
+                    fs::read_to_string(scope.join("guardian-clean-eof")).unwrap(),
+                    id.invocation
+                );
+                assert!(!scope.join("target-exit").exists());
+            }
+        }
+        unresolved(&store, profile, &run);
+        drop(blocker);
+        drop(store);
+        let reopened = Store::open(&root).unwrap();
+        unresolved(&reopened, profile, &run);
+        assert_eq!(
+            reopened.run(&run).unwrap().observed_pid,
+            if finish == "journal" { None } else { Some(pid) }
+        );
+        assert!(reopened.verify().unwrap().consistent);
+        drop(master);
+    }
 }
 
 #[test]

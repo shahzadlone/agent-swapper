@@ -47,6 +47,7 @@ enum Request {
     Bind,
     Run,
     Admit,
+    Terminal,
 }
 
 fn request(channel: &OwnedFd) -> io::Result<Request> {
@@ -74,12 +75,13 @@ fn request(channel: &OwnedFd) -> io::Result<Request> {
             .flags
             .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
             && Instant::now() < deadline
-            && matches!(packet, b"GO\n" | b"BIND\n" | b"ADMIT\n"),
+            && matches!(packet, b"GO\n" | b"BIND\n" | b"ADMIT\n" | b"PTY1\n"),
         "invalid fixture activation request",
     )?;
     Ok(match packet {
         b"BIND\n" => Request::Bind,
         b"ADMIT\n" => Request::Admit,
+        b"PTY1\n" => Request::Terminal,
         _ => Request::Run,
     })
 }
@@ -185,8 +187,14 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
         net::send(&channel, &bytes, SendFlags::NOSIGNAL)? == bytes.len(),
         "incomplete activation offer",
     )?;
-    if request == Request::Admit {
-        return crate::activated_journal::serve(&channel, prefix, &run, &invocation);
+    if matches!(request, Request::Admit | Request::Terminal) {
+        return crate::activated_journal::serve(
+            &channel,
+            prefix,
+            &run,
+            &invocation,
+            request == Request::Terminal,
+        );
     }
     if bind_only {
         // The coordinator queues the entire negative-control sequence before
@@ -311,6 +319,20 @@ pub(crate) fn dispatch() -> Option<io::Result<()>> {
             )?;
             crate::activated_journal::writer(&args[1], Path::new(&args[2]))
         })()),
+        Some("--activation-terminal-shim") => Some((|| {
+            require(
+                args.len() == 3,
+                "terminal shim requires prefix and directory",
+            )?;
+            crate::activated_terminal::shim(&args[1], Path::new(&args[2]))
+        })()),
+        Some("--activation-terminal-target") => Some((|| {
+            require(
+                args.len() == 4,
+                "terminal target requires prefix, directory and nonce",
+            )?;
+            crate::activated_terminal::target(&args[1], Path::new(&args[2]), &args[3])
+        })()),
         Some("--activation-writer") => Some((|| {
             require(
                 args.len() == 3,
@@ -331,6 +353,9 @@ mod tests {
         for (bytes, descriptor, accepted) in [
             (b"BIND\n".as_slice(), false, true),
             (b"ADMIT\n".as_slice(), false, true),
+            (b"PTY1\n".as_slice(), false, true),
+            (b"PTY1\nX".as_slice(), false, false),
+            (b"PTY1\n".as_slice(), true, false),
             (b"ADMIT".as_slice(), false, false),
             (b"ADMIT\nX".as_slice(), false, false),
             (b"ADMIT\n".as_slice(), true, false),

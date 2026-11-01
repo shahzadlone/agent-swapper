@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::{
     io,
     marker::PhantomData,
-    os::fd::{BorrowedFd, OwnedFd},
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -49,6 +49,8 @@ impl Drop for RuntimeGuard {
 
 struct Session {
     control: Control,
+    terminal_requested: bool,
+    terminal: Option<OwnedFd>,
     connection: Option<Connection>,
     owner: zbus::names::OwnedUniqueName,
     unit: UnitFact,
@@ -273,11 +275,25 @@ fn validate_prepared(
 
 impl Bound {
     pub fn connect(prefix: &str) -> io::Result<Self> {
+        Self::connect_mode(prefix, false)
+    }
+    /// Fixed pre-exec/inner-PTY qualification, never a provider launch API.
+    pub fn connect_terminal(prefix: &str) -> io::Result<Self> {
+        Self::connect_mode(prefix, true)
+    }
+    fn connect_mode(prefix: &str, terminal_requested: bool) -> io::Result<Self> {
         outside_runtime()?;
         fixture_policy::gate(prefix)?;
         let paths = crate::prerequisites()?;
         let deadline = Instant::now() + Duration::from_secs(12);
-        let (socket, _, offer) = activation::connect(prefix, b"ADMIT\n")?;
+        let (socket, _, offer) = activation::connect(
+            prefix,
+            if terminal_requested {
+                b"PTY1\n"
+            } else {
+                b"ADMIT\n"
+            },
+        )?;
         let control = Control(Some(socket));
         let expected = Expected {
             unit: offer.unit,
@@ -310,6 +326,8 @@ impl Bound {
         };
         Ok(Self(Session {
             control,
+            terminal_requested,
+            terminal: None,
             connection: Some(connection),
             owner,
             unit,
@@ -330,7 +348,14 @@ impl Bound {
         let result = (|| {
             self.0.recheck()?;
             transport::send_until(self.0.socket()?, transport::GO, &[lease], self.0.deadline)?;
-            let packet = activation_packet::receive(self.0.socket()?, self.0.deadline)?;
+            let packet = if self.0.terminal_requested {
+                let (packet, terminal) =
+                    activation_packet::receive_terminal(self.0.socket()?, self.0.deadline)?;
+                self.0.terminal = Some(terminal);
+                packet
+            } else {
+                activation_packet::receive(self.0.socket()?, self.0.deadline)?
+            };
             let child_pid = validate_prepared(
                 &packet,
                 self.0.unit.pid,
@@ -410,6 +435,8 @@ impl Witness {
         };
         let mut session = Session {
             control: Control(None),
+            terminal_requested: false,
+            terminal: None,
             connection: Some(connection),
             owner,
             unit,
@@ -433,6 +460,9 @@ impl Witness {
 }
 
 impl Prepared {
+    pub fn terminal(&self) -> Option<BorrowedFd<'_>> {
+        self.session.terminal.as_ref().map(AsFd::as_fd)
+    }
     pub fn pid(&self) -> u32 {
         self.pid
     }
@@ -500,6 +530,9 @@ impl Prepared {
     }
 }
 impl Running {
+    pub fn terminal(&self) -> Option<BorrowedFd<'_>> {
+        self.0.terminal.as_ref().map(AsFd::as_fd)
+    }
     pub fn identity(&self) -> Identity {
         identity(&self.0)
     }

@@ -32,6 +32,28 @@ pub(crate) fn peer(socket: impl AsFd) -> io::Result<ScmCredentials> {
 /// The kernel credentials identify the message sender, whereas SO_PEERCRED
 /// on a systemd activation connection identifies the original listener.
 pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet> {
+    receive_files(socket, deadline, false).map(|(packet, _)| packet)
+}
+
+/// One terminal capability accompanies the authenticated prepared packet.
+/// This never accepts a missing descriptor, a batch, or an uncredentialed packet.
+pub(crate) fn receive_terminal(
+    socket: &OwnedFd,
+    deadline: Instant,
+) -> io::Result<(Packet, OwnedFd)> {
+    let (packet, mut files) = receive_files(socket, deadline, true)?;
+    let terminal = files
+        .pop()
+        .ok_or_else(|| io::Error::other("terminal absent"))?;
+    crate::terminal::validate_master(&terminal)?;
+    Ok((packet, terminal))
+}
+
+fn receive_files(
+    socket: &OwnedFd,
+    deadline: Instant,
+    terminal: bool,
+) -> io::Result<(Packet, Vec<OwnedFd>)> {
     require(
         net::sockopt::socket_type(socket)? == net::SocketType::SEQPACKET
             && net::sockopt::socket_passcred(socket)?
@@ -54,9 +76,18 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
         "activation packet did not arrive before deadline",
     )?;
     let mut bytes = [0_u8; 4096];
-    // Only one credentials message fits. Additional controls force CTRUNC,
-    // including types the library would otherwise discard without exposing.
-    let mut space = vec![0_u8; SocketAncillary::buffer_size_for_credentials()];
+    // Bound controls to one credential and, only for the terminal response,
+    // one descriptor. Alignment can admit a second FD; the exact count below
+    // rejects it. Every refused capability remains owned and is dropped.
+    let mut space = vec![
+        0_u8;
+        SocketAncillary::buffer_size_for_credentials()
+            + if terminal {
+                SocketAncillary::buffer_size_for_rights(1)
+            } else {
+                0
+            }
+    ];
     let mut ancillary = SocketAncillary::new(&mut space);
     let received = unix_ancillary::cmsg_recvmsg(
         socket.as_fd(),
@@ -65,6 +96,7 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
     )?;
     let mut sender = None;
     let mut unexpected = false;
+    let mut files = Vec::new();
     for message in ancillary.messages() {
         match message {
             AncillaryData::Credentials(credentials) if sender.is_none() => {
@@ -73,14 +105,15 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
             AncillaryData::ScmRights(rights) => {
                 // Closing every received capability is part of refusal, even
                 // when the packet is otherwise valid or the control is truncated.
-                drop(rights.collect::<Vec<OwnedFd>>());
-                unexpected = true;
+                files.extend(rights);
+                unexpected |= !terminal;
             }
             _ => unexpected = true,
         }
     }
     require(
         !unexpected
+            && files.len() == usize::from(terminal)
             && !received.truncated
             && !received.data_truncated
             && received.bytes_read > 0
@@ -90,10 +123,13 @@ pub(crate) fn receive(socket: &OwnedFd, deadline: Instant) -> io::Result<Packet>
     let sender =
         sender.ok_or_else(|| io::Error::other("activation message lacks kernel credentials"))?;
     require(sender.pid() > 0, "activation sender PID is unavailable")?;
-    Ok(Packet {
-        bytes: bytes[..received.bytes_read].to_vec(),
-        sender,
-    })
+    Ok((
+        Packet {
+            bytes: bytes[..received.bytes_read].to_vec(),
+            sender,
+        },
+        files,
+    ))
 }
 
 #[cfg(test)]
@@ -130,6 +166,41 @@ mod tests {
         assert_eq!(packet.sender.pid(), rustix::process::getpid().as_raw_pid());
         assert_eq!(packet.sender.uid(), rustix::process::getuid().as_raw());
         assert_eq!(packet.sender.gid(), rustix::process::getgid().as_raw());
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_packet_requires_exactly_one_master_and_closes_refused_rights() -> io::Result<()> {
+        for count in [0, 1, 2, 8] {
+            let (sender, receiver) = pair()?;
+            let (master, _slave) = crate::terminal::pair()?;
+            let rights = vec![master.as_fd(); count];
+            crate::admission_transport::send_until(&sender, b"prepared", &rights, deadline())?;
+            let result = receive_terminal(&receiver, deadline());
+            assert_eq!(result.is_ok(), count == 1);
+            if let Ok((packet, master)) = result {
+                assert_eq!(packet.bytes, b"prepared");
+                assert_eq!(packet.sender.pid(), rustix::process::getpid().as_raw_pid());
+                assert!(rustix::io::fcntl_getfd(master)?.contains(rustix::io::FdFlags::CLOEXEC));
+            }
+        }
+        for count in [1, 2, 8] {
+            let (sender, receiver) = pair()?;
+            let (capability, witness) = pair()?;
+            crate::admission_transport::send_until(
+                &sender,
+                b"prepared",
+                &vec![capability.as_fd(); count],
+                deadline(),
+            )?;
+            drop(capability);
+            assert!(receive_terminal(&receiver, deadline()).is_err());
+            let mut ready = [PollFd::new(&witness, PollFlags::RDHUP)];
+            let timeout = Timespec::try_from(Duration::from_secs(1)).map_err(io::Error::other)?;
+            assert_eq!(poll(&mut ready, Some(&timeout))?, 1);
+            let mut bytes = [0; 1];
+            assert_eq!(net::recv(&witness, &mut bytes, RecvFlags::DONTWAIT)?.0, 0);
+        }
         Ok(())
     }
 

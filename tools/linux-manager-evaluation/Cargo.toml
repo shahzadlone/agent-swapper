@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 zbus = { version = "=6.2.0", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt", "time", "net"] }
-rustix = { version = "=1.1.6", features = ["net", "process", "fs", "event", "time"] }
+rustix = { version = "=1.1.6", features = ["net", "process", "fs", "event", "time", "pty", "termios"] }
 nix = { version = "=0.31.3", default-features = false, features = ["socket"] }
 unix-ancillary = { version = "=0.6.1", default-features = false }
 fuxix = "=0.8.0"
