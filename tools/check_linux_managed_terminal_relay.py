@@ -96,7 +96,7 @@ def direct(binary, scenario, env, owned_parent=False):
                 owned.wait(lambda: state(data['target']) != 'T')
                 target_command(owned, b'size', b'SIZE:24:80\r\n')
                 owned.send(b'\x03')
-                owned.finish()
+                owned.finish(130 if env.get('ASWP_CI_EXEC_GATE') == '1' else 0)
             elif scenario == 'nested':
                 target_command(owned, b'nested', b'NESTED-RUNNING:')
                 owned.send(b'\x1a')
@@ -105,7 +105,25 @@ def direct(binary, scenario, env, owned_parent=False):
                 assert termios.tcgetattr(owned.master)[3] & (termios.ISIG | termios.ICANON | termios.ECHO) == 0
                 target_command(owned, b'resume-nested', b'NESTED-DONE\r\n')
                 owned.send(b'\x03')
-                owned.finish()
+                owned.finish(130 if env.get('ASWP_CI_EXEC_GATE') == '1' else 0)
+            elif scenario == 'exit-code-7':
+                assert env.get('ASWP_CI_EXEC_GATE') == '1'
+                target_command(owned, b'exit-7', b'exit-7\r\n')
+                owned.finish(7)
+                assert (root / 'observed-exit').read_text() == 'Code { code: 7 }'
+            elif scenario == 'target-realtime':
+                assert env.get('ASWP_CI_EXEC_GATE') == '1'
+                descriptor = os.pidfd_open(data['target'])
+                try:
+                    args = Path(f"/proc/{data['target']}/cmdline").read_bytes().split(b'\0')
+                    assert args[1] == b'--activation-job-target'
+                    assert Path(f"/proc/{data['target']}/cgroup").read_text() == Path(f"/proc/{data['guardian']}/cgroup").read_text()
+                    assert not select.select([descriptor], [], [], 0)[0]
+                    signal.pidfd_send_signal(descriptor, signal.SIGRTMIN)
+                finally:
+                    os.close(descriptor)
+                owned.finish(128 + int(signal.SIGRTMIN))
+                assert (root / 'observed-exit').read_text() == f'Signal {{ signal: {int(signal.SIGRTMIN)}, core_dumped: false }}'
             elif scenario == 'flood-term':
                 owned.send(b'flood\n')
                 owned.wait(lambda: (root / 'backpressure').exists(), pump=False)
@@ -157,6 +175,9 @@ def shell_job(binary, raw_stop, env, owned_parent=False):
             offset = len(owned.output)
             owned.send(b'\x03')
             owned.wait(lambda: prompt in owned.output[offset:] and (root / 'retired').exists())
+            owned.send(b'printf "%s" "$?" > exit-code\n')
+            owned.wait(lambda: (root / 'exit-code').exists() and (root / 'exit-code').stat().st_size > 0)
+            assert (root / 'exit-code').read_text() == ('130' if env.get('ASWP_CI_EXEC_GATE') == '1' else '0')
             owned.send(b'/usr/bin/stty -g > after\n')
             owned.wait(lambda: (root / 'after').exists())
             assert (root / 'after').read_text() == (root / 'before').read_text()
@@ -253,6 +274,13 @@ def failures(binary, scenario, env, owned_parent=False):
                     # No destructor can execute after SIGKILL. With no surviving
                     # owner this direct test terminal remains raw.
                     assert termios.tcgetattr(owned.master)[3] & (termios.ICANON | termios.ECHO | termios.ISIG) == 0
+            elif scenario == 'unknown-exit':
+                assert env.get('ASWP_CI_EXEC_GATE') == '1'
+                signal.pidfd_send_signal(pidfds[data['guardian']], signal.SIGKILL)
+                owned.finish(125)
+                assert (root / 'retired').exists() and (root / 'restored').exists()
+                assert (root / 'target-outcome-unresolved').read_text() == 'no authenticated target exit'
+                assert not (root / 'observed-exit').exists()
             elif scenario == 'blocked-drain':
                 owned.send(b'flood\n')
                 owned.wait(lambda: (root / 'backpressure').exists(), pump=False)
@@ -284,10 +312,58 @@ def failures(binary, scenario, env, owned_parent=False):
             owned.close()
 
 
+def long_session(binary, env):
+    with tempfile.TemporaryDirectory(prefix='aswp-managed-long-') as path:
+        root = Path(path)
+        owned = OwnedPty(binary, root, shell=True, environment=env)
+        try:
+            prompt = b'__ASWP_OUTER_PROMPT__ '
+            owned.wait(lambda: prompt in owned.output)
+            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} --owned-parent {shlex.quote(str(root))}\n'.encode())
+            data = owned.ready(greeting=b'\x1b[0m\r\n')
+            exec_observed(root, data, env)
+            started = time.monotonic()
+            # Cross the old absolute admission deadline while still active.
+            owned.wait(lambda: time.monotonic() - started >= 15, seconds=18)
+            assert owned.poll() is None and not (root / 'retired').exists()
+            target_command(owned, b'size', b'SIZE:24:80\r\n')
+            offset = len(owned.output)
+            owned.send(b'\x1a')
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'owner-restored-stop').exists())
+            assert state(data['pid']) == state(data['child']) == state(data['target']) == 'T'
+            offset = len(owned.output)
+            owned.send(b'bg\n')
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'continued').exists())
+            # Cross the old 25/30/35-second fixture lifetimes while paused.
+            owned.wait(lambda: time.monotonic() - started >= 38, seconds=27)
+            assert state(data['target']) == 'T' and not (root / 'resumed-foreground').exists()
+            assert not (root / 'retired').exists() and os.tcgetpgrp(owned.master) == owned.pid
+            owned.send(b'/usr/bin/stty -g > during-long-stop\n')
+            owned.wait(lambda: (root / 'during-long-stop').exists())
+            assert (root / 'during-long-stop').read_text() == (root / 'before').read_text()
+            owned.send(b'fg\n')
+            owned.wait(lambda: (root / 'resumed-foreground').exists() and state(data['target']) != 'T')
+            target_command(owned, b'size', b'SIZE:24:80\r\n')
+            offset = len(owned.output)
+            target_command(owned, b'finish', 'FINAL:\x1b[34m→\x1b[0m\r\n'.encode())
+            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'retired').exists())
+            owned.send(b'/usr/bin/stty -g > after\n')
+            owned.wait(lambda: (root / 'after').exists())
+            retired(owned, root)
+            assert (root / 'observed-exit').read_text() == 'Code { code: 0 }'
+            assert time.monotonic() - started >= 38
+            print('exec-managed-long-session: pass (active after admission timeout, resumed after 38 seconds, original modes and scope retired)', flush=True)
+        finally:
+            owned.close()
+
+
 def main():
-    assert sys.platform == 'linux' and len(sys.argv) == 2
+    assert sys.platform == 'linux' and (len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] == '--long-session'))
     binary = Path(sys.argv[1]).resolve(strict=True)
     env = environment()
+    if len(sys.argv) == 3:
+        long_session(binary, dict(env, ASWP_CI_EXEC_GATE='1'))
+        return
     for owned_parent in (False, True):
         for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
             direct(binary, scenario, env, owned_parent)
@@ -297,13 +373,13 @@ def main():
             failures(binary, scenario, env, owned_parent)
     failures(binary, 'stopped-parent-loss', env, owned_parent=True)
     exec_env = dict(env, ASWP_CI_EXEC_GATE='1')
-    for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
+    for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term', 'exit-code-7', 'target-realtime'):
         direct(binary, scenario, exec_env, True)
     for raw_stop in (False, True):
         shell_job(binary, raw_stop, exec_env, True)
-    for scenario in ('outer-hangup', 'client-kill', 'blocked-drain', 'stopped-parent-loss'):
+    for scenario in ('outer-hangup', 'client-kill', 'blocked-drain', 'stopped-parent-loss', 'unknown-exit'):
         failures(binary, scenario, exec_env, True)
-    print('::notice::managed two-terminal relay: twenty-nine owned-PTY cases passed, including ten exec-gated surviving-owner cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
+    print('::notice::managed two-terminal relay: thirty-two owned-PTY cases passed, including thirteen exec-gated surviving-owner cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

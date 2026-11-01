@@ -59,8 +59,14 @@ struct Session {
     binding: kernel::Binding,
     child: Option<kernel::Child>,
     deadline: Instant,
+    phase: Phase,
     runtime: RuntimeGuard,
     _same_thread: PhantomData<Rc<()>>,
+}
+#[derive(PartialEq, Eq)]
+enum Phase {
+    Admission,
+    Active,
 }
 #[derive(Default)]
 struct JobState {
@@ -108,8 +114,14 @@ impl Session {
             .ok_or_else(|| io::Error::other("fixture manager connection is closed"))
     }
     fn recheck(&self) -> io::Result<()> {
-        let remaining = self
-            .deadline
+        // The absolute admission budget bounds startup only. A running or
+        // suspended session keeps its original binding and gets a fresh,
+        // bounded observation window; elapsed startup time cannot revoke it.
+        let until = match self.phase {
+            Phase::Admission => self.deadline,
+            Phase::Active => Instant::now() + Duration::from_secs(8),
+        };
+        let remaining = until
             .checked_duration_since(Instant::now())
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "fixture admission expired"))?;
         self.runtime()?.block_on(async {
@@ -493,6 +505,7 @@ impl Bound {
             binding,
             child: None,
             deadline,
+            phase: Phase::Admission,
             runtime,
             _same_thread: PhantomData,
         }))
@@ -612,6 +625,7 @@ impl Witness {
             binding,
             child: None,
             deadline,
+            phase: Phase::Admission,
             runtime,
             _same_thread: PhantomData,
         };
@@ -693,6 +707,14 @@ impl Prepared {
             Ok(()) => {
                 if let Some(job) = &mut self.session.job {
                     job.nonce = nonce;
+                }
+                if self
+                    .session
+                    .job
+                    .as_ref()
+                    .is_none_or(|job| !job.exec_pending)
+                {
+                    self.session.phase = Phase::Active;
                 }
                 Ok(Running(self.session))
             }
@@ -1003,6 +1025,7 @@ impl ExecStopped {
                 if let Some(job) = &mut self.0.job {
                     job.exec_pending = false;
                 }
+                self.0.phase = Phase::Active;
                 Ok(Running(self.0))
             }
             Err(error) => Err(StartFailure {
