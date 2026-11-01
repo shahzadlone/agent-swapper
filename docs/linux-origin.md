@@ -1,8 +1,10 @@
 # Linux namespace origin candidate
 
-This read-only crate is a qualification candidate. The production installation
-reader and normal CLI do not consume it yet. A successful observation does not
-establish service-manager custody, trusted installation files or target exit.
+The installation selection reader now captures this read-only observation before
+opening its selector, manifest or images. Normal CLI execution still uses the
+explicitly uncontained preview; the managed launcher is not enabled. A successful
+observation does not establish service-manager custody, trusted installation
+files or target exit.
 
 ## Contract
 
@@ -75,15 +77,27 @@ overlaid namespace directory. They require the intended result and diagnostic;
 crashes, setup failures and generic errors are not successful negative tests.
 Only the root parent maps its blocked child; no subordinate-ID files, accounts,
 AppArmor policy or host sysctls are changed. Python starts isolated. Temporary
-mounts disappear with the private namespace. Full CI passed at `85c1059`
-([41311810820](https://github.com/shahzadlone/agent-swapper/actions/runs/41311810820)),
-including both native origin suites, all platform tests and independent release
-rebuilds. Integration and additional ownership controls have separate gates.
+mounts disappear with the private namespace. The complete candidate pipeline
+passed at `85c1059` ([41311810820](https://github.com/shahzadlone/agent-swapper/actions/runs/41311810820));
+the complete installation-integration pipeline passed at `7dcd61f`
+([41312005358](https://github.com/shahzadlone/agent-swapper/actions/runs/41312005358)).
+Both include native Ubuntu suites, cross-platform tests and independent rebuilds.
+An additional hosted probe calls the
+actual production `SelectedInstallation::open` in root and full-map child-user
+contexts. Both must refuse at the origin check before reaching the deliberately
+absent production selector; an absent-file error cannot satisfy that control.
 
 Source-only Opus 5.5 reviews assessed the design and fallback. The separate
 implementation/fixture review returned a safety-classifier refusal without a
-usable audit conclusion; independent implementation review remains open. Integration, final-hop race/ownership controls,
-post-exec helper observations and production ordering remain open gates.
+usable audit conclusion; independent implementation review remains open.
+
+The selected and admitted installation types retain origin across the selector
+transition. Rechecking an active generation verifies its original namespace
+observation before and after artifact checks. Service policy validates the
+selection before reading its unit text. The manager prerequisite check also
+establishes origin before trusting root-owned bus paths. Additional final-hop
+and ownership controls, independent review and post-exec helper observations
+remain separate gates.
 
 ## Primary contracts checked
 

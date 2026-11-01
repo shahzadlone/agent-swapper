@@ -194,13 +194,17 @@ def main():
         _, case, binary, backend, uid, gid = args
         inside(case, binary, backend, *_mounts.identity(uid, gid))
         return
-    require(len(args) == 2 and args[1] in ('available', 'unsupported') and os.geteuid() != 0,
+    installation = len(args) == 2 and args[0] == '--installation'
+    require(len(args) == 2 and (installation or args[1] in ('available', 'unsupported')) and os.geteuid() != 0,
             'ordinary origin fixture runner required')
-    binary = Path(args[0])
+    binary = Path(args[1] if installation else args[0])
     require(binary.is_absolute() and binary.is_file() and not binary.is_symlink(), 'invalid origin probe binary')
+    if installation:
+        require(not os.path.lexists(f'/etc/agentswapper/installations/{os.getuid()}/active.json'),
+                'production selection fixture requires an absent installation')
     failures = []
-    for case in CASES:
-        backends = ['auto', 'procfs'] + (['pidfd'] if args[1] == 'available' else [])
+    for case in (('root', 'full-map-user') if installation else CASES):
+        backends = ['auto'] if installation else ['auto', 'procfs'] + (['pidfd'] if args[1] == 'available' else [])
         # Metadata substitutions target the procfs mechanism explicitly; the
         # pidfd path deliberately does not consult these filesystem names.
         if case in ('fake-proc', 'proc-subdirectory', 'status-overlay', 'namespace-directory'):

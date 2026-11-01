@@ -244,7 +244,26 @@ All ten local observer controls and strict workspace qualification Clippy pass.
 The revised receipt controls passed in full CI at `b9c3bb6` (`41306625239`)
 and in the combined `f6cce6d` checkpoint (`41306933304`).
 
-The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
+The installation reader now captures and retains the namespace-origin candidate
+before reading any installation path. The selected-to-admitted transition keeps
+that same observation while releasing selector dependence. Revalidation checks
+the originating thread and namespace objects before and after the retained
+artifact checks. The default and qualification constructors share this ordering;
+raw manifest/image observations remain lower-level objects without selection or
+launch authority. Manager prerequisites likewise establish origin first.
+
+All 319 local Nextest tests passed with retries disabled, together with strict
+workspace qualification Clippy, evaluator Clippy, runtime/manager doctests and
+59 ordinary Linux harness controls. Complete integration CI passed at `7dcd61f`
+(`41312005358`), including both Ubuntu suites, platform tests and independent
+release rebuilds. The independent implementation audit remains open: the Opus
+implementation review returned a safety-classifier refusal without a usable
+conclusion. The hosted ordering probe uses the actual
+production selection entry point in root and full-map child-user contexts; an
+absent-selector error is not accepted as a namespace refusal. See the
+[origin contract](linux-origin.md) for its compatibility and trust boundaries.
+
+Independent namespace review, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
 restart recovery and production launch integration remain separate open gates.
 The journal does not isolate mutually hostile programs running as the same UID,

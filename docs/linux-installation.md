@@ -2,13 +2,17 @@
 
 The runtime validates selected installation metadata and retains the original
 artifacts through real service binding. The normal managed launcher is still
-disabled. These readers do not install a service, change provider configuration,
-or establish namespace provenance.
+disabled. Selection now retains a kernel namespace-origin observation before
+reading installation files. These readers do not install a service or change
+provider configuration; loaded manager/socket authentication remains separate.
 
 ## Fixed paths and identity
 
-`SelectedInstallation::open` derives the current ordinary UID and primary GID,
-requires matching real/effective identities, and reads
+`SelectedInstallation::open` first captures [namespace origin](linux-origin.md),
+requiring initial-user membership, initial-user ownership of mount/PID/cgroup
+namespaces, matching ordinary real/effective/saved/filesystem IDs and no usable
+capabilities. It derives the ordinary UID and primary GID from that observation
+and only then reads
 `/etc/agentswapper/installations/<uid>/active.json`. The production constructor
 accepts no caller-selected path, UID or generation and no environment override.
 The selector has exactly `schema: 1` and a nonzero, 32-character lowercase
@@ -97,6 +101,11 @@ and must not hardlink-deduplicate, chmod, chown, touch or rewrite active assets.
 Root can revoke availability by changing these files; this is not an immutability
 or revocation protocol. Safe installation, update, rollback, removal and restart
 recovery still require their own implementation and evidence.
+
+The admitted installation retains the same thread-bound origin even after the
+selector is released. Artifact revalidation checks origin before and after file
+checks. Neither selected nor admitted installation can move between threads.
+This does not substitute for each executable helper observing itself after exec.
 
 ## Qualification and evidence
 

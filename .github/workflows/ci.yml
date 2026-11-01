@@ -247,6 +247,7 @@ jobs:
           cargo +1.98.0 clippy --locked -p agentswapper-linux-origin --all-targets --all-features -- -D warnings
           cargo +1.98.0 test --locked -p agentswapper-linux-origin
           cargo +1.98.0 build --locked -p agentswapper-linux-origin --features qualification --example origin_probe
+          cargo +1.98.0 build --locked -p agentswapper-linux-runtime --example installation_origin_probe
           python3 -m unittest discover -s tools -p test_linux_origin.py -v
       - name: Compare leader and nonleader observations
         run: python3 tools/check_linux_origin.py --positive "${{ github.workspace }}/target/debug/examples/origin_probe" "${{ matrix.pidfd }}"
@@ -254,7 +255,9 @@ jobs:
         timeout-minutes: 2
         env:
           ASWP_CI_ORIGIN: '1'
-        run: python3 tools/check_linux_origin.py "${{ github.workspace }}/target/debug/examples/origin_probe" "${{ matrix.pidfd }}"
+        run: |
+          python3 tools/check_linux_origin.py "${{ github.workspace }}/target/debug/examples/origin_probe" "${{ matrix.pidfd }}"
+          python3 tools/check_linux_origin.py --installation "${{ github.workspace }}/target/debug/examples/installation_origin_probe"
 
   linux-manager-evidence:
     strategy:

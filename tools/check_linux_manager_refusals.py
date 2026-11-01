@@ -12,7 +12,7 @@ import tempfile
 
 CASES = {
     'map-overlay': 'kernel metadata crosses a mount boundary',
-    'fake-proc': 'process metadata is not procfs',
+    'fake-proc': ('process metadata is not procfs', 'origin metadata is not a procfs root'),
     'socket-owner': 'bus path is not root-owned',
     'socket-peer': 'bus listener peer is not root',
     'socket-stall': ('manager binding deadline exceeded', 'manager transport admission expired'),

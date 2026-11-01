@@ -11,6 +11,7 @@ license.workspace = true
 qualification = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
+agentswapper-linux-origin = { path = "../agentswapper-linux-origin", version = "=0.1.0-dev" }
 rustix = { version = "=1.1.6", features = ["net", "fs", "event", "termios", "pty", "process"] }
 zeroize.workspace = true
 serde.workspace = true
