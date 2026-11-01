@@ -12,7 +12,7 @@ mod outer_terminal;
 mod terminal_owner;
 use agentswapper_linux_runtime::signals::Signals;
 use nix::sys::signal::{SigSet, Signal};
-use outer_terminal::{Terminal, require};
+use outer_terminal::require;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     process::Pid,
@@ -46,7 +46,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
     // own event loop; it never changes an already multithreaded caller.
     SigSet::empty().thread_set_mask()?;
     let signals = Signals::new()?;
-    let mut terminal = Terminal::capture_for_group(directory, parent)?;
+    let mut terminal = outer_terminal::capture_for_group(directory, &signals, parent)?;
     terminal.enter()?;
     marker(directory, "child-ready", &std::process::id().to_string())?;
     io::stdout().write_all(b"OWNED-CHILD-READY\r\n")?;
@@ -103,7 +103,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
         }
         let mut watched = vec![PollFd::new(&signals, PollFlags::IN)];
         if !paused {
-            watched.push(PollFd::new(&terminal.fd, PollFlags::IN));
+            watched.push(PollFd::new(&terminal, PollFlags::IN));
         }
         match poll(
             &mut watched,
@@ -122,7 +122,7 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
             .is_some_and(|fd| fd.revents().contains(PollFlags::IN))
         {
             let mut bytes = [0; 32];
-            match rustix::io::read(&terminal.fd, &mut bytes) {
+            match rustix::io::read(&terminal, &mut bytes) {
                 Ok(0) => return Err(io::Error::other("owned child input ended")),
                 Ok(count) => input.extend_from_slice(&bytes[..count]),
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}

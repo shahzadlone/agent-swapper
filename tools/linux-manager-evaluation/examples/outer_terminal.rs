@@ -3,7 +3,7 @@
 #[path = "../src/outer_terminal.rs"]
 mod outer_terminal;
 use agentswapper_linux_runtime::signals::Signals;
-use outer_terminal::{Terminal, require};
+use outer_terminal::require;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     termios,
@@ -23,8 +23,8 @@ fn run(directory: &Path) -> io::Result<()> {
     // Declaration order ensures terminal restoration before the signal mask
     // is restored on every error path, including pending fatal signals.
     let signals = Signals::new()?;
-    let mut terminal = Terminal::capture(directory)?;
-    let status = serde_json::json!({"pid": std::process::id(), "group": terminal.group.as_raw_pid(), "session": rustix::process::getsid(None)?.as_raw_pid()});
+    let mut terminal = outer_terminal::capture(directory, &signals)?;
+    let status = serde_json::json!({"pid": std::process::id(), "group": terminal.group().as_raw_pid(), "session": rustix::process::getsid(None)?.as_raw_pid()});
     marker(directory, "ready", &status.to_string())?;
     terminal.enter()?;
     let mut output: VecDeque<u8> = b"OUTER-READY\r\n".iter().copied().collect();
@@ -47,14 +47,14 @@ fn run(directory: &Path) -> io::Result<()> {
         }
         want_stop |= notices.stop;
         if notices.resized {
-            let size = termios::tcgetwinsize(&terminal.fd)?;
+            let size = termios::tcgetwinsize(&terminal)?;
             marker(
                 directory,
                 "size",
                 &format!("{}:{}", size.ws_row, size.ws_col),
             )?;
         }
-        if terminal.raw && terminal.foreground()? {
+        if terminal.is_raw() && terminal.foreground()? {
             while let Some(index) = input.iter().position(|byte| *byte == b'\n') {
                 let command: Vec<_> = input.drain(..=index).collect();
                 match &command[..command.len() - 1] {
@@ -109,10 +109,10 @@ fn run(directory: &Path) -> io::Result<()> {
         }
         let foreground = terminal.foreground()?;
         require(
-            !terminal.raw || foreground,
+            !terminal.is_raw() || foreground,
             "outer foreground changed during raw mode",
         )?;
-        if foreground && terminal.raw {
+        if foreground && terminal.is_raw() {
             let count = flood.min(16_384_usize.saturating_sub(output.len()));
             output.extend(std::iter::repeat_n(b'x', count));
             flood -= count;
@@ -122,7 +122,7 @@ fn run(directory: &Path) -> io::Result<()> {
             "outer fixture buffering exceeded bounds",
         )?;
         let mut events = PollFlags::empty();
-        if foreground && terminal.raw {
+        if foreground && terminal.is_raw() {
             if input.len() < 256 {
                 events |= PollFlags::IN;
             }
@@ -131,7 +131,7 @@ fn run(directory: &Path) -> io::Result<()> {
             }
         }
         let mut watched = [
-            PollFd::new(&terminal.fd, events),
+            PollFd::new(&terminal, events),
             PollFd::new(&signals, PollFlags::IN),
         ];
         let count = match poll(
@@ -149,7 +149,7 @@ fn run(directory: &Path) -> io::Result<()> {
             && flood > 0
             && !output.is_empty()
             && foreground
-            && terminal.raw
+            && terminal.is_raw()
         {
             marker(directory, "backpressure", &output.len().to_string())?;
             backpressured = true;
@@ -163,7 +163,7 @@ fn run(directory: &Path) -> io::Result<()> {
             break;
         }
         if revents.contains(PollFlags::OUT) {
-            match rustix::io::write(&terminal.fd, output.make_contiguous()) {
+            match rustix::io::write(&terminal, output.make_contiguous()) {
                 Ok(count) => {
                     require(count > 0, "zero-byte terminal write")?;
                     output.drain(..count);
@@ -175,7 +175,7 @@ fn run(directory: &Path) -> io::Result<()> {
         if revents.contains(PollFlags::IN) {
             let mut bytes = [0_u8; 128];
             let capacity = bytes.len().min(256 - input.len());
-            let count = match rustix::io::read(&terminal.fd, &mut bytes[..capacity]) {
+            let count = match rustix::io::read(&terminal, &mut bytes[..capacity]) {
                 Ok(0) => break,
                 Ok(count) => count,
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => continue,

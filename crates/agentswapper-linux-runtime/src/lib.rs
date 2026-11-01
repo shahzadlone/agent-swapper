@@ -12,3 +12,6 @@ pub mod launch_envelope;
 
 #[cfg(target_os = "linux")]
 pub mod signals;
+
+#[cfg(target_os = "linux")]
+pub mod terminal;

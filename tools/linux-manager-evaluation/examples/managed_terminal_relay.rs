@@ -83,7 +83,7 @@ fn read_queue(fd: impl AsFd, queue: &mut VecDeque<u8>, inner: bool) -> io::Resul
 }
 
 fn resize(terminal: &Terminal, master: impl AsFd) -> io::Result<()> {
-    let size = termios::tcgetwinsize(&terminal.fd)?;
+    let size = termios::tcgetwinsize(terminal)?;
     termios::tcsetwinsize(master, size)?;
     Ok(())
 }
@@ -177,7 +177,7 @@ fn relay(
             marker(directory, "resumed-foreground", "raw")?;
         }
         require(
-            !terminal.raw || foreground,
+            !terminal.is_raw() || foreground,
             "relay lost foreground while raw",
         )?;
         if control_closed && inner_closed && output.is_empty() {
@@ -190,7 +190,7 @@ fn relay(
                 "terminal output drain remained blocked",
             )?;
         }
-        let active = foreground && terminal.raw && !paused;
+        let active = foreground && terminal.is_raw() && !paused;
         let mut outer_events = PollFlags::empty();
         let mut inner_events = PollFlags::empty();
         if active {
@@ -208,7 +208,7 @@ fn relay(
             }
         }
         let mut ready = vec![
-            PollFd::new(&terminal.fd, outer_events),
+            PollFd::new(&terminal, outer_events),
             PollFd::new(signals, PollFlags::IN),
         ];
         // An unrequested HUP is always reported. Omit the inner descriptor
@@ -247,7 +247,7 @@ fn relay(
         )?;
         if active {
             if outer.contains(PollFlags::OUT) {
-                write_queue(&terminal.fd, &mut output)?;
+                write_queue(&terminal, &mut output)?;
             }
             // HUP may coexist with remaining PTY output. Drain before EIO;
             // never use terminal closure as a containment or exit receipt.
@@ -262,7 +262,7 @@ fn relay(
             }
             if !control_closed && outer.contains(PollFlags::IN) {
                 require(
-                    !read_queue(&terminal.fd, &mut input, false)?,
+                    !read_queue(&terminal, &mut input, false)?,
                     "outer terminal input closed",
                 )?;
             }
@@ -301,8 +301,8 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> 
     // inherits this mask; no already-running CLI thread is modified here.
     let signals = Signals::new()?;
     let mut terminal = match owner {
-        Some(parent) => Terminal::capture_for_group(directory, parent)?,
-        None => Terminal::capture(directory)?,
+        Some(parent) => outer_terminal::capture_for_group(directory, &signals, parent)?,
+        None => outer_terminal::capture(directory, &signals)?,
     };
     let prefix = std::env::var("ASWP_ACTIVATION_PREFIX").map_err(io::Error::other)?;
     let lease = OpenOptions::new()
@@ -342,7 +342,7 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> 
             "ready"
         },
         &serde_json::json!({
-            "pid": std::process::id(), "group": terminal.group.as_raw_pid(),
+            "pid": std::process::id(), "group": terminal.group().as_raw_pid(),
             "session": rustix::process::getsid(None)?.as_raw_pid(),
             "target": target, "guardian": identity.guardian_pid, "invocation": identity.invocation
         })
@@ -370,7 +370,7 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> 
     }
     // Restore promptly even if manager observation takes longer or fails.
     let restored = terminal.restore();
-    let mut watched = [PollFd::new(&terminal.fd, PollFlags::empty())];
+    let mut watched = [PollFd::new(&terminal, PollFlags::empty())];
     poll(
         &mut watched,
         Some(&Timespec {

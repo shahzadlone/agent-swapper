@@ -63,3 +63,35 @@ strict runtime and qualification Clippy, both dependency audits and the boundary
 check. The stopped-parent case required its companion shell executable to be
 built before running; it then passed. Hosted managed-terminal and full packaging
 qualification remain pending.
+
+## Terminal guard and cleanup order
+
+The shared terminal guard borrows the fresh signal owner. Rust therefore refuses
+ordinary code that restores the signal mask while the terminal guard is still
+alive; a compile-fail doctest checks that ordering. Descriptor access uses AsFd,
+and the saved attributes, foreground group and raw-mode tracking remain private.
+
+The runtime admits matching terminal standard streams, reopens verified stdin
+into a separate nonblocking open-file description, and rechecks identity and
+the original caller's flags. It changes neither flags shared with the shell nor
+the foreground group. Entering raw mode and restoring saved attributes both
+require ownership of the current foreground group. Fixture-only directory,
+environment and terminal-record checks remain in the qualification wrapper.
+
+Before any foreground query, the runtime refuses PTY masters, including locked
+masters. A private PTY test checks both master states and the accepted slave.
+Foreground queries use nix's signed PID representation, so a zero result cannot
+enter rustix's nonzero PID type or count as foreground ownership. The added term
+feature uses the existing nix pin; no registry version changes.
+
+These helpers still require the calling process or its direct parent to lead
+the foreground group. Launching them beneath an arbitrary existing TUI does not
+establish that topology or make shell job control work automatically. Fresh
+process entry, journal ownership and the CLI/TUI return path remain explicit
+production integration work. The shared guard supplies neither exec evidence
+nor a process-scope retirement receipt.
+
+Terminal extraction validation passed 18 runtime tests, three compile-fail
+doctests, all 18 local owned-terminal/owner cases, strict runtime and isolated
+Clippy, both locked dependency audits and the dependency-boundary check. Hosted
+managed-terminal, cross-platform packaging and rebuild results remain pending.
