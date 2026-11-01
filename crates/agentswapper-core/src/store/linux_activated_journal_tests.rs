@@ -169,6 +169,100 @@ fn exec_held(scope: &Path, pid: u32, guardian: u32, master: impl AsFd) {
 
 #[test]
 #[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
+fn cancellation_after_durable_journal_never_releases_target_or_completes_run() {
+    use std::cell::Cell;
+    let (prefix, directory) = environment();
+    for phase in ["go", "release"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let mut store = Store::open(&root).unwrap();
+        let (profile, run, prepared) = prepare_using(
+            &mut store,
+            "cancel-gate",
+            &prefix,
+            Bound::connect_exec_control,
+        );
+        let id = prepared.identity();
+        let pid = prepared.pid();
+        let scope = directory.join(&id.invocation);
+        let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
+        let witness =
+            aswp_linux_manager_evaluation::journal_client::Witness::bind(&prefix, &id, pid)
+                .unwrap();
+        let reader = Store::open(&root).unwrap();
+        let journaled = Cell::new(false);
+        let refuse = || {
+            assert!(journaled.get(), "permit ran before the journal callback");
+            let committed = reader.run(&run).unwrap();
+            assert_eq!(
+                committed.observed_pid,
+                if phase == "release" { Some(pid) } else { None }
+            );
+            assert!(committed.outcome.is_none() && committed.exit_code.is_none());
+            assert!(reader.verify().unwrap().consistent);
+            assert!(!scope.join("final-exec").exists());
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "fixture cancellation after durable journal",
+            ))
+        };
+        let nonce = *Uuid::new_v4().as_bytes();
+        let failure = if phase == "go" {
+            prepared
+                .start_after_checked(
+                    nonce,
+                    |child| {
+                        assert_eq!(child, pid);
+                        assert!(store.run(&run)?.observed_pid.is_none());
+                        assert!(store.verify()?.consistent);
+                        journaled.set(true);
+                        Ok::<(), Error>(())
+                    },
+                    refuse,
+                )
+                .err()
+                .unwrap()
+        } else {
+            let held = prepared
+                .start_after(nonce, |_| Ok::<(), Error>(()))
+                .unwrap()
+                .hold_exec()
+                .unwrap();
+            exec_held(&scope, pid, id.guardian_pid, &master);
+            held.release_after_checked(
+                |child| {
+                    store.observe_spawn(&run, child)?;
+                    journaled.set(true);
+                    Ok::<(), Error>(())
+                },
+                refuse,
+            )
+            .err()
+            .unwrap()
+        };
+        assert!(
+            matches!(failure.cause, StartCause::Transport(ref e) if e.kind() == std::io::ErrorKind::Interrupted)
+        );
+        assert!(failure.live_at_refusal.is_none());
+        assert_eq!(failure.closed.retire().unwrap().identity, id);
+        assert_eq!(witness.retire().unwrap().identity, id);
+        terminal_retired(&master, false);
+        assert!(!scope.join("final-exec").exists());
+        unresolved(&store, profile, &run);
+        drop(reader);
+        drop(store);
+        let reopened = Store::open(&root).unwrap();
+        unresolved(&reopened, profile, &run);
+        assert_eq!(
+            reopened.run(&run).unwrap().observed_pid,
+            if phase == "release" { Some(pid) } else { None }
+        );
+        assert!(reopened.verify().unwrap().consistent);
+    }
+}
+
+#[test]
+#[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
 fn exec_stop_precedes_spawn_journal_and_release_or_retirement() {
     let (prefix, directory) = environment();
     for finish in ["release", "journal", "disconnect", "guardian", "deadline"] {

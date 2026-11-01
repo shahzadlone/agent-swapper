@@ -550,7 +550,8 @@ def suite():
                 test_env = dict(os.environ, ASWP_ACTIVATION_PREFIX=prefix,
                                 ASWP_ACTIVATION_DIRECTORY=str(directory))
                 passed = []
-                for test in ('actual_lease_and_journal_gate_two_independent_activations',
+                for test in ('cancellation_after_durable_journal_never_releases_target_or_completes_run',
+                             'actual_lease_and_journal_gate_two_independent_activations',
                              'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent',
                              'invalid_or_independently_locked_lease_never_spawns_writer',
                              'guardian_sigkill_retires_writer_without_clearing_journal',

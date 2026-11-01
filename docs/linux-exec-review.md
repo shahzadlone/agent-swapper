@@ -104,3 +104,12 @@ the long-session check on Ubuntu 22.04/24.04 in jobs 124777197243 and
 The `/usr/lib` image-path and queued-report correction also passed both native
 manager jobs in [run 41282501325](https://github.com/shahzadlone/agent-swapper/actions/runs/41282501325).
 Full candidate/rebuild results are checked separately before main integration.
+
+An additional real-Store fixture now cancels at the final GO and held-exec
+release guards. A second Store connection verifies the committed intent/spawn
+observation before refusal. Both cases retain original witnesses, observe
+retirement, confirm no target instructions, then reopen SQLite and verify
+consistent replay and unresolved profile policy despite an available OS lease.
+This composes journal durability with withdrawal; it is not yet a Store-backed
+terminal frontend. Strict core Clippy and coordinator checks pass locally; the
+privileged fixture is run only on disposable native CI.
