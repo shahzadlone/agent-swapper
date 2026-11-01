@@ -44,6 +44,14 @@ struct TraceChild {
     reaped: bool,
 }
 impl TraceChild {
+    fn owned(child: Child) -> io::Result<Self> {
+        let pid = Pid::from_raw(i32::try_from(child.id()).map_err(io::Error::other)?);
+        Ok(Self {
+            child,
+            pid,
+            reaped: false,
+        })
+    }
     fn spawn(mode: &str, directory: &Path) -> io::Result<(Self, OwnedFd)> {
         let (control, input) = transport::pair()?;
         let mut command = Command::new(std::env::current_exe()?);
@@ -56,15 +64,7 @@ impl TraceChild {
             .stderr(Stdio::null());
         let child = command.spawn()?;
         drop(command);
-        let pid = Pid::from_raw(i32::try_from(child.id()).map_err(io::Error::other)?);
-        Ok((
-            Self {
-                child,
-                pid,
-                reaped: false,
-            },
-            control,
-        ))
+        Ok((Self::owned(child)?, control))
     }
     fn next(&mut self, deadline: Instant) -> io::Result<WaitStatus> {
         require(!self.reaped, "cannot wait on a reaped tracee")?;
@@ -150,7 +150,7 @@ impl Drop for TraceChild {
     }
 }
 
-fn shim(mode: &str, directory: &Path) -> io::Result<()> {
+fn parent_gate() -> io::Result<OwnedFd> {
     let channel = io::stdin().as_fd().try_clone_to_owned()?;
     require(
         rustix::net::sockopt::socket_type(&channel)? == rustix::net::SocketType::SEQPACKET,
@@ -162,6 +162,11 @@ fn shim(mode: &str, directory: &Path) -> io::Result<()> {
             && peer.uid() == rustix::process::getuid().as_raw(),
         "shim gate is not owned by its parent",
     )?;
+    Ok(channel)
+}
+
+fn shim(mode: &str, directory: &Path) -> io::Result<()> {
+    let channel = parent_gate()?;
     require(
         matches!(
             mode,
@@ -238,7 +243,7 @@ fn target(directory: &Path) -> io::Result<()> {
     std::process::exit(125);
 }
 
-fn experiment() -> io::Result<()> {
+fn require_wait_ownership() -> io::Result<()> {
     // This fresh, single-threaded executable has no competing waiters. An
     // inherited ignored SIGCHLD would invalidate unreaped-child ownership.
     let status = fs::read_to_string("/proc/self/status")?;
@@ -250,7 +255,102 @@ fn experiment() -> io::Result<()> {
     require(
         ignored & (1 << (Signal::SIGCHLD as u32 - 1)) == 0,
         "exec-event spike refuses ignored SIGCHLD",
+    )
+}
+
+fn tracer(stage: &str, directory: &Path) -> io::Result<()> {
+    require_wait_ownership()?;
+    let controller = parent_gate()?;
+    require(
+        matches!(stage, "before-go" | "exec-stop"),
+        "unknown tracer loss stage",
     )?;
+    let (mut child, control) = TraceChild::spawn("exec-125", directory)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    child.prepare(&control, deadline)?;
+    let pid = rustix::process::Pid::from_raw(child.pid.as_raw())
+        .ok_or_else(|| io::Error::other("invalid owned child PID"))?;
+    let witness = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())?;
+    if stage == "exec-stop" {
+        transport::send_until(&control, transport::GO, &[], deadline)?;
+        require(
+            TraceChild::confirmed(child.next(deadline)?, child.pid),
+            "tracer never observed exec stop",
+        )?;
+    }
+    require(
+        !directory.join("target-executed").exists(),
+        "target ran before tracer-loss barrier",
+    )?;
+    transport::send_until(&controller, transport::GO, &[witness.as_fd()], deadline)?;
+    // The controller kills this process after receiving the original pidfd.
+    // A lost controller or missing fault reaches bounded checked cleanup.
+    transport::receive_control_until(&controller, b"NO-RELEASE", deadline)?;
+    Err(io::Error::other("tracer loss fault was not injected"))
+}
+
+struct Witness {
+    fd: OwnedFd,
+    retired: bool,
+}
+impl Drop for Witness {
+    fn drop(&mut self) {
+        if !self.retired {
+            // Failure cleanup uses only the capability from the fixed tracer,
+            // never a PID claim. This is not counted as fault-retirement proof.
+            let _ = rustix::process::pidfd_send_signal(&self.fd, rustix::process::Signal::KILL);
+        }
+    }
+}
+fn tracer_loss() -> io::Result<()> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    for stage in ["before-go", "exec-stop"] {
+        let directory = tempfile::tempdir()?;
+        let (controller, input) = transport::pair()?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .args(["--tracer", stage])
+            .arg(directory.path())
+            .env_clear()
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut tracer = TraceChild::owned(command.spawn()?)?;
+        drop(command);
+        let mut witness = Witness {
+            fd: transport::receive_until(&controller, Instant::now() + Duration::from_secs(5))?,
+            retired: false,
+        };
+        let mut ready = [PollFd::new(&witness.fd, PollFlags::IN)];
+        let zero = Timespec::default();
+        require(
+            poll(&mut ready, Some(&zero))? == 0,
+            "tracee exited before tracer loss",
+        )?;
+        require(
+            !directory.path().join("target-executed").exists(),
+            "target ran before tracer loss",
+        )?;
+        // Only the owned, unreaped tracer is killed. This cannot execute its
+        // TraceChild destructor, so tracee exit must occur without that cleanup.
+        tracer.retire()?;
+        let timeout = Timespec::try_from(Duration::from_secs(3)).map_err(io::Error::other)?;
+        require(
+            poll(&mut ready, Some(&timeout))? == 1 && ready[0].revents().contains(PollFlags::IN),
+            "original tracee did not exit after tracer SIGKILL",
+        )?;
+        witness.retired = true;
+        require(
+            !directory.path().join("target-executed").exists(),
+            "target executed after tracer loss",
+        )?;
+        println!("exec-event tracer loss: {stage}: passed");
+    }
+    Ok(())
+}
+
+fn experiment() -> io::Result<()> {
+    require_wait_ownership()?;
     for mode in [
         "exec-125",
         "exec-error",
@@ -341,6 +441,10 @@ fn experiment() -> io::Result<()> {
         }
         println!("exec-event spike: {mode}: passed");
     }
+    tracer_loss()?;
+    println!(
+        "::notice title=Linux exec-event tracer loss::original child pidfd exited after owned tracer SIGKILL before GO and at the exec stop; target marker absent; no tracer destructor ran"
+    );
     println!(
         "::notice title=Linux exec-event spike::six fixed-child cases passed; exec event distinguishes target exit 125 from pre-exec exit, ENOENT, SIGKILL, plain SIGTRAP and deadline; target untraced after detach; no production qualification"
     );
@@ -353,6 +457,7 @@ fn main() {
         [] => experiment(),
         [role, mode, directory] if role == "--shim" => shim(mode, Path::new(directory)),
         [role, directory] if role == "--target" => target(Path::new(directory)),
+        [role, stage, directory] if role == "--tracer" => tracer(stage, Path::new(directory)),
         _ => Err(io::Error::other("unknown fixed spike role")),
     };
     if let Err(error) = result {

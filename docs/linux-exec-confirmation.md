@@ -35,8 +35,21 @@ refuses inherited ignored SIGCHLD, which would undermine its child ownership.
 Cleanup is explicit and checked in successful trials, with a bounded Drop
 fallback. It does not inspect target memory or registers.
 
-This is not yet an architecture choice. Native Ubuntu results and the Opus
-design review are pending. Later evidence must cover tracer loss, permission
+The six base cases at `5904d50` passed on Ubuntu 22.04 and 24.04 in
+[run 41267572192](https://github.com/shahzadlone/agent-swapper/actions/runs/41267572192).
+Its remaining platform/packaging checks and Opus design review are pending.
+
+Two additional local cases now kill an owned tracer with SIGKILL: after its
+child reaches the GO gate, and after the kernel exec stop but before detach.
+The tracer transfers its original child pidfd to the controller, which confirms
+the child is live immediately before killing only its own unreaped tracer.
+The child pidfd must then report exit and the target marker must remain absent.
+No tracer destructor can run. At the exec stop there is no target-side input
+loop that could mistake channel EOF for this shutdown. Failed observations
+use the received pidfd only for cleanup and never count that fallback as a
+passing fault result. These two cases await hosted validation.
+
+This is not yet an architecture choice. Later evidence must cover permission
 refusals, externally delivered signals, exec/detach/disconnect races, and
 combination with the actual guardian and journal. Provider-specific sandbox,
 dumpability, credential and tracing compatibility remains unmeasured. An exec
