@@ -144,3 +144,52 @@ Local validation for this correction passed the nine real-process cases, 18
 runtime tests plus three compile-fail doctests, 65 isolated-manager tests and
 strict Clippy for both workspaces. Both native CI manager jobs now run the new
 probe before activation tests; their results remain pending.
+
+
+## Cooked startup suspension and final cleanup
+
+The next qualification checkpoint lets the managed outer owner forward Ctrl-Z
+without stopping before its child. While admission is still cooked, that child
+suspends before GO or held-exec release. Foreground continuation uses the original
+admission deadline: time spent stopped does not extend it. If the guardian expires
+while the client is suspended, foregrounding the client must fail without target
+instructions and still attempt original-scope retirement. Durable Store records
+remain unresolved. Active-session external SIGTSTP remains outside the fixture
+contract; inner-terminal Ctrl-Z already uses the target's observed stop protocol.
+
+Final cleanup drains already queued suspension requests before restoring the
+signal mask. It preserves fatal cancellation, including when a cleanup observation
+fails. This is not atomic against signals arriving after the drain and does not
+establish target success or scope retirement. A three-case real-process probe
+checks stop-only completion, pending fatal cancellation, and an earlier explicit
+cancellation. Its negative control with the old finalizer stopped the child on
+SIGTSTP instead of returning its expected exit code; all three corrected cases
+pass locally.
+
+New hosted cases stop admission at the final GO and held-exec release guards,
+then resume; they run through both the file journal and the real Store adapter.
+A separate case holds suspension past guardian expiry and verifies original
+pidfds, original cgroup-directory disappearance, absent target instructions,
+terminal restoration and unresolved Store state. Native qualification is pending.
+
+Opus's follow-up review against `a490aa7` found more create-before-write races
+in shell-generated terminal snapshots. All snapshots in this harness are now
+published by rename, compared only once newline-terminated, and include both
+values on mismatch. The background/foreground drain test now leaves four seconds
+of idle-budget margin instead of two. These are evidence-quality corrections;
+they do not change the five-second idle or fifteen-second total drain policy.
+
+Local validation for cooked suspension passed: 67 isolated manager tests,
+18 shared runtime tests plus three compile-fail doctests, 67 Store tests with
+the qualification feature (33 privileged/crash roles explicitly gated), nine
+outer-PTY cases, thirteen surviving-owner/fresh-entry cases, fourteen installer
+checks, all three completion-signal cases, and strict isolated/core-feature
+Clippy. The ordinary-host Store refusal probe also passed. The hosted suites
+now contain 60 file-journal cases, 24 real-Store cases, the long-session case,
+and a stopped-admission-expiry case for each journal consumer. Their new native
+results are pending.
+
+The [follow-up source review](linux-exec-review-followup.md) records the second
+Opus review, the stronger signal regression and diagnostic/snapshot corrections.
+The combined qualification revision includes cooked suspension and real-Store
+composition. Its native results remain pending.

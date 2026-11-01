@@ -1,7 +1,8 @@
 # Linux managed execution: production integration boundary
 
-Status: implementation sequence under source review. The first shared
-[transport extraction](linux-runtime.md) is implemented and being qualified. Normal Linux execution is
+Status: shared [transport, signal and terminal ownership](linux-runtime.md)
+and fresh process entry are qualified. A fixed [real-Store terminal consumer](linux-store-terminal.md)
+is implemented for native qualification. Normal Linux execution is
 still the explicit uncontained preview. The fixed qualification crate must not
 be enabled as a production launcher by removing its CI checks.
 
@@ -18,8 +19,10 @@ The root manager owns process membership and removal. The guardian owns the
 inner terminal, its direct child wait and the profile lease. A fresh outer
 helper owns terminal signal handling; a surviving parent restores attributes
 after observed child stop/death when its original group owns the foreground.
-The existing CLI/TUI must start that fresh helper instead of changing signal
-masks in an already multithreaded process.
+The trusted session helper owns both Store and the original manager/process
+observation handles. The surviving parent restores terminal state and has no
+journal-completion authority. The existing CLI/TUI must start that fresh helper
+instead of changing signal masks in an already multithreaded process.
 
 This remains local process custody under a trusted kernel/root manager. It does
 not isolate mutually hostile programs running as the same user, cover work

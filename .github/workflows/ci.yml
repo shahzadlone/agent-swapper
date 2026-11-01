@@ -256,6 +256,9 @@ jobs:
       - name: Evaluate fixed-child final-exec observation
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_event
+      - name: Qualify signals after job completion
+        timeout-minutes: 1
+        run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example completed_signals
       - name: Qualify advisory signals before held exec
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_advisory_signals
@@ -286,10 +289,15 @@ jobs:
         run: |
           python3 tools/check_manager_dependency_boundary.py
           cargo +1.98.0 test --locked -p agentswapper-core --lib --no-run
+      - name: Build and lint real Store terminal consumer
+        run: |
+          cargo +1.98.0 clippy --locked -p agentswapper-core --features linux-journal-qualification --example linux_managed_store_probe -- -D warnings
+          cargo +1.98.0 build --locked -p agentswapper-core --features linux-journal-qualification --example linux_managed_store_probe
+          python3 tools/check_linux_managed_terminal_relay.py target/debug/examples/linux_managed_store_probe --store-refusal
       - name: Verify fixed-user activation fixture guards
         run: python3 -m unittest discover -s tools -p test_linux_socket_activation.py -v
       - name: Evaluate fixed-user socket activation
-        timeout-minutes: 4
+        timeout-minutes: 6
         env:
           ASWP_CI_SOCKET_ACTIVATION: '1'
           ASWP_CI_ACTIVATED_JOURNAL: '1'

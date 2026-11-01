@@ -13,6 +13,7 @@ pub mod journal_client;
 )]
 mod journal_protocol;
 mod kernel;
+pub mod managed_terminal_relay;
 #[allow(dead_code, reason = "client validates the PTY created by the service")]
 mod terminal;
 mod watch;
