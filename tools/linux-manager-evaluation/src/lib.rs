@@ -19,77 +19,17 @@ mod terminal;
 mod watch;
 use common::{require, valid_invocation};
 
+use agentswapper_linux_manager::Manager as Connection;
 use serde::Serialize;
 use std::{
-    fs::{self, File},
-    io::{self, Read, Write},
-    num::NonZeroUsize,
-    os::{
-        fd::AsRawFd,
-        unix::fs::{FileTypeExt, MetadataExt},
-    },
-    path::Path,
+    io::{self, Write},
     time::Duration,
 };
-use zbus::{Connection, Message, OwnedObjectPath, OwnedVariant, connection::AuthMechanism};
 
-const SOCKET: &str = "/run/dbus/system_bus_socket";
-const DRIVER: &str = "org.freedesktop.DBus";
-const DRIVER_PATH: &str = "/org/freedesktop/DBus";
-const MANAGER: &str = "org.freedesktop.systemd1";
-const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
-const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
-const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
-
-fn bounded_file(path: impl AsRef<Path>, limit: usize) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    File::open(path)?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    require(bytes.len() <= limit, "metadata exceeds bounds")?;
-    Ok(bytes)
-}
-
-#[derive(Serialize)]
-struct PathFact {
-    path: &'static str,
-    uid: u32,
-    mode: u32,
-}
-
-fn prerequisites() -> io::Result<Vec<PathFact>> {
-    require(
-        !rustix::process::geteuid().is_root(),
-        "ordinary user required",
-    )?;
-    require(
-        Path::new("/run/systemd/system").is_dir(),
-        "system manager unavailable",
-    )?;
-    kernel::initial_namespace()?;
-    let mut facts = Vec::new();
-    for path in ["/", "/run", "/run/dbus", SOCKET] {
-        let meta = fs::symlink_metadata(path)?;
-        require(meta.uid() == 0, "bus path is not root-owned")?;
-        if path == SOCKET {
-            require(
-                meta.file_type().is_socket(),
-                "system bus path is not a socket",
-            )?;
-        } else {
-            require(
-                meta.is_dir() && meta.mode() & 0o022 == 0,
-                "system bus ancestor is mutable or not a directory",
-            )?;
-        }
-        facts.push(PathFact {
-            path,
-            uid: meta.uid(),
-            mode: meta.mode() & 0o7777,
-        });
-    }
-    Ok(facts)
-}
+use agentswapper_linux_manager::{
+    self as manager, PathFact, SERVICE_INTERFACE, UNIT_INTERFACE, owner, prerequisites, property,
+    unit_path,
+};
 
 #[derive(Debug)]
 struct Expected {
@@ -150,102 +90,6 @@ impl Expected {
     }
 }
 
-fn unit_path(unit: &str) -> String {
-    let mut path = String::from("/org/freedesktop/systemd1/unit/");
-    for b in unit.bytes() {
-        if b.is_ascii_alphanumeric() {
-            path.push(char::from(b));
-        } else {
-            path.push_str(&format!("_{b:02x}"));
-        }
-    }
-    path
-}
-
-fn checked_reply(reply: Message, sender: &str) -> io::Result<Message> {
-    require(
-        reply
-            .header()
-            .sender()
-            .is_some_and(|s| s.as_str() == sender),
-        "reply sender changed",
-    )?;
-    // This is a post-receive decoding bound. zbus applies its own larger wire
-    // limit before allocation; this check is not a custom transport memory cap.
-    require(
-        reply.data().len() <= 8192,
-        "manager reply exceeds decoding bound",
-    )?;
-    Ok(reply)
-}
-
-async fn driver_call<T: serde::Serialize + zbus::DynamicType>(
-    connection: &Connection,
-    method: &str,
-    body: &T,
-) -> io::Result<Message> {
-    let reply = connection
-        .call_method(Some(DRIVER), DRIVER_PATH, Some(DRIVER), method, body)
-        .await
-        .map_err(io::Error::other)?;
-    checked_reply(reply, DRIVER)
-}
-
-async fn owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniqueName> {
-    driver_call(connection, "GetNameOwner", &(MANAGER,))
-        .await?
-        .body()
-        .deserialize()
-        .map_err(io::Error::other)
-}
-
-async fn property(
-    connection: &Connection,
-    owner: &str,
-    path: &str,
-    interface: &str,
-    name: &str,
-) -> io::Result<OwnedVariant> {
-    // Only the authenticated unique name is a destination. Unique names cannot
-    // be auto-activated; no interactive-authorization flag or proxy is used.
-    let reply = connection
-        .call_method(
-            Some(owner),
-            path,
-            Some("org.freedesktop.DBus.Properties"),
-            "Get",
-            &(interface, name),
-        )
-        .await
-        .map_err(io::Error::other)?;
-    checked_reply(reply, owner)?
-        .body()
-        .deserialize()
-        .map_err(io::Error::other)
-}
-
-async fn manager_call<T: serde::Serialize + zbus::DynamicType>(
-    connection: &Connection,
-    owner: &str,
-    method: &str,
-    body: &T,
-) -> io::Result<OwnedObjectPath> {
-    let reply = connection
-        .call_method(
-            Some(owner),
-            MANAGER_PATH,
-            Some("org.freedesktop.systemd1.Manager"),
-            method,
-            body,
-        )
-        .await
-        .map_err(io::Error::other)?;
-    checked_reply(reply, owner)?
-        .body()
-        .deserialize()
-        .map_err(io::Error::other)
-}
-
 #[derive(Serialize)]
 struct UnitFact {
     unit: String,
@@ -294,7 +138,7 @@ async fn snapshot(
     owner: &str,
     expected: &Expected,
 ) -> io::Result<(UnitFact, kernel::Binding)> {
-    let name_path = manager_call(connection, owner, "GetUnit", &(&expected.unit,)).await?;
+    let name_path = manager::get_unit(connection, owner, &expected.unit).await?;
     require(
         name_path.as_str() == unit_path(&expected.unit),
         "unexpected unit object path",
@@ -318,7 +162,7 @@ async fn snapshot(
     // It differs from GetUnit's name path and expires with this invocation.
     // Bind the properties read through that object, rather than assuming the
     // two path strings must match or continuing to address a reusable name.
-    let path = manager_call(connection, owner, "GetUnitByInvocationID", &(&first,)).await?;
+    let path = manager::get_invocation(connection, owner, &first).await?;
     let id = String::try_from(property(connection, owner, &path, UNIT_INTERFACE, "Id").await?)
         .map_err(io::Error::other)?;
     let active =
@@ -422,6 +266,21 @@ async fn snapshot(
         "unit snapshot disagrees with expected fixture",
     )?;
     let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
+    if matches!(&expected.kind, UnitKind::Activated { .. }) {
+        let (prefix, _) = expected
+            .unit
+            .split_once('@')
+            .ok_or_else(|| io::Error::other("activation image lacks its fixed prefix"))?;
+        require(
+            fixture_policy::valid_prefix(prefix),
+            "invalid activation image prefix",
+        )?;
+        let path = format!("/usr/lib/{prefix}.guardian");
+        let image = agentswapper_linux_runtime::installed_image::ProtectedImage::open(
+            std::path::Path::new(&path),
+        )?;
+        kernel.require_main_image(&image)?;
+    }
     let invocation_xattr = invocation_xattr(kernel.directory(), &first, &invocation)?;
     let bound_pid =
         u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
@@ -477,50 +336,8 @@ async fn admit(
     Report,
     Option<kernel::Binding>,
 )> {
-    let before = fs::symlink_metadata(SOCKET)?;
-    let stream = tokio::net::UnixStream::connect(SOCKET).await?.into_std()?;
-    let peer = activation_packet::peer(&stream)?;
-    let after = fs::symlink_metadata(SOCKET)?;
-    require(
-        before.dev() == after.dev() && before.ino() == after.ino(),
-        "bus path changed while connecting",
-    )?;
-    require(
-        peer.uid() == 0,
-        "bus listener peer is not root; record platform before widening policy",
-    )?;
-    let connection = zbus::connection::Builder::unix_stream(stream)
-        .auth_mechanism(AuthMechanism::External)
-        .max_queued(NonZeroUsize::new(4).ok_or_else(|| io::Error::other("invalid queue bound"))?)
-        .method_timeout(Duration::from_secs(2))
-        .build()
-        .await
-        .map_err(io::Error::other)?;
+    let (connection, owner_before, transport) = manager::connect().await?;
     let result = async {
-        let owner_before = owner(&connection).await?;
-        let credentials: zbus::fdo::ConnectionCredentials =
-            driver_call(&connection, "GetConnectionCredentials", &(&owner_before,))
-                .await?
-                .body()
-                .deserialize()
-                .map_err(io::Error::other)?;
-        require(
-            credentials.unix_user_id() == Some(0) && credentials.process_id() == Some(1),
-            "manager owner is not root PID 1",
-        )?;
-        if let Some(fd) = credentials.process_fd() {
-            let info = bounded_file(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()), 4096)?;
-            let info = std::str::from_utf8(&info).map_err(io::Error::other)?;
-            let pids = info
-                .lines()
-                .filter_map(|l| l.strip_prefix("Pid:"))
-                .map(str::trim)
-                .collect::<Vec<_>>();
-            require(
-                pids == ["1"],
-                "manager process descriptor does not identify local PID 1",
-            )?;
-        }
         let (unit, kernel) = match expected {
             Some(e) => {
                 let (fact, binding) = snapshot(&connection, owner_before.as_str(), &e).await?;
@@ -536,12 +353,12 @@ async fn admit(
             phase: "snapshot",
             scope: "read-only transport measurement; no custody receipt",
             paths,
-            peer_uid: peer.uid(),
-            peer_pid: peer.pid(),
-            manager_uid: 0,
-            manager_pid: 1,
-            process_fd: credentials.process_fd().is_some(),
-            dbus_override_ignored: std::env::var_os("DBUS_SYSTEM_BUS_ADDRESS").is_some(),
+            peer_uid: transport.peer_uid,
+            peer_pid: transport.peer_pid,
+            manager_uid: transport.manager_uid,
+            manager_pid: transport.manager_pid,
+            process_fd: transport.process_fd,
+            dbus_override_ignored: transport.dbus_override_ignored,
             unit,
             retirement: None,
             activation: None,
@@ -673,39 +490,6 @@ pub fn run_cli() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn replies_require_the_bound_sender_and_bounded_decoding()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let request = Message::method_call(MANAGER_PATH, "GetUnit").build(&("fixture",))?;
-        for sender in [DRIVER, ":1.42"] {
-            let reply = Message::method_return(&request.header())
-                .sender(sender)
-                .build(&1_u32)?;
-            let accepted = checked_reply(reply, sender)?;
-            assert_eq!(accepted.body().deserialize::<u32>()?, 1);
-        }
-        let unsigned = Message::method_return(&request.header()).build(&1_u32)?;
-        assert!(checked_reply(unsigned, ":1.42").is_err());
-        let other = Message::method_return(&request.header())
-            .sender(":1.43")
-            .build(&1_u32)?;
-        assert!(checked_reply(other, ":1.42").is_err());
-        let oversized = Message::method_return(&request.header())
-            .sender(":1.42")
-            .build(&vec![0_u8; 8192])?;
-        assert!(checked_reply(oversized, ":1.42").is_err());
-        let wrong_type = Message::method_return(&request.header())
-            .sender(":1.42")
-            .build(&"1")?;
-        assert!(
-            checked_reply(wrong_type, ":1.42")?
-                .body()
-                .deserialize::<u32>()
-                .is_err()
-        );
-        Ok(())
-    }
 
     #[test]
     fn fixture_requests_bind_names_and_canonical_invocations() -> io::Result<()> {

@@ -18,3 +18,9 @@ pub mod terminal;
 
 #[cfg(target_os = "linux")]
 pub mod scope_observation;
+
+#[cfg(target_os = "linux")]
+pub mod child_waiter;
+
+#[cfg(target_os = "linux")]
+pub mod installed_image;

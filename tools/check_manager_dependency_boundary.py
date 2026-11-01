@@ -18,7 +18,7 @@ def check():
     versions = [{p['name']: p['version'] for p in packages if p['name'] in names} for packages in locks]
     if versions[0] != versions[1] or versions[0].keys() != names:
         raise RuntimeError('root and isolated manager dependency pins differ')
-    forbidden = {'aswp-linux-manager-evaluation', 'zbus', 'tokio', 'unix-ancillary'}
+    forbidden = {'agentswapper-linux-manager', 'aswp-linux-manager-evaluation', 'zbus', 'tokio', 'unix-ancillary'}
     for package in ('agentswapper-core', 'agentswapper-cli'):
         result = subprocess.run(['cargo', '+1.98.0', 'tree', '--locked', '-p', package,
                                  '--edges', 'normal,build', '--prefix', 'none', '--format', '{p}'],
@@ -32,6 +32,12 @@ def check():
     present = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
     if (forbidden | {'agentswapper-core', 'agentswapper-cli', 'rusqlite', 'age'}) & present:
         raise RuntimeError('Linux helper transport acquired application or manager dependencies')
+    result = subprocess.run(['cargo', '+1.98.0', 'tree', '--locked', '-p', 'agentswapper-linux-manager',
+                             '--edges', 'normal,build', '--prefix', 'none', '--format', '{p}'],
+                            cwd=root, capture_output=True, text=True, check=True, timeout=60)
+    present = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
+    if {'aswp-linux-manager-evaluation', 'agentswapper-core', 'agentswapper-cli', 'rusqlite', 'age', 'unix-ancillary', 'fuxix'} & present:
+        raise RuntimeError('Read-only manager transport acquired application or fixture dependencies')
     print('Manager qualification dependency pins match; production graphs remain isolated.')
 
 

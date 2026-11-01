@@ -566,6 +566,23 @@ def startup_stop(binary, phase, env, expire=False, background=False, restop=Fals
             data = json.loads((root / 'session-ready').read_text())
             parent = data['group']
             owned.probe_fd = os.pidfd_open(parent)
+            relay_fd = os.pidfd_open(data['pid'])
+            descriptors.append(relay_fd)
+            def job_states():
+                def diagnostic():
+                    details = {}
+                    for name in ('admission-error', 'relay-error', 'retirement-unresolved',
+                                 'owner-background-stop', 'owner-background-exit'):
+                        marker = root / name
+                        if marker.is_file():
+                            with marker.open('rb') as stream:
+                                details[name] = stream.read(2048).decode(errors='replace')
+                    return f'admission job ended unexpectedly: phase={phase}, background={background}, expire={expire}, restop={restop}, diagnostics={details!r}'
+                assert not select.select([owned.probe_fd, relay_fd], [], [], 0)[0], diagnostic()
+                try:
+                    return state(parent), state(data['pid'])
+                except FileNotFoundError as error:
+                    raise AssertionError(diagnostic()) from error
             assert os.tcgetpgrp(owned.master) == parent and os.path.samefile(f'/proc/{parent}/exe', binary)
             stat = Path(f'/proc/{parent}/stat').read_text().rsplit(') ', 1)[1].split()
             assert int(stat[1]) == owned.pid
@@ -592,7 +609,7 @@ def startup_stop(binary, phase, env, expire=False, background=False, restop=Fals
             owned.wait(stop_pending)
             (root / 'admission-release').write_text('observe cooked stop before control release')
             owned.wait(lambda: prompt in owned.output[offset:] and os.tcgetpgrp(owned.master) == owned.pid)
-            assert state(parent) == state(data['pid']) == 'T'
+            assert job_states() == ('T', 'T')
             assert (root / 'owner-restored-stop').exists() and not (marker_root / 'final-exec').exists()
             owned.send(b'/usr/bin/stty -g > paused-mode.tmp && mv paused-mode.tmp paused-mode\n')
             owned.wait(lambda: (root / 'paused-mode').exists() and (root / 'paused-mode').stat().st_size > 0)
@@ -600,7 +617,7 @@ def startup_stop(binary, phase, env, expire=False, background=False, restop=Fals
             if background:
                 offset = len(owned.output)
                 owned.send(b'bg\n')
-                owned.wait(lambda: prompt in owned.output[offset:] and state(parent) != 'T' and state(data['pid']) != 'T')
+                owned.wait(lambda: prompt in owned.output[offset:] and all(value != 'T' for value in job_states()))
                 owned.send(b'/usr/bin/stty -g > background-mode.tmp && mv background-mode.tmp background-mode\n')
                 snapshot_matches(owned, root, 'background-mode')
                 time.sleep(0.4)
@@ -611,7 +628,7 @@ def startup_stop(binary, phase, env, expire=False, background=False, restop=Fals
                     owned.send(b'kill -TSTP %1\n')
                     def stopped_again():
                         assert not select.select([owned.probe_fd], [], [], 0)[0], 'background re-stop killed the original owner'
-                        return prompt in owned.output[offset:] and state(parent) == state(data['pid']) == 'T'
+                        return prompt in owned.output[offset:] and job_states() == ('T', 'T')
                     owned.wait(stopped_again)
                     assert (root / 'owner-background-stop').exists()
                     assert not (root / 'retired').exists() and not (marker_root / 'final-exec').exists()
@@ -623,7 +640,7 @@ def startup_stop(binary, phase, env, expire=False, background=False, restop=Fals
                 # admission deadline must retire the scope without client help.
                 owned.wait(lambda: all(select.select([fd], [], [], 0)[0] for fd in pidfds), seconds=20)
                 owned.wait(lambda: not scope_path.exists())
-                assert state(parent) == state(data['pid']) == 'T'
+                assert job_states() == ('T', 'T')
                 assert not (root / 'retired').exists() and not (marker_root / 'final-exec').exists()
                 try:
                     fd = os.open('cgroup.events', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=scope_fd)

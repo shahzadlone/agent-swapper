@@ -39,3 +39,11 @@ This correction establishes cleanup ownership. The subsequent
 real-time signal outcomes and passed the complete pipeline at `36884d4`. No numeric PID is used as a retained process identity.
 The underlying distinction between waiting and inspecting its returned status
 is described by [waitpid(2)](https://man7.org/linux/man-pages/man2/waitpid.2.html).
+
+The shared job-control consumer now delegates its raw wait and cleanup to
+`agentswapper-linux-runtime::child_waiter::ChildWaiter`. Ptrace and fixed-group
+resume remain in the fixture wrapper. The raw real-time test moved to the runtime;
+the higher-level decode-failure test still verifies that its wrapper refuses
+later numeric operations. New raw-wait tests cover lost ownership and actual
+cleanup of the original child. See the [runtime boundary](linux-runtime.md#exclusive-direct-child-waiting)
+for pending native extraction evidence and the sole-waiter contract.
