@@ -1,10 +1,7 @@
 //! Combined cooperating-fixture experiment. No production journal or stop receipt.
 use super::*;
 use crate::cgroup;
-use rustix::{
-    net::{RecvFlags, recv},
-    process::{Signal, getpid, kill_process_group},
-};
+use rustix::process::{Signal, getpid, kill_process_group};
 use std::{fs::TryLockError, os::unix::process::ExitStatusExt};
 
 pub(super) fn fixture(role: &str, directory: &Path, path: &Path) -> io::Result<()> {
@@ -86,13 +83,7 @@ pub(super) fn fixture(role: &str, directory: &Path, path: &Path) -> io::Result<(
 
     // Only the parent owns the peer. No target inherits this close-on-exec socket.
     until(deadline, || {
-        let mut byte = [0_u8; 1];
-        match recv(io::stdin(), &mut byte, RecvFlags::DONTWAIT) {
-            Ok((0, _)) => Ok(Some(())),
-            Ok(_) => Err(io::Error::other("unexpected guardian control packet")),
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        Ok(admission_transport::eof(io::stdin())?.then_some(()))
     })?;
     empty_scope(&leaf, deadline)?;
     publish(

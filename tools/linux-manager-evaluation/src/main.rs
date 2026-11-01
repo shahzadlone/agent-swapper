@@ -1,6 +1,15 @@
-//! Read-only transport qualification. No service creation or custody receipt.
+//! Manager observation and opted-in fixture activation. No custody receipts.
 #![forbid(unsafe_code)]
 
+mod activated_guardian;
+mod activation;
+mod activation_packet;
+#[allow(
+    dead_code,
+    reason = "qualification service shares the reviewed core transport"
+)]
+#[path = "../../../crates/agentswapper-core/src/supervision/linux_admission_transport.rs"]
+mod admission_transport;
 mod kernel;
 mod watch;
 
@@ -94,6 +103,13 @@ struct Expected {
     user: u32,
     pid: u32,
     invocation: Option<String>,
+    kind: UnitKind,
+}
+
+#[derive(Debug)]
+enum UnitKind {
+    Transient,
+    Activated { fragment: String },
 }
 
 impl Expected {
@@ -135,6 +151,7 @@ impl Expected {
             user,
             pid,
             invocation,
+            kind: UnitKind::Transient,
         }))
     }
 }
@@ -324,6 +341,24 @@ async fn snapshot(
     let transient =
         bool::try_from(property(connection, owner, &path, UNIT_INTERFACE, "Transient").await?)
             .map_err(io::Error::other)?;
+    match &expected.kind {
+        UnitKind::Transient => require(transient, "expected a transient fixture unit")?,
+        UnitKind::Activated { fragment } => {
+            let actual = String::try_from(
+                property(connection, owner, &path, UNIT_INTERFACE, "FragmentPath").await?,
+            )
+            .map_err(io::Error::other)?;
+            let drop_ins = Vec::<String>::try_from(
+                property(connection, owner, &path, UNIT_INTERFACE, "DropInPaths").await?,
+            )
+            .map_err(io::Error::other)?;
+            require(
+                !transient && actual == *fragment && drop_ins.is_empty(),
+                "activation template or drop-ins differ",
+            )?;
+            activation::protected_fragment(fragment)?;
+        }
+    }
     let pid =
         u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
             .map_err(io::Error::other)?;
@@ -340,6 +375,31 @@ async fn snapshot(
     let kill_mode =
         String::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "KillMode").await?)
             .map_err(io::Error::other)?;
+    let service_type =
+        String::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "Type").await?)
+            .map_err(io::Error::other)?;
+    let pid_file =
+        String::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "PIDFile").await?)
+            .map_err(io::Error::other)?;
+    let notify = String::try_from(
+        property(connection, owner, &path, SERVICE_INTERFACE, "NotifyAccess").await?,
+    )
+    .map_err(io::Error::other)?;
+    let remain = bool::try_from(
+        property(
+            connection,
+            owner,
+            &path,
+            SERVICE_INTERFACE,
+            "RemainAfterExit",
+        )
+        .await?,
+    )
+    .map_err(io::Error::other)?;
+    require(
+        service_type == "exec" && pid_file.is_empty() && notify == "none" && !remain,
+        "fixture service lifecycle differs from direct manager-owned execution",
+    )?;
     let last = Vec::<u8>::try_from(
         property(connection, owner, &path, UNIT_INTERFACE, "InvocationID").await?,
     )
@@ -368,7 +428,6 @@ async fn snapshot(
     require(
         id == expected.unit
             && active == "active"
-            && transient
             && pid == expected.pid
             && user == expected.user.to_string()
             && group == format!("/system.slice/{}", expected.unit)
@@ -378,13 +437,19 @@ async fn snapshot(
     )?;
     let kernel = kernel::Binding::bind(&id, expected.user, pid)?;
     let invocation_xattr = invocation_xattr(kernel.directory(), &first, &invocation)?;
+    let bound_pid =
+        u32::try_from(property(connection, owner, &path, SERVICE_INTERFACE, "MainPID").await?)
+            .map_err(io::Error::other)?;
+    let bound_active =
+        String::try_from(property(connection, owner, &path, UNIT_INTERFACE, "ActiveState").await?)
+            .map_err(io::Error::other)?;
     let corroborated = Vec::<u8>::try_from(
         property(connection, owner, &path, UNIT_INTERFACE, "InvocationID").await?,
     )
     .map_err(io::Error::other)?;
     require(
-        corroborated == first,
-        "invocation changed during kernel observation",
+        corroborated == first && bound_pid == pid && bound_active == "active",
+        "manager state changed during kernel observation",
     )?;
     let fact = UnitFact {
         unit: id,
@@ -413,6 +478,8 @@ struct Report {
     dbus_override_ignored: bool,
     unit: Option<UnitFact>,
     retirement: Option<kernel::Retirement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activation: Option<activation::Fact>,
 }
 
 async fn admit(
@@ -426,14 +493,14 @@ async fn admit(
 )> {
     let before = fs::symlink_metadata(SOCKET)?;
     let stream = tokio::net::UnixStream::connect(SOCKET).await?.into_std()?;
-    let peer = rustix::net::sockopt::socket_peercred(&stream)?;
+    let peer = activation_packet::peer(&stream)?;
     let after = fs::symlink_metadata(SOCKET)?;
     require(
         before.dev() == after.dev() && before.ino() == after.ino(),
         "bus path changed while connecting",
     )?;
     require(
-        peer.uid.is_root(),
+        peer.uid() == 0,
         "bus listener peer is not root; record platform before widening policy",
     )?;
     let connection = zbus::connection::Builder::unix_stream(stream)
@@ -483,14 +550,15 @@ async fn admit(
             phase: "snapshot",
             scope: "read-only transport measurement; no custody receipt",
             paths,
-            peer_uid: peer.uid.as_raw(),
-            peer_pid: peer.pid.as_raw_nonzero().get(),
+            peer_uid: peer.uid(),
+            peer_pid: peer.pid(),
             manager_uid: 0,
             manager_pid: 1,
             process_fd: credentials.process_fd().is_some(),
             dbus_override_ignored: std::env::var_os("DBUS_SYSTEM_BUS_ADDRESS").is_some(),
             unit,
             retirement: None,
+            activation: None,
         };
         Ok((owner_before, report, kernel))
     }
@@ -498,7 +566,9 @@ async fn admit(
     match result {
         Ok((owner, report, kernel)) => Ok((connection, owner, report, kernel)),
         Err(error) => {
-            connection.close().await.map_err(io::Error::other)?;
+            // Closing remains bounded by the caller's deadline, but should
+            // not replace the observation error with a secondary close error.
+            let _ = connection.close().await;
             Err(error)
         }
     }
@@ -522,7 +592,7 @@ async fn inspect(
             .map_err(|_| {
                 io::Error::new(io::ErrorKind::TimedOut, "manager binding deadline exceeded")
             })??;
-    let result = async {
+    let result: io::Result<Report> = async {
         if watch {
             let unit = report
                 .unit
@@ -533,19 +603,50 @@ async fn inspect(
                 .ok_or_else(|| io::Error::other("watch requires a kernel binding"))?;
             report.phase = "bound";
             write_report(&report)?;
-            report.retirement =
-                Some(watch::retire(&connection, owner.as_str(), unit, binding).await?);
+            report.retirement = Some(
+                watch::retire(&connection, owner.as_str(), unit, binding)
+                    .await
+                    .map_err(|error| {
+                        io::Error::other(format!("retirement observation failed: {error}"))
+                    })?,
+            );
             report.phase = "retired";
         }
         Ok(report)
     }
     .await;
-    connection.close().await.map_err(io::Error::other)?;
-    result
+    let closed = connection.close().await.map_err(io::Error::other);
+    let report = result?;
+    closed?;
+    Ok(report)
 }
 
 fn run() -> io::Result<Report> {
     let mut args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|arg| arg == "--activation-probe") {
+        require(
+            args.len() == 2,
+            "activation probe requires one fixture prefix",
+        )?;
+        activation::gate(&args[1])?;
+        let paths = prerequisites()?;
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(35),
+                    activation::inspect(paths, &args[1]),
+                )
+                .await
+                .map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "activation observation deadline exceeded",
+                    )
+                })?
+            });
+    }
     let watch = args.first().is_some_and(|arg| arg == "--watch");
     if watch {
         args.remove(0);
@@ -575,6 +676,26 @@ fn run() -> io::Result<Report> {
 }
 
 fn main() {
+    if let Some(result) = activated_guardian::dispatch() {
+        if let Err(error) = result {
+            // Fixture diagnostics only: this role accepts no provider secrets.
+            // stdout is the activation socket, which the fault controls inspect.
+            let mut diagnostic: String = error.to_string().escape_debug().take(1800).collect();
+            while diagnostic.len() > 1800 {
+                diagnostic.pop();
+            }
+            let packet = format!("activation fixture refused: {diagnostic}\n");
+            // One bounded record, even when stdout's line writer would split a
+            // formatted diagnostic. A full/closed peer must not block cleanup.
+            let _ = rustix::net::send(
+                io::stdout(),
+                packet.as_bytes(),
+                rustix::net::SendFlags::NOSIGNAL | rustix::net::SendFlags::DONTWAIT,
+            );
+            std::process::exit(125);
+        }
+        return;
+    }
     if let Err(error) = run().and_then(|report| write_report(&report)) {
         let diagnostic: String = error.to_string().escape_debug().take(2000).collect();
         eprintln!("manager observation unavailable or refused: {diagnostic}");

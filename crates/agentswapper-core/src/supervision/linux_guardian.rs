@@ -3,7 +3,6 @@ use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     fd::{BorrowedFd, OwnedFd},
     fs::OFlags,
-    net::{RecvFlags, recv},
     process::{Pid, getpgid, getpgrp, getpid, getppid},
 };
 use std::{
@@ -309,15 +308,9 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
     drop(grant);
     drop([input, output, diagnostic]);
     let status = loop {
-        let mut packet = [0_u8; 1];
-        match recv(&channel, &mut packet, RecvFlags::DONTWAIT) {
-            Ok((0, _)) => {
-                scope.stop_and_retire(Instant::now() + CLEANUP)?;
-                return Ok(());
-            }
-            Ok(_) => return Err(io::Error::other("unexpected guardian control message")),
-            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
-            Err(error) => return Err(error.into()),
+        if transport::eof(&channel)? {
+            scope.stop_and_retire(Instant::now() + CLEANUP)?;
+            return Ok(());
         }
         if let Some(status) = target.0.try_wait()? {
             break status;
@@ -339,6 +332,7 @@ fn run(channel: impl AsFd, path: &Path, foreground: Pid, deadline: Instant) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustix::net::{RecvFlags, recv};
 
     #[test]
     fn shim_failure_status_is_not_reported_as_a_target_exit() -> io::Result<()> {

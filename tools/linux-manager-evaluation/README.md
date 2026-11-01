@@ -1,8 +1,16 @@
 # Linux manager transport evaluation
 
-Read-only, provider-free **qualification code**, kept outside the production
-workspace and binary dependency graph. It creates no service, requests no
-privileges, reads no login data and issues no process-custody receipt.
+Provider-free **qualification code**, kept outside the production workspace
+and binary dependency graph. Snapshot/watch modes only observe an existing
+manager. The separate `--activation-probe` mode connects to a preinstalled
+fixture socket and thereby activates its service; it requires explicit opt-in
+on a disposable hosted runner and the matching run/attempt prefix. It installs
+no units, requests no privileges, reads no login data and issues no
+process-custody receipt. Its private `--activation-guardian` and
+`--activation-writer` roles implement only the fixed hosted-CI fixture; they
+require its opted-in environment and protected temporary executable. They do
+not accept provider launch data or install services. See
+[the activation evaluation](../../docs/linux-managed-launch.md).
 
 This is the first checkpoint toward an authenticated managed-invocation
 observer. The existing core parser validates text structure only. This tool
@@ -77,7 +85,9 @@ snapshot has a ten-second total budget including close; watch adds a bounded
 twenty-second retirement phase within a thirty-second total budget. The four-message queue and
 8 KiB **post-receive** reply check are not a custom wire-allocation cap: zbus
 retains its own larger message limit. No signal subscriptions, proxy caches,
-service activation calls, interactive authorization or mutating calls are used.
+service activation calls, interactive authorization or mutating D-Bus calls are used.
+The explicitly gated socket-activation mode is separate from these read-only
+snapshot/watch commands and has a 35-second overall observation budget.
 The system bus and root are trusted; this is not isolation from a compromised
 bus/kernel or administrative changes. The result does not establish the
 production namespace, journal, launch or terminal contract.
@@ -145,9 +155,16 @@ measurement before selecting a production peer policy. Later checkpoints need
 production API separation, broader live refusal/replacement fixtures and
 independent source review. The design review
 does not qualify this implementation. No production backend is enabled.
-The requested follow-up implementation review could not run because Claude
-reported its subscription session limit. It remains outstanding; the failed
-request is not source-review evidence.
+A later focused Opus source review of `main.rs` and `watch.rs` at `4ccd252`
+completed. Its post-bind manager-state recheck and primary-error preservation
+are implemented. The separate kernel review also completed; its service-lifecycle
+restrictions and refreshed migration-control checks are implemented and await
+native validation. The activation
+review found a real PID-zero representation problem in the former credential
+decoder. Its replacement and disconnect follow-up are recorded in
+[the activation evidence](../../docs/linux-managed-launch.md#credential-and-disconnect-follow-up).
+Earlier quota-limited or interrupted review requests are not counted as
+completed audits. No production backend is enabled.
 
 References: [systemd's D-Bus interface](https://www.freedesktop.org/software/systemd/man/262/org.freedesktop.systemd1.html),
 [D-Bus credentials](https://dbus.freedesktop.org/doc/dbus-specification.html#bus-messages-get-connection-credentials),
