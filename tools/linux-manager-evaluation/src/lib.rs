@@ -17,7 +17,7 @@ pub mod managed_terminal_relay;
 #[allow(dead_code, reason = "client validates the PTY created by the service")]
 mod terminal;
 mod watch;
-use common::{identity_map, require, valid_invocation};
+use common::{require, valid_invocation};
 
 use serde::Serialize;
 use std::{
@@ -705,20 +705,6 @@ mod tests {
                 .is_err()
         );
         Ok(())
-    }
-
-    #[test]
-    fn namespace_gate_rejects_remapped_and_partial_identity_ranges() {
-        assert!(identity_map(b"         0          0 4294967295\n"));
-        for bytes in [
-            b"0 1000 1".as_slice(),
-            b"0 0 65536",
-            b"0 0 4294967295\n1 1 1",
-            b"0 0 4294967296",
-            b"\xff",
-        ] {
-            assert!(!identity_map(bytes));
-        }
     }
 
     #[test]

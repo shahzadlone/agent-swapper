@@ -15,3 +15,6 @@ pub mod signals;
 
 #[cfg(target_os = "linux")]
 pub mod terminal;
+
+#[cfg(target_os = "linux")]
+pub mod scope_observation;

@@ -1,6 +1,6 @@
 [package]
 name = "agentswapper-linux-runtime"
-description = "Private Linux launch transport for AgentSwapper helpers"
+description = "Linux helper transport, terminal ownership and process observations for AgentSwapper"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

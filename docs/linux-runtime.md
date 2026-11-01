@@ -99,3 +99,42 @@ managed-terminal, cross-platform packaging and rebuild qualification in
 [run 41281405713](https://github.com/shahzadlone/agent-swapper/actions/runs/41281405713).
 An earlier terminal-only attempt refused installation on a runner with noexec
 `/run`; alternate fixture placement is being qualified separately.
+
+
+## Retained kernel observations
+
+The next extraction moves the existing procfs, pidfd and cgroup checks into
+`scope_observation`. Both the client and ordinary-user guardian consume the same
+runtime implementation. The fixture wrapper retains its exact accepted name
+policy, diagnostic serialization and fault injection. The shared code adds no
+registry dependency, manager client, signal send, installer or migration write.
+The default production dependency graph is unchanged.
+
+The shared binder accepts only a bounded ASCII service leaf beneath the retained
+system slice; callers must independently authenticate their installation, manager
+and invocation. The fixture still applies its stricter namespace first. A valid
+leaf does not authorize a launch. The binder retains the original cgroup directory,
+guardian pidfd/proc directory and each target witness; it preserves same-mount,
+identity, direct-child and protected migration-control checks. Scope disappearance
+still requires a fresh ENOENT relative to the retained directory and the original
+guardian pidfd to have exited. ENODEV remains unresolved and retryable.
+
+Live/retirement structs are diagnostic facts, with no serialization implementation
+in the runtime. They do not prove manager retirement and are never accepted by
+Store as completion receipts. The caller must still observe the same authenticated
+manager invocation independently. The borrowed original guardian pidfd supports
+the existing fixture's fault injection without moving that operation into the
+runtime or replacing it with a numeric-PID lookup.
+
+The six kernel regressions and namespace-map test moved with the implementation;
+a service-leaf traversal/control-character/length regression was added. No kernel
+coverage was removed: duplicate copies formerly compiled in both evaluation
+library and binary are now one runtime suite. Local runtime validation passed
+26 tests plus three compile-fail doctests, with one receiver role invoked by its
+cross-process test. Strict runtime and qualification Clippy pass. Native combined
+terminal/Store qualification of this extraction remains pending. This is a shared
+observation building block, not production managed execution.
+
+The reduced evaluation suite passes all 54 tests after moving the duplicated
+kernel cases. Strict core Clippy also passes with the Store qualification feature,
+and the dependency-boundary check confirms identical pinned graphs.

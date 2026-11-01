@@ -2,7 +2,8 @@
 
 Status: shared [transport, signal and terminal ownership](linux-runtime.md)
 and fresh process entry are qualified. A fixed [real-Store terminal consumer](linux-store-terminal.md)
-is implemented for native qualification. Normal Linux execution is
+passed native qualification. Shared retained kernel observations are now being
+qualified as the next runtime extraction. Normal Linux execution is
 still the explicit uncontained preview. The fixed qualification crate must not
 be enabled as a production launcher by removing its CI checks.
 
