@@ -15,20 +15,24 @@ _spec.loader.exec_module(_activation)
 require = _activation.require
 
 
-def expected_fragment(fragment, name):
-    return fragment in (f'/usr/lib/systemd/system/{name}', f'/lib/systemd/system/{name}')
+DIRECTORIES = {'vendor': Path('/usr/lib/systemd/system'), 'generated': Path('/etc/systemd/system')}
 
 
-def administer():
+def expected_fragment(fragment, name, kind):
+    return fragment == str(DIRECTORIES[kind] / name) or (
+        kind == 'vendor' and fragment == f'/lib/systemd/system/{name}')
+
+
+def administer(kind):
     prefix = _activation.fixture_prefix().replace('aswp-activation-', 'aswp-fragment-', 1)
     require(os.geteuid() == 0, 'fragment measurement requires its disposable administrator')
     uid, gid = _activation.ordinary_ids(os.environ.get('SUDO_UID', ''), os.environ.get('SUDO_GID', ''))
-    name = prefix + '.service'
-    path = Path('/usr/lib/systemd/system') / name
+    name = prefix + '-' + kind + '.service'
+    path = DIRECTORIES[kind] / name
     for parent in reversed(path.parents):
         metadata = parent.lstat()
         require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0
-                and metadata.st_mode & 0o022 == 0, 'vendor unit ancestry is not protected')
+                and metadata.st_mode & 0o022 == 0, 'measurement unit ancestry is not protected')
     require(not os.path.lexists(path), 'fragment measurement unit already exists')
     require(_activation.unit_properties(name, ('LoadState',)) == {'LoadState': 'not-found'},
             'fragment measurement name already resolves')
@@ -46,12 +50,13 @@ def administer():
         require(fields['LoadState'] == 'loaded' and fields['ActiveState'] == 'inactive'
                 and fields['MainPID'] == '0' and fields['DropInPaths'] == ''
                 and fields['NeedDaemonReload'] == 'no', 'measurement unit is not an unchanged inactive unit')
-        require(expected_fragment(fields['FragmentPath'], name), 'unexpected vendor fragment spelling')
+        require(expected_fragment(fields['FragmentPath'], name, kind), 'unexpected fragment spelling')
         reported = Path(fields['FragmentPath']).stat()
         require((reported.st_dev, reported.st_ino) == created[0][1:],
                 'reported fragment does not name the exclusively created inode')
         alias = Path('/lib').lstat()
-        print('::notice title=Linux vendor fragment::' + json.dumps({
+        print('::notice title=Linux unit fragment::' + json.dumps({
+            'kind': kind,
             'created': str(path), 'reported': fields['FragmentPath'], 'same_inode': True,
             'lib_is_root_owned': alias.st_uid == 0, 'lib_is_symlink': stat.S_ISLNK(alias.st_mode),
             'lib_target': os.readlink('/lib') if stat.S_ISLNK(alias.st_mode) else None,
@@ -68,15 +73,17 @@ def administer():
 
 def main():
     args = sys.argv[1:]
-    require(args in ([], ['--admin']), 'unexpected fragment measurement arguments')
+    require(args in ([], ['--admin', 'vendor'], ['--admin', 'generated']),
+            'unexpected fragment measurement arguments')
     _activation.fixture_prefix()
     if args:
-        administer()
+        administer(args[1])
     else:
         require(os.geteuid() != 0, 'fragment measurement requires an ordinary runner')
-        subprocess.run(['sudo', '-n', '--preserve-env=' + _activation.PRESERVE,
-                        '/usr/bin/timeout', '--kill-after=3s', '45s', '/usr/bin/python3', '-I', '-B', '-S',
-                        str(Path(__file__).resolve()), '--admin'], check=True, timeout=50)
+        for kind in DIRECTORIES:
+            subprocess.run(['sudo', '-n', '--preserve-env=' + _activation.PRESERVE,
+                            '/usr/bin/timeout', '--kill-after=3s', '45s', '/usr/bin/python3', '-I', '-B', '-S',
+                            str(Path(__file__).resolve()), '--admin', kind], check=True, timeout=50)
 
 
 if __name__ == '__main__':

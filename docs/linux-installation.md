@@ -29,9 +29,17 @@ identity and generation derive the following locations:
 | Asset | Fixed location |
 | --- | --- |
 | Guardian, session helper, exec shim | `/usr/libexec/agentswapper/<uid>/<generation>/{guardian,session-helper,exec-shim}` |
-| Service template | `/usr/lib/systemd/system/agentswapper-<uid>-<generation>@.service` |
-| Socket unit | `/usr/lib/systemd/system/agentswapper-<uid>-<generation>.socket` |
+| Service template | `/etc/systemd/system/agentswapper-<uid>-<generation>@.service` |
+| Socket unit | `/etc/systemd/system/agentswapper-<uid>-<generation>.socket` |
 | Endpoint | `/run/agentswapper/<uid>/<generation>.sock` |
+
+Per-user units are administrator-generated configuration, so they use systemd's
+[administrator unit directory](https://www.freedesktop.org/software/systemd/man/249/systemd.unit.html).
+The hosted measurement found that Ubuntu 22.04 reports a vendor unit created
+under `/usr/lib` through `/lib`, while Ubuntu 24.04 reports `/usr/lib`. The
+generated-unit location keeps exact loaded-fragment matching and symlink refusal.
+This changes an unreleased installation contract; no production installer has
+created the older vendor-path layout.
 
 `InstalledManifest::open` and `InstalledArtifacts::open` are lower-level metadata
 readers. A caller-selected generation does not create a `SelectedInstallation`,
@@ -109,7 +117,7 @@ Privileged Python roles use isolated startup and explicit sibling-module loading
 | Path reopening with unchanged retained inode metadata | Full CI at `7791f02`: [41303860668](https://github.com/shahzadlone/agent-swapper/actions/runs/41303860668) |
 | Selector replacement before final admission, after successful binding, and original image changes | Both native Ubuntu suites passed at `241ded2`: [41306656317](https://github.com/shahzadlone/agent-swapper/actions/runs/41306656317); full pipeline pending at documentation time |
 | Missing/premature admission-transition mutations in ordinary observers | Both mutants built locally; native results pending |
-| Vendor-unit `/lib` versus `/usr/lib` spelling | Hosted measurement added; results pending |
+| Vendor-unit `/lib` versus `/usr/lib` spelling | Both measured at `f54f80a` in [41307090865](https://github.com/shahzadlone/agent-swapper/actions/runs/41307090865); exact generated-unit path controls added and awaiting native results |
 | Single-link admission and link additions after observation | Ordinary runtime tests passed; native controls pending |
 
 The admission barrier and deliberately mutated observers exist only in test

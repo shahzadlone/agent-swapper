@@ -49,6 +49,24 @@ pub(crate) fn valid_generation(value: &str) -> bool {
     hex(value, 32)
 }
 impl Document {
+    fn unit_stem(&self) -> String {
+        format!("agentswapper-{}-{}", self.user, self.generation)
+    }
+    fn unit_path(&self, suffix: &str) -> PathBuf {
+        PathBuf::from(format!("/etc/systemd/system/{}{suffix}", self.unit_stem()))
+    }
+    fn endpoint(&self) -> PathBuf {
+        PathBuf::from(format!(
+            "/run/agentswapper/{}/{}.sock",
+            self.user, self.generation
+        ))
+    }
+    fn image(&self, name: &str) -> PathBuf {
+        PathBuf::from(format!(
+            "/usr/libexec/agentswapper/{}/{}/{name}",
+            self.user, self.generation
+        ))
+    }
     fn parse(bytes: &[u8], user: u32, group: u32, generation: &str) -> io::Result<Self> {
         if bytes.len() > 16 * 1024 || !ordinary(user, group) || !hex(generation, 32) {
             return Err(invalid());
@@ -134,52 +152,40 @@ impl InstalledManifest {
         (self.document.user, self.document.group)
     }
     pub fn unit_stem(&self) -> String {
-        format!(
-            "agentswapper-{}-{}",
-            self.document.user, self.document.generation
-        )
+        self.document.unit_stem()
     }
     pub fn endpoint(&self) -> PathBuf {
-        PathBuf::from(format!(
-            "/run/agentswapper/{}/{}.sock",
-            self.document.user, self.document.generation
-        ))
+        self.document.endpoint()
     }
     pub fn guardian(&self) -> (PathBuf, &str) {
-        (self.image("guardian"), &self.document.guardian_sha256)
+        (
+            self.document.image("guardian"),
+            &self.document.guardian_sha256,
+        )
     }
     pub fn session_helper(&self) -> (PathBuf, &str) {
         (
-            self.image("session-helper"),
+            self.document.image("session-helper"),
             &self.document.session_helper_sha256,
         )
     }
     pub fn exec_shim(&self) -> (PathBuf, &str) {
-        (self.image("exec-shim"), &self.document.exec_shim_sha256)
+        (
+            self.document.image("exec-shim"),
+            &self.document.exec_shim_sha256,
+        )
     }
     pub fn service_template(&self) -> (PathBuf, &str) {
         (
-            PathBuf::from(format!(
-                "/usr/lib/systemd/system/{}@.service",
-                self.unit_stem()
-            )),
+            self.document.unit_path("@.service"),
             &self.document.service_template_sha256,
         )
     }
     pub fn socket_unit(&self) -> (PathBuf, &str) {
         (
-            PathBuf::from(format!(
-                "/usr/lib/systemd/system/{}.socket",
-                self.unit_stem()
-            )),
+            self.document.unit_path(".socket"),
             &self.document.socket_unit_sha256,
         )
-    }
-    fn image(&self, name: &str) -> PathBuf {
-        PathBuf::from(format!(
-            "/usr/libexec/agentswapper/{}/{}/{name}",
-            self.document.user, self.document.generation
-        ))
     }
 }
 
@@ -193,6 +199,41 @@ mod tests {
             "exec_shim_sha256":"c".repeat(64),"service_template_sha256":"d".repeat(64),"socket_unit_sha256":"e".repeat(64)})
     }
     #[test]
+    fn production_layout_uses_uid_generation_and_administrator_units() -> io::Result<()> {
+        // Test validated metadata's path contract without fabricating a
+        // protected file, selected installation or service admission value.
+        let document = Document::parse(&serde_json::to_vec(&valid())?, 1000, 1001, GENERATION)?;
+        for (actual, expected) in [
+            (
+                document.unit_path("@.service"),
+                "/etc/systemd/system/agentswapper-1000-00112233445566778899aabbccddeeff@.service",
+            ),
+            (
+                document.unit_path(".socket"),
+                "/etc/systemd/system/agentswapper-1000-00112233445566778899aabbccddeeff.socket",
+            ),
+            (
+                document.endpoint(),
+                "/run/agentswapper/1000/00112233445566778899aabbccddeeff.sock",
+            ),
+            (
+                document.image("guardian"),
+                "/usr/libexec/agentswapper/1000/00112233445566778899aabbccddeeff/guardian",
+            ),
+            (
+                document.image("session-helper"),
+                "/usr/libexec/agentswapper/1000/00112233445566778899aabbccddeeff/session-helper",
+            ),
+            (
+                document.image("exec-shim"),
+                "/usr/libexec/agentswapper/1000/00112233445566778899aabbccddeeff/exec-shim",
+            ),
+        ] {
+            assert_eq!(actual, Path::new(expected));
+        }
+        Ok(())
+    }
+    #[test]
     fn manifest_refuses_incompatible_identity_protocol_and_artifacts() -> io::Result<()> {
         let good = serde_json::to_vec(&valid())?;
         Document::parse(&good, 1000, 1001, GENERATION)?;
@@ -203,6 +244,10 @@ mod tests {
             ("user", serde_json::json!(0)),
             ("group", serde_json::json!(1000)),
             ("generation", serde_json::json!("../other")),
+            (
+                "generation",
+                serde_json::json!("112233445566778899aabbccddeeff0011"),
+            ),
             ("guardian_sha256", serde_json::json!("a".repeat(63))),
             ("session_helper_sha256", serde_json::json!("A".repeat(64))),
             ("exec_shim_sha256", serde_json::json!("0".repeat(64))),

@@ -28,30 +28,33 @@ must be checked against code and native behavior.
 The local checks and the native result for each revision must be recorded
 separately. These changes do not supply restart recovery or target-exit evidence.
 
-## Remaining review work
+## Review checkpoints
 
 | Area | Required follow-up |
 | --- | --- |
-| Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
-| Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
-| systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
+| Admission lifetime | Real binding and both deliberate observer mutations passed on Ubuntu 22.04/24.04 at `f6cce6d` (`41306933304`); complete pipeline still tracked separately. |
+| Observation lifetime | Live completion retains the original binding/key and never selects a new generation. Fresh diagnostic witnesses are qualification-only and their receipts fail Store association. Restart recovery remains a separate unimplemented production gate. |
+| systemd path compatibility | Vendor-path difference measured at `f54f80a`. Generated per-user units now use `/etc/systemd/system`; exact-path native controls pending. |
 | Installed inode lifetime | Single-link admission and retained-link mutation controls implemented; native results pending. Installer must preserve independent, unchanged inodes while admitted runs retain them. |
-| Policy API | Guard admitted policies from reuse; test production path derivation and narrow caller-selected generation/layout APIs. |
-| Build features | Verify shipped CLI feature graphs exclude qualification APIs. |
+| Policy API | Admitted-policy reuse refused; path-derivation contract covered. Lower-level metadata readers cannot construct a selection or launch authority; raw service policies and layout overrides are qualification-only. |
+| Build features | Default dependency-feature checks and negative API doctests pass; candidate builds use the default production graph. |
 
 The vendor-path measurement creates one exclusively owned, inactive unit under
 `/usr/lib/systemd/system` on each hosted Ubuntu image. It queries the loaded
 `FragmentPath`, checks that it names the same inode, records the `/lib` alias,
 and removes its unit. The fixture has no activation dependencies and refuses
-manual start. Local controls cover early refusal outside hosted CI and the
-fixed path spellings. Native measurements remain pending; no runtime alias
-acceptance is added on the strength of a presumed distribution layout.
+manual start. Both hosted measurements passed at `f54f80a`: Ubuntu 22.04
+reported `/lib`, and Ubuntu 24.04 reported `/usr/lib`, with the original inode
+in both cases. Per-user generated units now use the administrator directory
+`/etc/systemd/system`. The follow-up requires exact reporting for that path on
+both runners; runtime fragment equality and protected-path checks remain strict.
 
 Source review suggested that selector admission ends at successful `bind`.
 That is the current implementation: already-bound services retain their original
 generation even if launch preparation happens later. A selector change does not
-terminate existing work. This needs a real-service control and a documented
-upgrade/revocation policy before installer integration.
+terminate existing work. Real-service and mutation controls now pass on both
+Ubuntu images; installer integration must preserve the documented original
+artifact lifetime and provide its own update/removal tests.
 
 ## Native evidence
 
@@ -159,8 +162,9 @@ The checked-in databases retain their original journal, timestamps and schema;
 provenance sidecars and a generator document their origin. A regression test
 checks complete event preservation, pending-run fencing, completed-run reuse,
 verified backups and reopening. That test and strict workspace Clippy passed
-locally, and the checked-in generator reproduced a valid fixture. Cross-platform
-CI for this fixture revision is pending. See
+locally, and the checked-in generator reproduced a valid fixture. Full CI passed
+at `4494f35` (`41306277254`), after the macOS test used the Store's canonical
+temporary path so SQLite's no-symlink policy stayed intact. See
 [the fixture notes](../crates/agentswapper-core/tests/fixtures/historical/README.md).
 
 ## Generation-layout preparation
@@ -169,9 +173,9 @@ The activated fixture now reserves distinct manifests for its original and next
 generation; the reader derives their paths from the selector. Both reference the
 same fixed images and units. A pure contract test verifies the exact Rust-facing
 field inventory, distinct valid generations, initial selection and artifact
-hashes. All 47 Linux harness tests pass locally. Native coverage of the new
-layout, followed by real service selector-switch and mutation controls, remains
-required before the admission-lifetime finding is closed.
+hashes. All 47 Linux harness tests passed locally. Both native Ubuntu suites
+passed the later real selector-switch and mutation controls at `f6cce6d`
+(`41306933304`), closing the admission-lifetime finding for this qualified consumer.
 
 ### Service admission across selector replacement
 
@@ -198,7 +202,9 @@ The guardian always uses the original binary. Only the ordinary observers carry
 the faults; both must fail with the specific expected diagnostic, after the
 unmodified controls pass. Two dedicated Ubuntu jobs keep this compilation out
 of the bounded journal/terminal step. Both mutated observers built locally and
-all 50 ordinary Linux harness controls passed. Native results remain pending.
+all 50 ordinary Linux harness controls passed. Both mutation jobs and both full
+native manager suites passed at `f6cce6d` (`41306933304`). The complete
+cross-platform packaging/rebuild pipeline is tracked separately.
 
 ## Source-review follow-up at 7df8703
 
