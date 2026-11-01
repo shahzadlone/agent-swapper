@@ -12,6 +12,11 @@ format differed between runner versions. The harness now waits for the original
 child to leave its stopped state and then verifies working input. It compares
 the numeric signal value explicitly. Neither correction weakens the protocol
 or permits a resume-request marker to stand in for observed target execution.
+The follow-up run (`8c6d683`, `41274062393`) passed through shell stop, background,
+foreground and matching before/after `stty` snapshots, then exposed an invalid
+extra assertion comparing bash's live readline mode to pre-shell attributes.
+Shell cases now consistently compare complete command-time snapshots; direct
+cases still compare every original termios field and control character.
 
 The relay passes bytes unchanged in both directions, with separate 16 KiB
 queues. Initial dimensions and resize events reach the inner PTY. Typed signal

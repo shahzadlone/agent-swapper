@@ -37,7 +37,13 @@ def retired(owned, root):
     # No guardian or client copy may retain the original OFD lease afterwards.
     with (root / 'lease').open('rb+') as lease:
         fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    assert termios.tcgetattr(owned.master) == owned.original
+    if owned.shell:
+        # Bash readline changes terminal modes while displaying its prompt.
+        # Compare the complete command-time snapshots on either side of the
+        # relay; direct probes compare every original termios field instead.
+        assert (root / 'after').read_text() == (root / 'before').read_text()
+    else:
+        assert termios.tcgetattr(owned.master) == owned.original
 
 
 def target_command(owned, command, response):
