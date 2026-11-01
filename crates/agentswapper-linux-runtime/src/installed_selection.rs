@@ -93,6 +93,7 @@ impl SelectedInstallation {
         load: impl FnOnce(&str) -> io::Result<InstalledArtifacts>,
     ) -> io::Result<Self> {
         let selector = ProtectedConfig::open(path)?;
+        selector.require_single_link()?;
         let selection = Selection::parse(&selector.read()?)?;
         let artifacts = load(&selection.generation)?;
         let value = Self {

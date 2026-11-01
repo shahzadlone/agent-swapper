@@ -50,11 +50,20 @@ in both cases. Per-user generated units now use the administrator directory
 both runners; runtime fragment equality and protected-path checks remain strict.
 
 Source review suggested that selector admission ends at successful `bind`.
+
 That is the current implementation: already-bound services retain their original
 generation even if launch preparation happens later. A selector change does not
 terminate existing work. Real-service and mutation controls now pass on both
 Ubuntu images; installer integration must preserve the documented original
 artifact lifetime and provide its own update/removal tests.
+
+The first inode-policy CI run exposed an overbroad check: a generic process-image
+test encountered a hardlinked system executable. Single-link policy now belongs
+to installation selection, manifest and complete artifact admission. Generic
+read-only image observations retain their existing change detection. Native
+controls exercise the actual installation consumers, plus link additions after
+opening; no system executable or test's image identity was changed to avoid the
+refusal. This correction requires a fresh CI result.
 
 ## Native evidence
 

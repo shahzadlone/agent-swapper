@@ -75,7 +75,6 @@ pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
             && stat.st_mode & 0o022 == 0,
         "installed file is not a root-owned protected regular file",
     )?;
-    single_link(&stat)?;
     Ok(file)
 }
 

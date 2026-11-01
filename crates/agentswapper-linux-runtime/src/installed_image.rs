@@ -31,7 +31,6 @@ impl ProtectedImage {
     pub fn open(path: &Path) -> io::Result<Self> {
         let image = crate::protected_file::open(path)?;
         let stat = fstat(&image)?;
-        crate::protected_file::single_link(&stat)?;
         require(
             stat.st_uid == 0 && stat.st_mode & 0o7777 == 0o755,
             "image is not a root-owned mode-0755 regular file",
@@ -52,6 +51,15 @@ impl ProtectedImage {
         let value = Self { file: image, stamp };
         value.require_unchanged()?;
         Ok(value)
+    }
+
+    pub(crate) fn require_single_link(&self) -> io::Result<()> {
+        let stat = fstat(&self.file)?;
+        crate::protected_file::single_link(&stat)?;
+        require(
+            self.stamp == Stamp::from_stat(stat),
+            "installed image changed since admission began",
+        )
     }
 
     fn require_unchanged(&self) -> io::Result<()> {

@@ -13,6 +13,8 @@ import tempfile
 
 CASES = {
     'protected': None,
+    'image-hardlink-observation': None,
+    'config-hardlink-observation': None,
     'config-nosuid-noexec': None,
     'config-executable': 'installed configuration is not mode 0644',
     'config-oversize': 'installed configuration exceeds 16 KiB',
@@ -20,7 +22,6 @@ CASES = {
     'config-replaced': 'installed configuration changed since admission began',
     'config-modified': 'installed configuration changed since admission began',
     'config-mode-changed': 'installed configuration changed since admission began',
-    'config-hardlink': 'installed file must have exactly one link',
     'config-link-added': 'installed configuration changed since admission began',
     'config-ancestor-replaced': 'installed configuration path no longer names the retained file',
     'config-mount-overlaid': 'installed configuration path no longer names the retained file',
@@ -38,11 +39,17 @@ CASES = {
     'image-replaced': 'installed image changed since admission began',
     'image-modified': 'installed image changed since admission began',
     'image-mode-changed': 'installed image changed since admission began',
-    'image-hardlink': 'installed file must have exactly one link',
     'image-link-added': 'installed image changed since admission began',
     'image-ancestor-replaced': 'installed image path no longer names the retained file',
     'image-mount-overlaid': 'installed image path no longer names the retained file',
     'bundle-protected': None,
+    'bundle-guardian-hardlink': 'installed file must have exactly one link',
+    'bundle-session-helper-hardlink': 'installed file must have exactly one link',
+    'bundle-exec-shim-hardlink': 'installed file must have exactly one link',
+    'bundle-template-hardlink': 'installed file must have exactly one link',
+    'bundle-socket-hardlink': 'installed file must have exactly one link',
+    'manifest-hardlink': 'installed file must have exactly one link',
+    'selection-hardlink': 'installed file must have exactly one link',
     'bundle-guardian-mismatch': 'installed asset digest mismatch',
     'bundle-session-helper-mismatch': 'installed asset digest mismatch',
     'bundle-exec-shim-mismatch': 'installed asset digest mismatch',
@@ -287,6 +294,8 @@ def mounted_case(case, binary, uid, gid):
                     asset = base / filename
                     asset.write_bytes(payload if case != f'bundle-{name}-mismatch' else b'mismatched bytes\n')
                     asset.chmod(mode)
+                    if case == f'bundle-{name}-hardlink':
+                        os.link(asset, base / 'alias')
                 if case == 'bundle-missing-helper':
                     (base / 'session-helper').unlink()
             contents = json.dumps(document)
@@ -311,7 +320,9 @@ def mounted_case(case, binary, uid, gid):
             image.chmod(0o775)
         elif case == 'user-owned':
             os.chown(image, uid, gid)
-        elif case in ('config-hardlink', 'image-hardlink'):
+        elif case in ('manifest-hardlink', 'selection-hardlink'):
+            os.link(base / 'active.json' if case == 'selection-hardlink' else image, base / 'alias')
+        elif case in ('image-hardlink-observation', 'config-hardlink-observation'):
             os.link(image, base / 'alias')
         script = str(Path(__file__).resolve())
         role = '--config-probe' if case.startswith('config-') else '--probe'

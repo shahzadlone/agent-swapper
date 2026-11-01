@@ -21,7 +21,6 @@ impl ProtectedConfig {
     pub fn open(path: &Path) -> io::Result<Self> {
         let file = crate::protected_file::open(path)?;
         let metadata = fstat(&file)?;
-        crate::protected_file::single_link(&metadata)?;
         if metadata.st_uid != 0 {
             return Err(io::Error::other(
                 "installed configuration is no longer root-owned",
@@ -32,6 +31,13 @@ impl ProtectedConfig {
         }
         let stamp = Stamp::from_stat(metadata);
         Ok(Self { file, stamp })
+    }
+    /// Installation generations require independent inodes. Generic protected
+    /// configuration observations may also inspect hardlinked system files.
+    pub(crate) fn require_single_link(&self) -> io::Result<()> {
+        let metadata = fstat(&self.file)?;
+        crate::protected_file::single_link(&metadata)?;
+        self.stamp.require_config(Stamp::from_stat(metadata))
     }
     /// Read at most 16 KiB from the retained file, independently of shared file
     /// offsets. Content parsing, version checks and installation authorization

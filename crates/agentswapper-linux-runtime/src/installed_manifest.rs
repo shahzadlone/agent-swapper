@@ -124,6 +124,7 @@ impl InstalledManifest {
     }
     fn read(path: &Path, user: u32, group: u32, generation: &str) -> io::Result<Self> {
         let file = ProtectedConfig::open(path)?;
+        file.require_single_link()?;
         let document = Document::parse(&file.read()?, user, group, generation)?;
         file.require_current(path)?;
         Ok(Self {

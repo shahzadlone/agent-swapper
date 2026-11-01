@@ -57,8 +57,10 @@ must have mode 0755, no file capabilities, and an executable, non-nosuid mount.
 The caller must establish a trusted namespace independently: root UID metadata
 alone is not provenance.
 
-Every installed file must have exactly one hard link both at opening and when
-its original stamp is captured. The stamp covers inode identity, link count,
+The installation selector, manifest and five artifacts must each have exactly
+one hard link matching their original opening stamp before admission. Generic
+read-only file/image observations can still inspect hardlinked system binaries.
+The stamp covers inode identity, link count,
 size, modification/change times, mode and ownership. Later checks validate the
 retained inode and reopen its protected pathname. Replacing a file with identical
 bytes, replacing an ancestor or overlaying the pathname still refuses.
