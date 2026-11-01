@@ -193,3 +193,28 @@ The [follow-up source review](linux-exec-review-followup.md) records the second
 Opus review, the stronger signal regression and diagnostic/snapshot corrections.
 The combined qualification revision includes cooked suspension and real-Store
 composition. Its native results remain pending.
+
+
+## Background startup and active external stop policy
+
+Source review found that the cooked startup continuation path could return from
+SIGTSTP after shell `bg` without checking foreground ownership before its grant.
+Admission now waits for `fg` without terminal I/O, mode changes or target release.
+Every checkpoint uses the original session deadline, including time spent stopped
+or backgrounded. Cancellation remains observable while waiting in the background.
+Expiry attempts original-scope retirement and preserves unresolved Store state.
+
+Four new regular cases cover bg/fg at the final GO and held-exec release guards
+through the two journal consumers. Separate background-expiry cases verify that
+the waiting helper exits, the shell keeps its foreground and modes, original
+pidfds/cgroup disappear, and no target instructions run. The preceding foreground
+stop/expiry cases remain. The hosted suites now comprise 64 file-journal cases,
+27 Store cases, the long-session case, and four admission-expiry cases.
+
+External SIGTSTP during active relay is explicitly refused: restoration and
+scope retirement are attempted and the command returns 125. New direct/owned
+and Store cases check the refusal, descendant cleanup and exact modes. This does
+not change normal typed Ctrl-Z through the inner terminal and its authenticated
+target-stop/resume flow. Supporting an external stop for arbitrary nested
+foreground jobs requires an additional protocol; it is not silently treated as
+a successful suspension. New native results remain pending.

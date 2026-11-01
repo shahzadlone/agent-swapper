@@ -405,6 +405,13 @@ def failures(binary, scenario, env, owned_parent=False):
                     # No destructor can execute after SIGKILL. With no surviving
                     # owner this direct test terminal remains raw.
                     assert termios.tcgetattr(owned.master)[3] & (termios.ICANON | termios.ECHO | termios.ISIG) == 0
+            elif scenario == 'external-stop-refusal':
+                outer = os.pidfd_open(owned.pid)
+                descriptors.append(outer)
+                signal.pidfd_send_signal(outer, signal.SIGTSTP)
+                owned.finish(125)
+                retired(owned, root)
+                assert (root / 'relay-error').read_text() == 'external suspension is unsupported for an active managed target'
             elif scenario == 'unknown-exit':
                 assert env.get('ASWP_CI_EXEC_GATE') == '1'
                 signal.pidfd_send_signal(pidfds[data['guardian']], signal.SIGKILL)
@@ -545,7 +552,7 @@ def admission(binary, phase, scenario, env, owned_parent):
             owned.close()
 
 
-def startup_stop(binary, phase, env, expire=False):
+def startup_stop(binary, phase, env, expire=False, background=False):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-startup-stop-') as path:
         root = Path(path)
         owned = OwnedPty(binary, root, shell=True, environment=dict(env, ASWP_CI_ADMISSION_HOLD=phase))
@@ -589,7 +596,16 @@ def startup_stop(binary, phase, env, expire=False):
             owned.send(b'/usr/bin/stty -g > paused-mode.tmp && mv paused-mode.tmp paused-mode\n')
             owned.wait(lambda: (root / 'paused-mode').exists() and (root / 'paused-mode').stat().st_size > 0)
             snapshot_matches(owned, root, 'paused-mode')
-            if expire:
+            if background:
+                offset = len(owned.output)
+                owned.send(b'bg\n')
+                owned.wait(lambda: prompt in owned.output[offset:] and state(parent) != 'T' and state(data['pid']) != 'T')
+                owned.send(b'/usr/bin/stty -g > background-mode.tmp && mv background-mode.tmp background-mode\n')
+                snapshot_matches(owned, root, 'background-mode')
+                time.sleep(0.4)
+                assert not (root / 'retired').exists() and not (marker_root / 'final-exec').exists(), 'background continuation released admission'
+                assert os.tcgetpgrp(owned.master) == owned.pid
+            if expire and not background:
                 # The client remains stopped; the guardian's own original
                 # admission deadline must retire the scope without client help.
                 owned.wait(lambda: all(select.select([fd], [], [], 0)[0] for fd in pidfds), seconds=20)
@@ -604,19 +620,36 @@ def startup_stop(binary, phase, env, expire=False):
                     os.close(fd)
                     raise AssertionError('original stopped admission scope still exists')
             offset = len(owned.output)
-            owned.send(b'fg\n')
+            if expire and background:
+                owned.wait(lambda: select.select([owned.probe_fd], [], [], 0)[0] and (root / 'retired').exists(), seconds=18)
+                assert all(select.select([fd], [], [], 0)[0] for fd in pidfds)
+                assert (root / 'owner-background-exit').exists()
+                assert not (marker_root / 'final-exec').exists() and not scope_path.exists()
+                assert os.tcgetpgrp(owned.master) == owned.pid
+                owned.send(f'wait {parent}; printf "%s" "$?" > exit-code; /usr/bin/stty -g > after.tmp && mv after.tmp after\n'.encode())
+            else:
+                owned.send(b'fg\n')
             if not expire:
                 os.close(owned.probe_fd)
                 owned.probe_fd = None
                 ready = owned.ready(greeting=b'\x1b[0m\r\n')
                 exec_observed(root, ready, env)
                 target_command(owned, b'finish', 'FINAL:\x1b[34m→\x1b[0m\r\n'.encode())
-            owned.wait(lambda: prompt in owned.output[offset:] and (root / 'retired').exists())
-            owned.send(b'printf "%s" "$?" > exit-code; /usr/bin/stty -g > after.tmp && mv after.tmp after\n')
+            if not (expire and background):
+                owned.wait(lambda: prompt in owned.output[offset:] and (root / 'retired').exists())
+                owned.send(b'printf "%s" "$?" > exit-code; /usr/bin/stty -g > after.tmp && mv after.tmp after\n')
             owned.wait(lambda: (root / 'after').exists() and (root / 'after').stat().st_size > 0)
             assert (root / 'exit-code').read_text() == ('125' if expire else '0')
             if expire:
                 assert not (marker_root / 'final-exec').exists() and (root / 'admission-error').exists()
+                if background:
+                    try:
+                        fd = os.open('cgroup.events', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=scope_fd)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        os.close(fd)
+                        raise AssertionError('original background admission scope still exists')
                 with lease_path(root).open('rb+') as lease:
                     fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 snapshot_matches(owned, root, 'after')
@@ -625,7 +658,7 @@ def startup_stop(binary, phase, env, expire=False):
             owned.send(b'exit\n')
             owned.wait(lambda: owned.poll() is not None)
             assert os.waitstatus_to_exitcode(owned.status) == 0
-            print(f'exec-managed-startup-stop-{phase}-{"expired" if expire else "resumed"}: pass', flush=True)
+            print(f'exec-managed-startup-stop-{phase}-{"background-" if background else ""}{"expired" if expire else "resumed"}: pass', flush=True)
         finally:
             for fd in descriptors:
                 os.close(fd)
@@ -678,7 +711,7 @@ def long_session(binary, env):
 
 
 def main():
-    assert sys.platform == 'linux' and (len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] in ('--long-session', '--store', '--store-refusal', '--admission-stop-timeout')))
+    assert sys.platform == 'linux' and (len(sys.argv) == 2 or (len(sys.argv) == 3 and sys.argv[2] in ('--long-session', '--store', '--store-refusal', '--admission-stop-timeout', '--admission-background-timeout')))
     binary = Path(sys.argv[1]).resolve(strict=True)
     if len(sys.argv) == 3 and sys.argv[2] == '--store-refusal':
         with tempfile.TemporaryDirectory(prefix='aswp-store-refusal-') as path:
@@ -697,8 +730,8 @@ def main():
         exec_env = dict(env, ASWP_CI_EXEC_GATE='1')
         if sys.argv[2] == '--long-session':
             long_session(binary, exec_env)
-        elif sys.argv[2] == '--admission-stop-timeout':
-            startup_stop(binary, 'release-send', exec_env, expire=True)
+        elif sys.argv[2] in ('--admission-stop-timeout', '--admission-background-timeout'):
+            startup_stop(binary, 'release-send', exec_env, expire=True, background=sys.argv[2] == '--admission-background-timeout')
         else:
             for scenario in ('bytes-resize-tail', 'exit-code-7', 'target-realtime',
                              'delayed-final-drain', 'blocked-known-exit', 'flood-term'):
@@ -707,7 +740,7 @@ def main():
             shell_job(binary, False, exec_env, True, fresh=True)
             for scenario in ('fg', 'bg-fg', 'bg-expire', 'resume-race'):
                 stopped_exit(binary, scenario, exec_env, True)
-            for scenario in ('unknown-exit', 'client-kill', 'outer-hangup'):
+            for scenario in ('unknown-exit', 'client-kill', 'outer-hangup', 'external-stop-refusal'):
                 failures(binary, scenario, exec_env, True)
             for phase in ('go-send', 'release-send'):
                 for scenario in ('term', 'ctrl-c'):
@@ -716,7 +749,8 @@ def main():
                 admission(binary, phase, scenario, exec_env, True)
             for phase in ('go-send', 'release-send'):
                 startup_stop(binary, phase, exec_env)
-            print('::notice::real Store terminal composition: 24 cases passed with actual profile leases and durable run observations; retirement preserves unresolved journal policy', flush=True)
+                startup_stop(binary, phase, exec_env, background=True)
+            print('::notice::real Store terminal composition: 27 cases passed with actual profile leases and durable run observations; retirement preserves unresolved journal policy', flush=True)
         return
     for owned_parent in (False, True):
         for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term'):
@@ -727,6 +761,8 @@ def main():
             failures(binary, scenario, env, owned_parent)
     failures(binary, 'stopped-parent-loss', env, owned_parent=True)
     exec_env = dict(env, ASWP_CI_EXEC_GATE='1')
+    for owned_parent in (False, True):
+        failures(binary, 'external-stop-refusal', exec_env, owned_parent)
     for scenario in ('bytes-resize-tail', 'orphan-stop', 'nested', 'flood-term', 'exit-code-7', 'target-realtime'):
         direct(binary, scenario, exec_env, True)
     for scenario in ('delayed-final-drain', 'blocked-known-exit', 'exit-record-error'):
@@ -751,7 +787,8 @@ def main():
     shell_job(binary, False, exec_env, True, fresh=True)
     for phase in ('go-send', 'release-send'):
         startup_stop(binary, phase, exec_env)
-    print('::notice::managed two-terminal relay: sixty owned-PTY cases passed, including admission withdrawal, stopped death and bounded final output; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
+        startup_stop(binary, phase, exec_env, background=True)
+    print('::notice::managed two-terminal relay: sixty-four owned-PTY cases passed, including admission withdrawal, stopped death and bounded final output; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

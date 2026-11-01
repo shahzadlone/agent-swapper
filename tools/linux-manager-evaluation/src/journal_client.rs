@@ -656,6 +656,9 @@ impl Witness {
 }
 
 impl Prepared {
+    pub(crate) fn admission_deadline(&self) -> Instant {
+        self.session.deadline
+    }
     pub fn terminal(&self) -> Option<BorrowedFd<'_>> {
         self.session.terminal.as_ref().map(AsFd::as_fd)
     }
