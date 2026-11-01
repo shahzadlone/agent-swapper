@@ -1677,7 +1677,7 @@ fn client_sigkill_retires_writer_without_running_client_cleanup() {
     let mut wrong = id.clone();
     wrong.invocation = Uuid::new_v4().simple().to_string();
     let absent = Witness::bind(&prefix, &wrong, report.writer).err().unwrap();
-    assert_eq!(absent.kind(), io::ErrorKind::NotFound);
+    assert_eq!(absent.kind(), std::io::ErrorKind::NotFound);
     assert_eq!(absent.to_string(), "bound guardian invocation is absent");
     wrong = id.clone();
     wrong.directory_inode ^= 1;
