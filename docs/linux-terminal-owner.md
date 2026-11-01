@@ -1,7 +1,10 @@
 # Surviving owner for terminal restoration
 
-Status: seven local cases passed; hosted qualification pending. No production
-integration or combined manager/terminal-owner claim.
+Status: seven local cases passed. The initial five cases at `ceb0a0a` passed both
+Ubuntu manager jobs in
+[run 41274736525](https://github.com/shahzadlone/agent-swapper/actions/runs/41274736525).
+Background cancellation and composed managed execution require their own
+hosted results. No production integration is claimed.
 
 The two-terminal relay now passes its normal and loss cases on both Ubuntu
 runners (`f79f800`, run `41274299505`). Its explicit SIGKILL case confirms that
@@ -47,3 +50,10 @@ parent loss, whole-group death, and the production entry-point and descriptor
 handoff. No surviving-owner guarantee is possible if every process able to
 restore the terminal is killed; the caller's shell remains an independent
 owner with its own job-control behavior.
+
+The parent is now extracted into a shared qualification module. A managed mode
+executes only the fixed relay child of the same executable, forwarding a small
+hosted-fixture environment allowlist. The child enters the shared foreground
+group only after checking its direct parent and registering its parent-death
+signal. The existing direct relay remains separately tested. The new combined
+cases are described in the [relay report](linux-managed-terminal-relay.md).

@@ -1,7 +1,15 @@
 //! Fixed hosted target through two owned terminals; never a provider launcher.
 #![forbid(unsafe_code)]
+#[allow(
+    dead_code,
+    reason = "shared exclusive child waiter; owner never signals a child group"
+)]
+#[path = "../src/job_control.rs"]
+mod job_control;
 #[path = "../src/outer_terminal.rs"]
 mod outer_terminal;
+#[path = "../src/terminal_owner.rs"]
+mod terminal_owner;
 
 use aswp_linux_manager_evaluation::journal_client::{Bound, JobEvent, Running};
 use outer_terminal::{Signals, Terminal, require};
@@ -262,11 +270,26 @@ fn relay(
     Ok(None)
 }
 
-fn run(directory: &Path) -> io::Result<()> {
+fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<()> {
+    if let Some(parent) = owner {
+        require(
+            rustix::process::getppid() == Some(parent),
+            "terminal owner vanished before managed child admission",
+        )?;
+        nix::sys::prctl::set_pdeathsig(Some(nix::sys::signal::Signal::SIGTERM))?;
+        require(
+            rustix::process::getppid() == Some(parent),
+            "terminal owner vanished during managed child admission",
+        )?;
+        nix::sys::signal::SigSet::empty().thread_set_mask()?;
+    }
     // Signal blocking precedes runtime creation. A newly created thread
     // inherits this mask; no already-running CLI thread is modified here.
     let signals = Signals::new()?;
-    let mut terminal = Terminal::capture(directory)?;
+    let mut terminal = match owner {
+        Some(parent) => Terminal::capture_for_group(directory, parent)?,
+        None => Terminal::capture(directory)?,
+    };
     let prefix = std::env::var("ASWP_ACTIVATION_PREFIX").map_err(io::Error::other)?;
     let lease = OpenOptions::new()
         .read(true)
@@ -290,7 +313,11 @@ fn run(directory: &Path) -> io::Result<()> {
     )?;
     marker(
         directory,
-        "ready",
+        if owner.is_some() {
+            "session-ready"
+        } else {
+            "ready"
+        },
         &serde_json::json!({
             "pid": std::process::id(), "group": terminal.group.as_raw_pid(),
             "session": rustix::process::getsid(None)?.as_raw_pid(),
@@ -303,6 +330,9 @@ fn run(directory: &Path) -> io::Result<()> {
         .map_err(|failure| io::Error::other(format!("{failure:?}")))?;
     terminal.enter()?;
     marker(directory, "relay-ready", "raw")?;
+    if owner.is_some() {
+        marker(directory, "child-ready", &std::process::id().to_string())?;
+    }
     let outcome = relay(directory, &signals, &mut terminal, &mut running);
     if let Err(error) = &outcome {
         marker(directory, "relay-error", &error.to_string())?;
@@ -343,9 +373,9 @@ fn run(directory: &Path) -> io::Result<()> {
     )?;
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
-    // skipping independent scope retirement or hiding a delivered SIGHUP.
-    if disconnected && matches!(outcome, Ok(Some(nix::sys::signal::Signal::SIGHUP))) {
-        return signals.finish(Some(nix::sys::signal::Signal::SIGHUP));
+    // skipping independent scope retirement or hiding a delivered fatal signal.
+    if disconnected && let Ok(Some(signal)) = &outcome {
+        return signals.finish(Some(*signal));
     }
     restored?;
     signals.finish(outcome?)
@@ -354,7 +384,14 @@ fn run(directory: &Path) -> io::Result<()> {
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
-        [_, path] => run(Path::new(path)),
+        [_, path] => run(Path::new(path), None),
+        [_, role, path] if role == "--owned-parent" => terminal_owner::run(Path::new(path), true),
+        [_, role, path, parent] if role == "--owned-child" => parent
+            .to_str()
+            .and_then(|text| text.parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or_else(|| io::Error::other("invalid managed terminal owner PID"))
+            .and_then(|pid| run(Path::new(path), Some(pid))),
         _ => Err(io::Error::other(
             "requires the hosted owned-terminal harness",
         )),

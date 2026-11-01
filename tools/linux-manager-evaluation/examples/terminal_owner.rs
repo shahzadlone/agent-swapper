@@ -8,33 +8,24 @@
 mod job_control;
 #[path = "../src/outer_terminal.rs"]
 mod outer_terminal;
-use nix::sys::{
-    signal::{SigSet, Signal},
-    wait::WaitStatus,
-};
+#[path = "../src/terminal_owner.rs"]
+mod terminal_owner;
+use nix::sys::signal::{SigSet, Signal};
 use outer_terminal::{Signals, Terminal, require};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
-    process::{Pid, PidfdFlags, pidfd_open},
+    process::Pid,
 };
 use std::{
     fs,
     io::{self, IsTerminal, Write},
     path::Path,
-    process::Command,
     time::{Duration, Instant},
 };
 
 fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
     fs::write(directory.join(format!("{name}.tmp")), value)?;
     fs::rename(directory.join(format!("{name}.tmp")), directory.join(name))
-}
-
-struct Owner(Terminal);
-impl Drop for Owner {
-    fn drop(&mut self) {
-        let _ = self.0.restore_saved();
-    }
 }
 
 fn child(directory: &Path, parent: Pid) -> io::Result<()> {
@@ -139,103 +130,10 @@ fn child(directory: &Path, parent: Pid) -> io::Result<()> {
     }
 }
 
-fn owner(directory: &Path) -> io::Result<()> {
-    let signals = Signals::new()?;
-    // Declared before child: error unwinding kills/reaps the fixed child before
-    // this guard restores modes, then restores the parent's signal mask.
-    let mut terminal = Owner(Terminal::capture(directory)?);
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .arg("--child")
-        .arg(directory)
-        .arg(std::process::id().to_string())
-        .env_clear()
-        .env("ASWP_OWNED_OUTER_PTY", "1");
-    let mut child = job_control::OwnedChild::new(command.spawn()?)?;
-    drop(command);
-    let child_pid =
-        Pid::from_raw(child.pid.as_raw()).ok_or_else(|| io::Error::other("invalid child PID"))?;
-    let child_fd = pidfd_open(child_pid, PidfdFlags::empty())?;
-    let until = Instant::now() + Duration::from_secs(15);
-    let mut ready = false;
-    let mut cancellation = None;
-    let result;
-    loop {
-        require(Instant::now() < until, "terminal owner deadline expired")?;
-        let notices = signals.drain()?;
-        if let Some(signal) = notices.terminate {
-            cancellation = Some(signal);
-            rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::TERM)?;
-            rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::CONT)?;
-        }
-        require(
-            !notices.stop,
-            "external owner suspension is outside this fixed probe",
-        )?;
-        if !ready && directory.join("child-ready").exists() {
-            require(
-                fs::read_to_string(directory.join("child-ready"))? == child.pid.to_string(),
-                "owned child readiness differs",
-            )?;
-            marker(directory, "ready", &serde_json::json!({"pid":std::process::id(),
-                "group":terminal.0.group.as_raw_pid(), "session":rustix::process::getsid(None)?.as_raw_pid(),
-                "child":child.pid.as_raw()}).to_string())?;
-            ready = true;
-        }
-        match child.poll()? {
-            WaitStatus::StillAlive | WaitStatus::Continued(_) => {}
-            WaitStatus::Stopped(_, signal) => {
-                terminal.0.restore_saved()?;
-                marker(
-                    directory,
-                    "owner-restored-stop",
-                    &(signal as i32).to_string(),
-                )?;
-                let resumed = signals.suspend()?;
-                if let Some(signal) = resumed.terminate {
-                    cancellation = Some(signal);
-                    rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::TERM)?;
-                    rustix::process::pidfd_send_signal(&child_fd, rustix::process::Signal::CONT)?;
-                }
-            }
-            WaitStatus::Exited(_, code) => {
-                result = (Some(code), None);
-                break;
-            }
-            WaitStatus::Signaled(_, signal, _) => {
-                result = (None, Some(signal));
-                break;
-            }
-            _ => return Err(io::Error::other("unexpected owned child wait status")),
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    if terminal.0.foreground()? {
-        terminal.0.restore_saved()?;
-        marker(
-            directory,
-            "owner-restored-exit",
-            &format!("{:?}:{:?}", result.0, result.1.map(|s| s as i32)),
-        )?;
-    } else {
-        // The shell may have changed its modes after bg. We already restored
-        // at the child's stop and must not overwrite the new foreground owner.
-        marker(
-            directory,
-            "owner-background-exit",
-            "foreground owner unchanged",
-        )?;
-    }
-    drop(child);
-    drop(terminal);
-    signals.finish(cancellation.or(result.1))?;
-    require(result.0 == Some(0), "fixed child did not exit successfully")
-}
-
 fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
-        [_, path] => owner(Path::new(path)),
+        [_, path] => terminal_owner::run(Path::new(path), false),
         [_, role, path, pid] if role == "--child" => pid
             .to_str()
             .and_then(|text| text.parse::<i32>().ok())

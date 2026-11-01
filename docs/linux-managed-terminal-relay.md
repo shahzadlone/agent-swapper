@@ -1,6 +1,9 @@
 # Managed two-terminal relay qualification
 
-Status: implementation and local source checks; hosted execution pending.
+Status: the nine direct-relay cases passed on both Ubuntu runners at `f79f800`
+in [run 41274299505](https://github.com/shahzadlone/agent-swapper/actions/runs/41274299505).
+Its complete platform/package pipeline is still pending. The newly composed
+surviving-owner variant awaits hosted execution.
 This fixed-target experiment connects the already qualified guardian-session
 inner PTY to a newly created outer PTY. The Python harness owns both the outer
 terminal and its shell. It never attaches to the terminal running the harness.
@@ -62,8 +65,25 @@ restoration limit, not a terminal-restoration pass. A bounded drain timeout
 restores modes and retires the scope, then reports failure without a blocking
 stderr write into the same full terminal. Hosted results remain pending.
 
+The next variant uses the same managed relay as a fixed child of the surviving
+[terminal owner](linux-terminal-owner.md). Parent and child share the outer
+foreground group. The parent performs no relay I/O and holds no copy of the
+activation socket or inner master. It waits exclusively for its child and
+restores outer modes after observing child exit. Its metadata record identifies
+the original child; it does not replace the child's authenticated manager
+binding or provide a retirement receipt.
+
+All nine direct cases are repeated with this parent, including normal and raw
+inner stops through shell `bg`/`fg`. The SIGKILL case now kills the relay child
+through its retained pidfd: the parent must restore every saved terminal
+attribute, while independent original cgroup/process handles must prove scope
+removal and descendant death. The killed child cannot publish restoration or
+retirement markers. Outer-terminal loss remains explicitly unrestorable.
+The fixed CI activation burst cap increases from 40 to 56 to cover the nine
+additional sequential activations; concurrency remains bounded at four.
+
 Open gates include external suspension requests while the inner target runs,
-restoration by a surviving owner after uncatchable client death,
+qualification of the composed surviving owner, parent and whole-group loss,
 long sessions, already multithreaded CLI composition, arbitrary provider
 execution, final-exec/exit receipts, and production manager installation.
 The shared signal/terminal component requires a fresh process; it blocks
