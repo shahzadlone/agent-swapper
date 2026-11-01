@@ -1,7 +1,9 @@
 //! Real journal/lease integration with the opted-in, root-installed CI fixture.
 #![allow(clippy::unwrap_used)]
 use super::*;
-use aswp_linux_manager_evaluation::journal_client::{Bound, Identity, Prepared, StartCause};
+use aswp_linux_manager_evaluation::journal_client::{
+    Bound, Identity, JobEvent, Prepared, StartCause, TargetExit,
+};
 use std::{fs, os::fd::AsFd, thread};
 
 fn environment() -> (String, PathBuf) {
@@ -262,6 +264,21 @@ fn exec_stop_precedes_spawn_journal_and_release_or_retirement() {
                     fs::read_to_string(scope.join("target-exit")).unwrap(),
                     "None:Some(2)"
                 );
+                let event = loop {
+                    let event = running.poll_job().unwrap();
+                    if event != JobEvent::Pending {
+                        break event;
+                    }
+                    assert!(Instant::now() < until, "target exit report absent");
+                    thread::sleep(Duration::from_millis(10));
+                };
+                assert_eq!(
+                    event,
+                    JobEvent::Exited(TargetExit::Signal {
+                        signal: 2,
+                        core_dumped: false
+                    })
+                );
                 running.close()
             }
             "journal" => {
@@ -327,6 +344,160 @@ fn exec_stop_precedes_spawn_journal_and_release_or_retirement() {
             reopened.run(&run).unwrap().observed_pid,
             if finish == "release" { Some(pid) } else { None }
         );
+        assert!(reopened.verify().unwrap().consistent);
+    }
+}
+
+#[test]
+#[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
+fn authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown() {
+    let (prefix, directory) = environment();
+    for finish in ["zero", "125", "interrupt", "realtime", "guardian-loss"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let mut store = Store::open(&root).unwrap();
+        let (profile, run, prepared) = prepare_using(
+            &mut store,
+            "exec-exit",
+            &prefix,
+            Bound::connect_exec_control,
+        );
+        let id = prepared.identity();
+        let pid = prepared.pid();
+        let scope = directory.join(&id.invocation);
+        let master = prepared.terminal().unwrap().try_clone_to_owned().unwrap();
+        let target_fd = rustix::process::pidfd_open(
+            rustix::process::Pid::from_raw(pid as i32).unwrap(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .unwrap();
+        prepared.observe_ready().unwrap();
+        let awaiting = prepared
+            .start_after(*Uuid::new_v4().as_bytes(), |_| {
+                assert!(store.run(&run)?.observed_pid.is_none());
+                Ok::<(), Error>(())
+            })
+            .unwrap();
+        let mut running = awaiting
+            .hold_exec()
+            .unwrap()
+            .release_after(|child| store.observe_spawn(&run, child))
+            .unwrap();
+        terminal_output(&master, b"\x1b[0m\r\n");
+        let witness =
+            aswp_linux_manager_evaluation::journal_client::Witness::bind(&prefix, &id, pid)
+                .unwrap();
+        terminal_input(&master, b"spawn\n");
+        let until = Instant::now() + Duration::from_secs(3);
+        let child: u32 = loop {
+            if let Ok(value) = fs::read_to_string(scope.join("descendant-ready")) {
+                break value.parse().unwrap();
+            }
+            assert!(Instant::now() < until, "exit-test descendant absent");
+            thread::sleep(Duration::from_millis(10));
+        };
+        terminal_output(&master, format!("CHILD:{child}\r\n").as_bytes());
+        descendant_state(child, pid, &id, false);
+        let child_fd = rustix::process::pidfd_open(
+            rustix::process::Pid::from_raw(child as i32).unwrap(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .unwrap();
+        let before = descendant_heartbeat(&scope, None);
+        descendant_heartbeat(&scope, Some(&before));
+        let expected = match finish {
+            "zero" => {
+                terminal_input(&master, b"finish\n");
+                terminal_output(&master, "FINAL:\x1b[34m→\x1b[0m\r\n".as_bytes());
+                Some(TargetExit::Code { code: 0 })
+            }
+            "125" => {
+                terminal_input(&master, b"exit-125\n");
+                terminal_output(&master, b"exit-125\r\n");
+                Some(TargetExit::Code { code: 125 })
+            }
+            "interrupt" => {
+                terminal_input(&master, b"\x03");
+                Some(TargetExit::Signal {
+                    signal: 2,
+                    core_dumped: false,
+                })
+            }
+            "realtime" => {
+                // The fixed sender receives the original target capability as
+                // stdin. It never looks up a numeric PID or accepts a command.
+                let sent = std::process::Command::new("/usr/bin/python3")
+                    .args(["-I", "-S", "-c", "import signal; signal.pidfd_send_signal(0, signal.SIGRTMIN); print(int(signal.SIGRTMIN))"])
+                    .env_clear()
+                    .stdin(std::process::Stdio::from(target_fd))
+                    .output().unwrap();
+                assert!(sent.status.success(), "fixed realtime sender failed");
+                let signal: u8 = std::str::from_utf8(&sent.stdout)
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                assert!((34..=64).contains(&signal));
+                Some(TargetExit::Signal {
+                    signal,
+                    core_dumped: false,
+                })
+            }
+            _ => {
+                running.crash_guardian_keep_control_for_fixture().unwrap();
+                None
+            }
+        };
+        // Deliberately receive only AFTER the original guardian and scope are
+        // gone, without closing client control. A queued status must survive;
+        // requiring an active guardian now would wrongly discard it.
+        assert!(witness.retire().unwrap().connection_close_error.is_none());
+        let event = running.poll_job().unwrap();
+        match expected {
+            Some(status) => assert_eq!(event, JobEvent::Exited(status)),
+            None => assert_eq!(event, JobEvent::Closed),
+        }
+        assert_eq!(running.observed_exit(), expected);
+        assert_eq!(running.poll_job().unwrap(), JobEvent::Closed);
+        assert!(running.resume().is_err());
+        assert!(
+            running
+                .close()
+                .retire()
+                .unwrap()
+                .connection_close_error
+                .is_none()
+        );
+        terminal_retired(&master, finish == "interrupt");
+        let mut watched = [rustix::event::PollFd::new(
+            &child_fd,
+            rustix::event::PollFlags::IN,
+        )];
+        assert_eq!(
+            rustix::event::poll(
+                &mut watched,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0
+                })
+            )
+            .unwrap(),
+            1
+        );
+        assert!(
+            watched[0]
+                .revents()
+                .intersects(rustix::event::PollFlags::IN | rustix::event::PollFlags::HUP)
+        );
+        assert!(!scope.join("descendant-voluntary-exit").exists());
+        let retired = descendant_heartbeat(&scope, None);
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(descendant_heartbeat(&scope, None), retired);
+        unresolved(&store, profile, &run);
+        drop(store);
+        let reopened = Store::open(&root).unwrap();
+        unresolved(&reopened, profile, &run);
+        assert_eq!(reopened.run(&run).unwrap().observed_pid, Some(pid));
         assert!(reopened.verify().unwrap().consistent);
     }
 }

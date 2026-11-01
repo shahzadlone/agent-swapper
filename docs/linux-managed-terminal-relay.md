@@ -101,3 +101,16 @@ execution, final-exec/exit receipts, and production manager installation.
 The shared signal/terminal component requires a fresh process; it blocks
 signals before creating the client runtime so new threads inherit that mask.
 No existing CLI thread's signal policy is changed.
+
+The next composition adds ten surviving-owner cases using `PTY3`: exec is held
+until a separate synced fixture spawn observation succeeds, then the normal
+relay receives authenticated target-exit reports. The harness requires the
+exec-hold and durable-observation markers to name the same bound target, and
+the running target must report no tracer. Final-output success also requires
+the authenticated exit-zero observation. Bytes, hidden/raw input, resize,
+nested jobs, orphaned stops, shell `bg`/`fg`, backpressure cancellation, outer
+loss, relay SIGKILL, blocked drain and stopped-parent loss are exercised with
+the composed protocol. All 29 cases passed on Ubuntu 22.04 and 24.04 at `bde5303`; the complete
+[run 41278328369](https://github.com/shahzadlone/agent-swapper/actions/runs/41278328369)
+also passed platform tests, candidate packaging and independent rebuilds. The real Store exec/exit suites remain separate
+from this relay's synced fixture records. Neither record completes a journal.

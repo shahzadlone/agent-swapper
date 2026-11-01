@@ -61,6 +61,10 @@ pub(crate) fn run(directory: &Path, managed: bool) -> io::Result<()> {
         .env_clear()
         .env("ASWP_OWNED_OUTER_PTY", "1");
     if managed {
+        if let Some(value) = std::env::var_os("ASWP_CI_EXEC_GATE") {
+            require(value == "1", "invalid managed exec-gate mode")?;
+            command.env("ASWP_CI_EXEC_GATE", value);
+        }
         for key in [
             "GITHUB_ACTIONS",
             "RUNNER_ENVIRONMENT",

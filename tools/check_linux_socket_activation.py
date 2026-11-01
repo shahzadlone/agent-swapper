@@ -546,7 +546,8 @@ def suite():
                              'client_sigkill_retires_writer_without_running_client_cleanup',
                              'inner_terminal_exec_is_journal_gated_and_retires_with_master_open',
                              'guardian_session_stops_resume_and_retire_without_releasing_journal_policy',
-                             'exec_stop_precedes_spawn_journal_and_release_or_retirement'):
+                             'exec_stop_precedes_spawn_journal_and_release_or_retirement',
+                             'authenticated_target_exit_survives_guardian_retirement_but_loss_stays_unknown'):
                     result = owned_fixture(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
                                     '--lib', 'store::linux_activated_journal_tests::' + test,
                                     '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],
@@ -570,8 +571,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 19,
-                        'managed relay did not pass all nineteen owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 29,
+                        'managed relay did not pass all twenty-nine owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
 
         finally:

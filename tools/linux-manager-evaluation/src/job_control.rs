@@ -108,6 +108,12 @@ impl OwnedChild {
         ))
     }
     pub(crate) fn poll(&mut self) -> io::Result<WaitStatus> {
+        match self.poll_raw()? {
+            Some(raw) => WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(io::Error::from),
+            None => Ok(WaitStatus::StillAlive),
+        }
+    }
+    pub(crate) fn poll_raw(&mut self) -> io::Result<Option<rustix::process::WaitStatus>> {
         require(!self.reaped, "wait ownership already released")?;
         let pid = rustix::process::Pid::from_raw(self.pid.as_raw())
             .ok_or_else(|| io::Error::other("invalid owned child PID"))?;
@@ -118,7 +124,7 @@ impl OwnedChild {
                 | rustix::process::WaitOptions::CONTINUED,
         ) {
             Ok(Some(event)) => event,
-            Ok(None) | Err(rustix::io::Errno::INTR) => return Ok(WaitStatus::StillAlive),
+            Ok(None) | Err(rustix::io::Errno::INTR) => return Ok(None),
             Err(rustix::io::Errno::CHILD) => {
                 self.reaped = true;
                 return Err(io::Error::other("lost direct-child wait ownership"));
@@ -132,7 +138,7 @@ impl OwnedChild {
             self.reaped = true;
         }
         require(observed == pid, "wait returned another child")?;
-        WaitStatus::from_raw(self.pid, raw.as_raw()).map_err(io::Error::from)
+        Ok(Some(raw))
     }
     pub(crate) fn resume(&self) -> io::Result<()> {
         require(!self.reaped, "cannot signal a reaped group leader")?;
@@ -212,6 +218,37 @@ impl Drop for OwnedChild {
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
+
+    #[test]
+    fn raw_wait_preserves_realtime_termination_and_revokes_child_ownership() -> io::Result<()> {
+        use std::{io::Read, os::unix::process::ExitStatusExt};
+        let mut child = Command::new("/usr/bin/python3")
+            .args(["-I", "-S", "-c", "import os,signal; print(int(signal.SIGRTMIN), flush=True); os.kill(os.getpid(), signal.SIGRTMIN)"])
+            .env_clear().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+        let mut output = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("fixture stdout absent"))?;
+        let mut child = OwnedChild::new(child)?;
+        let until = deadline();
+        let raw = loop {
+            if let Some(status) = child.poll_raw()? {
+                break status;
+            }
+            require(Instant::now() < until, "realtime child did not terminate")?;
+            thread::sleep(Duration::from_millis(5));
+        };
+        let mut text = String::new();
+        output.read_to_string(&mut text)?;
+        let signal: i32 = text.trim().parse().map_err(io::Error::other)?;
+        assert!((34..=64).contains(&signal));
+        assert!(raw.signaled() && child.reaped);
+        let status = std::process::ExitStatus::from_raw(raw.as_raw());
+        assert_eq!(status.signal(), Some(signal));
+        assert!(!status.core_dumped());
+        assert!(child.resume().is_err() && child.poll_raw().is_err());
+        Ok(())
+    }
 
     #[test]
     fn reaped_child_revokes_numeric_operations_even_when_status_decode_fails() -> io::Result<()> {

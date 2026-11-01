@@ -9,7 +9,7 @@ use std::{
     fs, io,
     os::{
         fd::{AsFd, OwnedFd},
-        unix::process::CommandExt,
+        unix::process::{CommandExt, ExitStatusExt},
     },
     path::Path,
     process::{Command, Stdio},
@@ -181,7 +181,45 @@ pub(crate) fn serve(
             fs::write(directory.join("guardian-terminal-hangup"), invocation)?;
             return Ok(true);
         }
-        match child.poll()? {
+        let raw = child.poll_raw()?;
+        if let Some(raw) = raw {
+            let status = std::process::ExitStatus::from_raw(raw.as_raw());
+            let exit = if let Some(code) = status.code() {
+                Some(journal_protocol::TargetExit::Code {
+                    code: u8::try_from(code).map_err(io::Error::other)?,
+                })
+            } else if let Some(signal) = status.signal() {
+                Some(journal_protocol::TargetExit::Signal {
+                    signal: u8::try_from(signal).map_err(io::Error::other)?,
+                    core_dumped: status.core_dumped(),
+                })
+            } else {
+                None
+            };
+            if let Some(exit) = exit {
+                record_exit(directory, status.code(), status.signal())?;
+                if exec_gate {
+                    report_exit(
+                        channel,
+                        invocation,
+                        child.pid.as_raw() as u32,
+                        &nonce,
+                        sequence,
+                        exit,
+                        until,
+                    )?;
+                }
+                return Ok(true);
+            }
+        }
+        // Only nonterminal stops/continuations need nix's named-signal enum.
+        // Raw terminal status has already revoked numeric PID authority and
+        // preserves real-time signals instead of losing a valid outcome.
+        let state = raw
+            .map(|raw| WaitStatus::from_raw(child.pid, raw.as_raw()))
+            .transpose()?
+            .unwrap_or(WaitStatus::StillAlive);
+        match state {
             WaitStatus::StillAlive => {}
             WaitStatus::Stopped(_, signal) => {
                 require(
@@ -205,14 +243,6 @@ pub(crate) fn serve(
                 )?;
             }
             WaitStatus::Continued(_) => require(!stopped, "job resumed outside its control grant")?,
-            WaitStatus::Exited(_, code) => {
-                record_exit(directory, Some(code), None)?;
-                return Ok(true);
-            }
-            WaitStatus::Signaled(_, signal, _) => {
-                record_exit(directory, None, Some(signal as i32))?;
-                return Ok(true);
-            }
             _ => return Err(io::Error::other("unexpected traced job state")),
         }
         let eof = if stopped && readable(channel)? {
@@ -242,6 +272,31 @@ pub(crate) fn serve(
     })?;
     // Scope cleanup remains manager-owned; no journal completion is emitted.
     Ok(())
+}
+
+fn report_exit(
+    channel: &OwnedFd,
+    invocation: &str,
+    child: u32,
+    nonce: &[u8; 16],
+    sequence: u64,
+    status: journal_protocol::TargetExit,
+    until: Instant,
+) -> io::Result<()> {
+    let status = status.validate()?;
+    let packet = serde_json::to_vec(&serde_json::json!({
+        "kind": "aswp-fixture-exit-1", "invocation": invocation, "child": child,
+        "nonce": journal_protocol::encoded(nonce), "sequence": sequence, "status": status,
+    }))
+    .map_err(io::Error::other)?;
+    // No PID operation follows reaping. Sending the already observed status
+    // does not wait for a client acknowledgement or postpone scope cleanup.
+    transport::send_until(
+        channel,
+        &packet,
+        &[],
+        until.min(Instant::now() + Duration::from_secs(1)),
+    )
 }
 
 fn record_exit(directory: &Path, code: Option<i32>, signal: Option<i32>) -> io::Result<()> {

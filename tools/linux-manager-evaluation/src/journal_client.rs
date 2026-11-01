@@ -1,5 +1,6 @@
 //! Opted-in, synchronous CI client. Observations never authorize journal completion.
 //! No method may run inside a Tokio runtime; Drop never drives asynchronous work.
+pub use crate::journal_protocol::TargetExit;
 use crate::{
     Connection, Expected, UnitFact, UnitKind, activation, activation_packet,
     admission_transport as transport, fixture_policy, journal_protocol, kernel, require,
@@ -68,6 +69,8 @@ struct JobState {
     sequence: u64,
     stopped: bool,
     exec_pending: bool,
+    exec_observed: bool,
+    exit: Option<TargetExit>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -192,6 +195,7 @@ pub enum JobEvent {
     Pending,
     Stopped(i32),
     Closed,
+    Exited(TargetExit),
 }
 #[derive(Debug, PartialEq, Eq)]
 enum ControlReadiness {
@@ -383,6 +387,36 @@ fn validate_exec(packet: &activation_packet::Packet, expected: &StopContext<'_>)
             && held.nonce == journal_protocol::encoded(expected.nonce),
         "exec notice sender or launch binding differs",
     )
+}
+
+fn validate_exit(
+    packet: &activation_packet::Packet,
+    expected: &StopContext<'_>,
+) -> io::Result<TargetExit> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Exit {
+        kind: String,
+        child: u32,
+        invocation: String,
+        nonce: String,
+        sequence: u64,
+        status: TargetExit,
+    }
+    let exit: Exit = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
+    require(
+        packet.sender.pid() == expected.guardian as i32
+            && packet.sender.uid() == expected.uid
+            && packet.sender.gid() == expected.gid
+            && exit.kind == "aswp-fixture-exit-1"
+            && exit.child == expected.child
+            && exit.invocation == expected.invocation
+            && exit.nonce == journal_protocol::encoded(expected.nonce)
+            && exit.sequence == expected.sequence
+            && exit.sequence <= 8,
+        "target exit sender, launch binding or stop sequence differs",
+    )?;
+    exit.status.validate()
 }
 
 impl Bound {
@@ -671,7 +705,7 @@ impl Prepared {
     }
 }
 impl Running {
-    pub fn hold_exec(self) -> Result<ExecStopped, TransitionFailure> {
+    pub fn hold_exec(mut self) -> Result<ExecStopped, TransitionFailure> {
         let result = (|| {
             self.0.recheck()?;
             let job = self
@@ -696,7 +730,12 @@ impl Running {
             self.0.recheck()
         })();
         match result {
-            Ok(()) => Ok(ExecStopped(self.0)),
+            Ok(()) => {
+                if let Some(job) = &mut self.0.job {
+                    job.exec_observed = true;
+                }
+                Ok(ExecStopped(self.0))
+            }
             Err(error) => Err(TransitionFailure {
                 error,
                 closed: Box::new(self.0.close()),
@@ -712,7 +751,7 @@ impl Running {
         )?;
         match control_readiness(self.0.socket()?)? {
             ControlReadiness::Closed => Ok(JobEvent::Closed),
-            ControlReadiness::Packet => self.wait_stopped().map(JobEvent::Stopped),
+            ControlReadiness::Packet => self.receive_job_event(),
             ControlReadiness::Pending => Ok(JobEvent::Pending),
         }
     }
@@ -738,11 +777,73 @@ impl Running {
             .as_ref()
             .ok_or_else(|| io::Error::other("session has no job-control protocol"))?;
         require(
-            !job.exec_pending && !job.stopped,
+            !job.exec_pending && !job.stopped && job.exit.is_none(),
             "session is not ready for another job stop",
         )?;
+        match self.receive_job_event()? {
+            JobEvent::Stopped(signal) => Ok(signal),
+            _ => Err(io::Error::other("target exited while awaiting a job stop")),
+        }
+    }
+
+    pub fn observed_exit(&self) -> Option<TargetExit> {
+        self.0.job.as_ref().and_then(|job| job.exit)
+    }
+
+    fn receive_job_event(&mut self) -> io::Result<JobEvent> {
+        let job = self
+            .0
+            .job
+            .as_ref()
+            .filter(|job| !job.exec_pending && job.exit.is_none())
+            .ok_or_else(|| io::Error::other("job event phase is closed"))?;
         let packet =
             activation_packet::receive(self.0.socket()?, Instant::now() + Duration::from_secs(4))?;
+        #[derive(Deserialize)]
+        struct Header {
+            kind: String,
+        }
+        let header: Header = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
+        if header.kind == "aswp-fixture-exit-1" {
+            require(
+                job.exec_observed,
+                "target exit requires observed and released exec",
+            )?;
+            let status = validate_exit(
+                &packet,
+                &StopContext {
+                    guardian: self.0.unit.pid,
+                    uid: self.0.unit.user,
+                    gid: rustix::process::getgid().as_raw(),
+                    invocation: &self.0.unit.invocation,
+                    child: job.child,
+                    nonce: &job.nonce,
+                    sequence: job.sequence,
+                },
+            )?;
+            // The guardian can already have exited. Requiring an active unit
+            // here would discard a queued authenticated final report. The
+            // original child pidfd must independently corroborate its death;
+            // scope retirement remains a separate observation after this.
+            require(
+                self.0
+                    .child
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("original child handle absent"))?
+                    .exited()?,
+                "exit report arrived while original child is live",
+            )?;
+            let job = self
+                .0
+                .job
+                .as_mut()
+                .ok_or_else(|| io::Error::other("job state absent"))?;
+            job.exit = Some(status);
+            job.stopped = false;
+            return Ok(JobEvent::Exited(status));
+        }
+        require(!job.stopped, "duplicate job stop before resume")?;
+        self.0.recheck()?;
         let next = job
             .sequence
             .checked_add(1)
@@ -767,7 +868,7 @@ impl Running {
             .ok_or_else(|| io::Error::other("job state disappeared"))?;
         job.sequence = next;
         job.stopped = true;
-        Ok(signal)
+        Ok(JobEvent::Stopped(signal))
     }
     /// Only the pending stop can be resumed. A transport error can follow
     /// delivery; close and retire instead of treating failure as no resume.
@@ -779,7 +880,7 @@ impl Running {
             .as_ref()
             .ok_or_else(|| io::Error::other("session has no job-control protocol"))?;
         require(
-            !job.exec_pending && job.stopped,
+            !job.exec_pending && job.stopped && job.exit.is_none(),
             "resume requires a pending authenticated job stop",
         )?;
         transport::send_until(
@@ -803,6 +904,17 @@ impl Running {
     }
     pub fn close(self) -> Closed {
         self.0.close()
+    }
+
+    /// Original retained guardian only; keep control open to measure whether
+    /// loss yields EOF without a fabricated target-exit report.
+    pub fn crash_guardian_keep_control_for_fixture(&self) -> io::Result<()> {
+        require(
+            std::env::var("ASWP_CI_ACTIVATED_JOURNAL").as_deref() == Ok("1"),
+            "guardian fault requires the hosted fixture",
+        )?;
+        self.0.recheck()?;
+        self.0.binding.kill_guardian_for_fixture()
     }
 
     /// Hosted fixture fault injection using only the original retained pidfd.
@@ -952,6 +1064,115 @@ impl Closed {
 mod tests {
     use super::*;
     use std::os::fd::AsFd;
+
+    #[test]
+    fn exit_reports_bind_launch_and_preserve_code_or_signal_without_ambiguity() -> io::Result<()> {
+        let invocation = "0123456789abcdef0123456789abcdef";
+        let nonce = [7; 16];
+        let expected = StopContext {
+            guardian: 4000,
+            uid: 1000,
+            gid: 1001,
+            invocation,
+            child: 4001,
+            nonce: &nonce,
+            sequence: 2,
+        };
+        let sender = unix_ancillary::ScmCredentials::new(4000, 1000, 1001);
+        let value = serde_json::json!({"kind":"aswp-fixture-exit-1", "child":4001, "invocation":invocation, "nonce":journal_protocol::encoded(&nonce), "sequence":2, "status":{"kind":"code","code":125}});
+        let packet = |value: &serde_json::Value, sender| -> io::Result<activation_packet::Packet> {
+            Ok(activation_packet::Packet {
+                bytes: serde_json::to_vec(value).map_err(io::Error::other)?,
+                sender,
+            })
+        };
+        for status in [
+            TargetExit::Code { code: 0 },
+            TargetExit::Code { code: 125 },
+            TargetExit::Code { code: 255 },
+            TargetExit::Signal {
+                signal: 2,
+                core_dumped: false,
+            },
+            TargetExit::Signal {
+                signal: 11,
+                core_dumped: true,
+            },
+            TargetExit::Signal {
+                signal: 64,
+                core_dumped: false,
+            },
+        ] {
+            let mut changed = value.clone();
+            changed["status"] = serde_json::to_value(status).map_err(io::Error::other)?;
+            assert_eq!(
+                validate_exit(&packet(&changed, sender)?, &expected)?,
+                status
+            );
+        }
+        for (field, wrong) in [
+            ("kind", serde_json::json!("aswp-fixture-stopped-1")),
+            ("child", serde_json::json!(4002)),
+            (
+                "invocation",
+                serde_json::json!("ffffffffffffffffffffffffffffffff"),
+            ),
+            (
+                "nonce",
+                serde_json::json!(journal_protocol::encoded(&[8; 16])),
+            ),
+            ("sequence", serde_json::json!(1)),
+            ("sequence", serde_json::json!(3)),
+            ("extra", serde_json::json!(true)),
+            ("status", serde_json::json!({"kind":"code","code":256})),
+            ("status", serde_json::json!({"kind":"code","code":-1})),
+            (
+                "status",
+                serde_json::json!({"kind":"code","code":125,"signal":9}),
+            ),
+            (
+                "status",
+                serde_json::json!({"kind":"code","code":125,"core_dumped":false}),
+            ),
+            (
+                "status",
+                serde_json::json!({"kind":"signal","signal":0,"core_dumped":false}),
+            ),
+            (
+                "status",
+                serde_json::json!({"kind":"signal","signal":65,"core_dumped":false}),
+            ),
+            ("status", serde_json::json!({"kind":"signal","signal":9})),
+            (
+                "status",
+                serde_json::json!({"kind":"stopped","signal":20,"core_dumped":false}),
+            ),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = wrong;
+            assert!(
+                validate_exit(&packet(&changed, sender)?, &expected).is_err(),
+                "accepted {field}"
+            );
+        }
+        for field in ["kind", "child", "invocation", "nonce", "sequence", "status"] {
+            let mut changed = value.clone();
+            changed
+                .as_object_mut()
+                .ok_or_else(|| io::Error::other("missing test object"))?
+                .remove(field);
+            assert!(validate_exit(&packet(&changed, sender)?, &expected).is_err());
+        }
+        for sender in [
+            unix_ancillary::ScmCredentials::new(0, 1000, 1001),
+            unix_ancillary::ScmCredentials::new(4002, 1000, 1001),
+            unix_ancillary::ScmCredentials::new(4000, 1002, 1001),
+            unix_ancillary::ScmCredentials::new(4000, 1000, 1002),
+        ] {
+            assert!(validate_exit(&packet(&value, sender)?, &expected).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn exec_notice_binds_original_sender_invocation_child_and_nonce() -> io::Result<()> {
