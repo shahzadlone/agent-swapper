@@ -130,6 +130,9 @@ impl InstalledManifest {
     pub fn generation(&self) -> &str {
         &self.document.generation
     }
+    pub fn identity(&self) -> (u32, u32) {
+        (self.document.user, self.document.group)
+    }
     pub fn unit_stem(&self) -> String {
         format!(
             "agentswapper-{}-{}",

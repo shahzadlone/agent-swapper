@@ -135,3 +135,31 @@ The first digest checkpoint (`5f3469c`) passed the asset matrix on both native
 runners. Ubuntu 22.04 then stopped at the dependency-boundary step, whose new
 `tomllib` import required Python 3.11. The checker now uses Cargo's JSON metadata
 on the older interpreter too. Native rerun of that correction is pending.
+
+## Selected artifacts in service policy
+
+`ServicePolicy::installed` captures the current caller's ordinary credentials,
+requires the selected manifest identity to match, and retains the complete
+selection. It checks the retained template's text and uses its actual protected
+path and guardian handle during the existing loaded-service and original-process
+checks. The selector remains live through the final binding recheck. Only then
+does the policy retain the admitted artifacts independently of the selector.
+Active rechecks validate all original artifacts and the original manifest.
+
+The read-only `ServicePolicy::require_current` supports checking retained files
+before connection. It does not observe a manager or admit a process. The explicit
+fixed-path policy remains available for independently authorized locations.
+Neither constructor grants execution authority or verifies the loaded socket
+unit and endpoint; production connection/bootstrap integration is still open.
+
+Native selection controls now hold the actual selected service policy before
+mutating its files. A paired control hands off the admitted artifacts before
+switching to another complete generation and requires those original artifacts
+to remain valid. This tests installation metadata lifetime; it is not yet a
+real manager binding through the new installed constructor. Existing native
+service binding uses the explicit constructor. Both paths still need their
+stated evidence before a production managed launcher is enabled.
+
+Local runtime/manager tests, nineteen combined doctests, all 49 evaluator tests,
+strict manager/evaluator Clippy and dependency boundaries pass. The added policy
+constructor and generation-lifetime controls require their native CI result.

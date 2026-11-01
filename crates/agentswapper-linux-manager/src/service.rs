@@ -5,26 +5,68 @@ use crate::{
     linux::{self, Manager, SERVICE_INTERFACE, UNIT_INTERFACE, property, require},
 };
 use agentswapper_linux_runtime::{
-    installed_config::ProtectedConfig, installed_image::ProtectedImage,
+    installed_artifacts::InstalledArtifacts, installed_config::ProtectedConfig,
+    installed_image::ProtectedImage, installed_selection::SelectedInstallation,
     process_policy::OrdinaryCredentials, scope_observation,
 };
 use std::{io, os::fd::OwnedFd, path::Path, sync::Arc};
 use zbus::OwnedObjectPath;
 
 /// Protected assets at caller-authorized fixed locations in a trusted namespace.
-/// This does not parse a production manifest or authorize arbitrary root-owned files.
+/// The installed constructor retains a verified selection; the explicit-path
+/// constructor requires independent authorization of those fixed locations.
 pub struct ServicePolicy {
     template_path: String,
-    template: ProtectedConfig,
-    image: ProtectedImage,
+    assets: Assets,
     credentials: OrdinaryCredentials,
 }
+enum Assets {
+    Explicit(Box<ExplicitAssets>),
+    Selected(Box<SelectedInstallation>),
+    Admitted(Box<InstalledArtifacts>),
+}
+struct ExplicitAssets {
+    template: ProtectedConfig,
+    image: ProtectedImage,
+}
 impl ServicePolicy {
+    /// Retain the selected generation through service admission. This validates
+    /// installed artifacts; loaded-unit and original-process checks still occur
+    /// in `BoundService::bind`. Trusted namespace provenance is a prerequisite.
+    pub fn installed(selection: SelectedInstallation) -> io::Result<Self> {
+        let credentials = OrdinaryCredentials::current()?;
+        require(
+            selection.artifacts().manifest().identity()
+                == (credentials.user(), credentials.group()),
+            "installation identity differs from the current ordinary caller",
+        )?;
+        let template_path = Self::template_path(selection.artifacts().service_template_path())?;
+        Self::require_text(selection.artifacts().service_template())?;
+        selection.require_current()?;
+        Ok(Self {
+            template_path,
+            assets: Assets::Selected(Box::new(selection)),
+            credentials,
+        })
+    }
     pub fn open(
         template: &Path,
         image: &Path,
         credentials: OrdinaryCredentials,
     ) -> io::Result<Self> {
+        let template_path = Self::template_path(template)?;
+        let config = ProtectedConfig::open(template)?;
+        Self::require_text(&config)?;
+        Ok(Self {
+            template_path,
+            assets: Assets::Explicit(Box::new(ExplicitAssets {
+                template: config,
+                image: ProtectedImage::open(image)?,
+            })),
+            credentials,
+        })
+    }
+    fn template_path(template: &Path) -> io::Result<String> {
         require(
             template
                 .file_name()
@@ -35,22 +77,42 @@ impl ServicePolicy {
                 }),
             "service policy requires an instantiated service template",
         )?;
-        let config = ProtectedConfig::open(template)?;
-        let template_path = template
+        Ok(template
             .to_str()
             .ok_or_else(|| io::Error::other("template path is not UTF-8"))?
-            .to_owned();
+            .to_owned())
+    }
+    fn require_text(config: &ProtectedConfig) -> io::Result<()> {
         let bytes = config.read()?;
         require(
             !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(&bytes).is_ok(),
             "activation template is empty or invalid text",
-        )?;
-        Ok(Self {
-            template_path,
-            template: config,
-            image: ProtectedImage::open(image)?,
-            credentials,
-        })
+        )
+    }
+    fn image(&self) -> &ProtectedImage {
+        match &self.assets {
+            Assets::Explicit(assets) => &assets.image,
+            Assets::Selected(selection) => selection.artifacts().guardian(),
+            Assets::Admitted(artifacts) => artifacts.guardian(),
+        }
+    }
+    /// Revalidate retained installation metadata before connecting or preparing
+    /// work. This does not observe a manager or admit a process.
+    pub fn require_current(&self) -> io::Result<()> {
+        match &self.assets {
+            Assets::Explicit(assets) => assets
+                .template
+                .require_current(Path::new(&self.template_path)),
+            Assets::Selected(selection) => selection.require_current(),
+            Assets::Admitted(artifacts) => artifacts.require_current(),
+        }
+    }
+    fn admitted(self) -> io::Result<Self> {
+        let assets = match self.assets {
+            Assets::Selected(selection) => Assets::Admitted(Box::new(selection.into_artifacts()?)),
+            other => other,
+        };
+        Ok(Self { assets, ..self })
     }
 }
 
@@ -297,15 +359,13 @@ impl BoundService {
             policy.credentials.group(),
         )?;
         crate::require_direct_lifecycle(manager, sender, &path).await?;
-        policy
-            .template
-            .require_current(Path::new(&policy.template_path))?;
+        policy.require_current()?;
         let kernel = scope_observation::Binding::bind(
             claim.unit,
             policy.credentials.user(),
             claim.main_pid,
         )?;
-        kernel.require_main_image(&policy.image)?;
+        kernel.require_main_image(policy.image())?;
         kernel.require_main_credentials(&policy.credentials)?;
         let observed = kernel.observe()?;
         let identity = ServiceIdentity {
@@ -321,7 +381,7 @@ impl BoundService {
             device: observed.device,
             inode: observed.inode,
         }));
-        let value = Self {
+        let mut value = Self {
             connection_id: Arc::clone(&manager.identity),
             owner: sender.to_owned(),
             path,
@@ -332,6 +392,10 @@ impl BoundService {
             retirement_issued: false,
         };
         value.recheck(manager).await?;
+        // End selection admission only after the original manager/process and
+        // loaded policy recheck. Active runs retain their original generation;
+        // a selector update must not rebind them to a newer installation.
+        value.policy = value.policy.admitted()?;
         Ok(value)
     }
 
@@ -430,11 +494,9 @@ impl BoundService {
                 self.policy.credentials.group(),
             )?;
         crate::require_direct_lifecycle(manager, &self.owner, &self.path).await?;
-        self.policy
-            .template
-            .require_current(Path::new(&self.policy.template_path))?;
+        self.policy.require_current()?;
         self.kernel.observe()?;
-        self.kernel.require_main_image(&self.policy.image)?;
+        self.kernel.require_main_image(self.policy.image())?;
         self.kernel
             .require_main_credentials(&self.policy.credentials)?;
         require(

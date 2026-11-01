@@ -90,11 +90,20 @@ fn run() -> io::Result<()> {
                 .parent()
                 .ok_or_else(|| io::Error::other("missing fixture directory"))?;
             let selection = SelectedInstallation::open_for_qualification(directory)?;
+            let policy = agentswapper_linux_manager::ServicePolicy::installed(selection)?;
             if mode == "--selection-recheck" {
                 hold()?;
             }
-            selection.require_current()?;
-            selection.into_artifacts()?.require_current()?;
+            policy.require_current()?;
+        }
+        [_, mode, path] if mode == "--selection-active" => {
+            let directory = Path::new(path)
+                .parent()
+                .ok_or_else(|| io::Error::other("missing fixture directory"))?;
+            let artifacts =
+                SelectedInstallation::open_for_qualification(directory)?.into_artifacts()?;
+            hold()?;
+            artifacts.require_current()?;
         }
         [_, mode, path] if mode == "--config-recheck" => {
             let config = ProtectedConfig::open(Path::new(path))?;

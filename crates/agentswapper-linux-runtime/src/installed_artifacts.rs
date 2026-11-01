@@ -112,6 +112,9 @@ impl InstalledArtifacts {
     pub fn manifest(&self) -> &InstalledManifest {
         &self.manifest
     }
+    pub fn service_template_path(&self) -> &std::path::Path {
+        &self.paths.service_template
+    }
     pub fn guardian(&self) -> &ProtectedImage {
         &self.guardian
     }

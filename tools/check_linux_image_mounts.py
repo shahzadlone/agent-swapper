@@ -54,6 +54,7 @@ CASES = {
     'selection-manifest-replaced': 'installed configuration changed since admission began',
     'selection-guardian-modified': 'installed image changed since admission began',
     'selection-generation-switch': 'installed configuration changed since admission began',
+    'selection-retained-generation': None,
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
@@ -144,7 +145,8 @@ def retained_asset_control(command, image, case):
                 selected = {'selection-selector-replaced': 'active.json',
                             'selection-manifest-replaced': GENERATION + '.json',
                             'selection-guardian-modified': GENERATION + '/guardian',
-                            'selection-generation-switch': 'active.json'}[case]
+                            'selection-generation-switch': 'active.json',
+                            'selection-retained-generation': 'active.json'}[case]
                 image = image.parent / selected
             if case.endswith('-replaced'):
                 replacement = image.with_name('replacement')
@@ -155,7 +157,7 @@ def retained_asset_control(command, image, case):
                 replacement.replace(image)
             elif case in ('config-modified', 'image-modified', 'selection-guardian-modified'):
                 image.write_bytes(b'changed owned configuration\n')
-            elif case == 'selection-generation-switch':
+            elif case in ('selection-generation-switch', 'selection-retained-generation'):
                 image.write_text(json.dumps(dict(schema=1, generation=NEXT_GENERATION)))
             elif case in ('config-mode-changed', 'image-mode-changed'):
                 image.chmod(0o664)
@@ -198,7 +200,7 @@ def mounted_case(case, binary, uid, gid):
                 document['unexpected'] = 'selector-private-canary'
             elif case == 'selection-missing-generation':
                 document['generation'] = NEXT_GENERATION
-            elif case == 'selection-generation-switch':
+            elif case in ('selection-generation-switch', 'selection-retained-generation'):
                 write_generation(base, NEXT_GENERATION, version, uid, gid)
             contents = json.dumps(document)
             if case == 'selection-duplicate':
@@ -261,9 +263,10 @@ def mounted_case(case, binary, uid, gid):
                            'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed',
                            'bundle-guardian-replaced', 'bundle-template-replaced', 'bundle-manifest-replaced',
                            'selection-selector-replaced', 'selection-manifest-replaced',
-                           'selection-guardian-modified', 'selection-generation-switch')
+                           'selection-guardian-modified', 'selection-generation-switch', 'selection-retained-generation')
         if retained:
-            role = ('--selection-recheck-probe' if case.startswith('selection-') else
+            role = ('--selection-active-probe' if case == 'selection-retained-generation' else
+                    '--selection-recheck-probe' if case.startswith('selection-') else
                     '--bundle-recheck-probe' if case.startswith('bundle-') else
                     '--config-recheck-probe' if case.startswith('config-') else '--image-recheck-probe')
         elif case.startswith('config-digest'):
@@ -303,7 +306,7 @@ def main():
              '--config-digest-probe': '--config-digest', '--image-digest-probe': '--image-digest',
              '--image-recheck-probe': '--image-recheck', '--bundle-probe': '--bundle',
              '--bundle-recheck-probe': '--bundle-recheck', '--selection-probe': '--selection',
-             '--selection-recheck-probe': '--selection-recheck'}
+             '--selection-recheck-probe': '--selection-recheck', '--selection-active-probe': '--selection-active'}
     if len(args) == 5 and args[0] in ('--inside', '--probe', *modes):
         private_namespace()
         role, first, second, uid, gid = args
