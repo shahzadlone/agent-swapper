@@ -136,6 +136,7 @@ def inside(case, binary, backend, uid, gid):
                        'user' if case == 'full-map-user' else 'mount']
             target = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             ready(target)
+            thread_view = f'/proc/{target.pid}/task/{target.pid}'
             if case == 'full-map-user':
                 # No map helpers, subordinate-ID changes or policy overrides.
                 # The root parent maps only its blocked, still-live owned child.
@@ -147,19 +148,22 @@ def inside(case, binary, backend, uid, gid):
                 source = base / 'fake'
                 source.mkdir(mode=0o755)
                 (source / 'user').symlink_to(INITIAL_USER)
-                destination = '/proc' if case == 'fake-proc' else f'/proc/{target.pid}/ns'
+                destination = '/proc' if case == 'fake-proc' else f'{thread_view}/ns'
             elif case == 'proc-subdirectory':
                 source = Path(f'/proc/{target.pid}')
                 destination = '/proc'
             elif case == 'status-overlay':
                 source = base / 'status'
-                source.write_bytes(Path(f'/proc/{target.pid}/status').read_bytes())
+                source.write_bytes(Path(f'{thread_view}/status').read_bytes())
                 source.chmod(0o644)
-                destination = f'/proc/{target.pid}/status'
+                destination = f'{thread_view}/status'
             if destination:
                 subprocess.run(['/usr/bin/mount', '--bind', str(source), destination],
                                check=True, capture_output=True, timeout=5)
                 mounted = destination
+                require(os.stat(source).st_dev == os.stat(destination).st_dev
+                        and os.stat(source).st_ino == os.stat(destination).st_ino,
+                        'origin overlay does not name the installed source inode')
             stdout, stderr = target.communicate(input=b'GO', timeout=10)
             expected(subprocess.CompletedProcess([], target.returncode, stdout.decode(), stderr.decode()), CASES[case])
             print(f'::notice title=Linux origin::{case}/{backend}: intended result verified', flush=True)
