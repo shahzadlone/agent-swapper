@@ -47,7 +47,11 @@ The child pidfd must then report exit and the target marker must remain absent.
 No tracer destructor can run. At the exec stop there is no target-side input
 loop that could mistake channel EOF for this shutdown. Failed observations
 use the received pidfd only for cleanup and never count that fallback as a
-passing fault result. These two cases await hosted validation.
+passing fault result. Both cases passed on Ubuntu 22.04 and 24.04 at `fc666e0`
+in [run 41267901868](https://github.com/shahzadlone/agent-swapper/actions/runs/41267901868).
+The later thread-affinity and wait-ownership revision remains separately
+qualified. The six-case base pipeline at `5904d50` subsequently passed all
+platform tests, package builds and reproducible rebuilds.
 
 This is not yet an architecture choice. Later evidence must cover permission
 refusals, externally delivered signals, exec/detach/disconnect races, and
@@ -55,6 +59,22 @@ combination with the actual guardian and journal. Provider-specific sandbox,
 dumpability, credential and tracing compatibility remains unmeasured. An exec
 event establishes an image transition, not target initialization, successful
 login, application readiness or retirement of all writers.
+
+The Opus 5.5 xhigh design review supports a narrow spike and stresses one
+tracing thread, exclusive child-wait ownership and no operation after reap.
+The owner is now non-Send and its explicit cleanup and Drop fallback both use
+the same typed nix wait path. An absent exec event after a general GO race
+remains **unresolved**; it must never become proof that no exec occurred. The
+fixed fault cases above deliberately put their kills before GO or at a known
+exec stop, where their narrower assertions can be tested.
+
+The review also proposes comparing a read-only executable-identity check after
+status-pipe EOF. A changed image can offer positive evidence without tracing,
+but a fast exit, an inaccessible image or re-exec of the same image leaves it
+unresolved, and the process is not held before target instructions. That
+comparison has not been implemented or selected. Further choices include
+whether to journal exec observation before detach and whether a later guardian
+uses TRACEME or SEIZE. The present example is not a generic launch API.
 
 Run the fixed local experiment with:
 

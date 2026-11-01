@@ -18,12 +18,14 @@ use nix::{
 };
 use std::{
     fs, io,
+    marker::PhantomData,
     os::{
         fd::{AsFd, OwnedFd},
         unix::process::CommandExt,
     },
     path::Path,
     process::{Child, Command, Stdio},
+    rc::Rc,
     thread,
     time::{Duration, Instant},
 };
@@ -42,6 +44,7 @@ struct TraceChild {
     child: Child,
     pid: Pid,
     reaped: bool,
+    _same_thread: PhantomData<Rc<()>>,
 }
 impl TraceChild {
     fn owned(child: Child) -> io::Result<Self> {
@@ -50,6 +53,7 @@ impl TraceChild {
             child,
             pid,
             reaped: false,
+            _same_thread: PhantomData,
         })
     }
     fn spawn(mode: &str, directory: &Path) -> io::Result<(Self, OwnedFd)> {
@@ -117,7 +121,7 @@ impl TraceChild {
     }
     fn retire(&mut self) -> io::Result<()> {
         if !self.reaped {
-            self.child.kill()?;
+            self.kill()?;
             require(
                 matches!(
                     self.next(Instant::now() + Duration::from_secs(3))?,
@@ -128,6 +132,10 @@ impl TraceChild {
         }
         Ok(())
     }
+    fn kill(&mut self) -> io::Result<()> {
+        require(!self.reaped, "cannot signal a reaped tracee")?;
+        self.child.kill()
+    }
 }
 impl Drop for TraceChild {
     fn drop(&mut self) {
@@ -135,16 +143,15 @@ impl Drop for TraceChild {
             return;
         }
         // Only the directly spawned, unreaped child; its PID cannot be reused.
-        let _ = self.child.kill();
+        let _ = self.kill();
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(_)) => {
-                    self.reaped = true;
-                    break;
-                }
+            // A single wait implementation owns every state, including ptrace
+            // stops. Never let std::Child cache a stop as an exit status.
+            match self.next(deadline) {
+                Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
                 Err(_) => break,
-                Ok(None) => thread::sleep(Duration::from_millis(5)),
+                Ok(_) => {}
             }
         }
     }
@@ -378,7 +385,7 @@ fn experiment() -> io::Result<()> {
             )?;
         } else {
             if mode == "pre-kill" {
-                child.child.kill()?;
+                child.kill()?;
             } else {
                 transport::send_until(&control, transport::GO, &[], deadline)?;
             }
