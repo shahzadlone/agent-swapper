@@ -248,7 +248,8 @@ informational findings, with no high/medium finding in its stated scope. The
 observer now restricts the authenticated service to `Type=exec`, no PID file,
 `NotifyAccess=none` and `RemainAfterExit=no`, rechecks migration controls on each
 live observation, and enforces the namespace precondition inside binding itself.
-These follow-up checks await their own native run. Directory device/inode facts
+These follow-up checks passed both native manager jobs at `4cda3ed` in
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539). Directory device/inode facts
 identify only the retained directory: a failed invocation's directory may be
 reused by a later start. They never replace the manager invocation ID or prove
 freshness. Kernel retirement alone likewise never proves manager retirement.
@@ -281,8 +282,9 @@ The initial Rust service passed both native manager jobs at `e10a564` in
 After correcting the concurrent-fork timing assumption, its 24-test parallel
 suite passed 30/30 stress runs. Its focused Opus service/image review is now
 complete. The subsequent follow-up passes 25 Rust tests, eight core transport
-tests and 11 Python guard tests locally, plus strict Clippy; native validation
-of these later changes remains pending.
+tests and 11 Python guard tests locally, plus strict Clippy. Both Ubuntu
+manager jobs passed the revised service at `4cda3ed` in
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539).
 
 The review's `/run` noexec concern did not occur on either qualified native
 runner. This disposable fixture keeps its existing runtime path but now refuses
@@ -297,8 +299,8 @@ before reload. Error diagnostics retain earlier failures.
 Queued-record refusal is now a distinct error type. Transport, poll and
 socket-option failures cannot produce the expected fault-control attribution.
 Guardian diagnostics use one bounded socket record, and writer startup reports
-early child failure. These address the review's substantive findings; the
-native run must still qualify the complete revised configuration and lifecycle.
+early child failure. These address the review's substantive findings; both native manager jobs
+exercised the complete revised configuration and lifecycle.
 
 Real
 profile lease transfer, durable journal-before-GO ordering and an inner PTY
@@ -334,3 +336,14 @@ the guardian's duplicate alone retains the lease, and the durable unresolved
 run continues to block reuse after cleanup and reopening. They will use a
 cooperating gated writer, not claim provider exec confirmation. Existing
 operator-attestation behavior need not change to complete this checkpoint.
+
+### Integrated Rust activation evidence
+
+The complete `4cda3ed` checkpoint passed
+[run 41262752539](https://github.com/shahzadlone/agent-swapper/actions/runs/41262752539):
+Linux, macOS and Windows tests; both Ubuntu manager suites; namespace evidence;
+dependency policies; candidate builds and independent reproducibility on all
+three platforms. Branch provenance attestation was skipped by policy. The
+checkpoint is integrated into main; main's provenance run is a separate gate.
+No provider login, normal managed launch, public release or signing was enabled.
+The subsequent real lease/journal work remains under qualification separately.
