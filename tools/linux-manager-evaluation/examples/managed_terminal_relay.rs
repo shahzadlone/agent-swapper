@@ -1,5 +1,7 @@
 //! Fixed hosted target through two owned terminals; never a provider launcher.
 #![forbid(unsafe_code)]
+#[path = "../src/fresh_entry.rs"]
+mod fresh_entry;
 #[allow(
     dead_code,
     reason = "shared exclusive child waiter; owner never signals a child group"
@@ -682,6 +684,12 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> 
 fn main() -> std::process::ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let result = match args.as_slice() {
+        [_, role, path] if role == "--fresh-entry" => fresh_entry::start(Path::new(path), false),
+        [_, role, path] if role == "--fresh-entry-fail" => {
+            fresh_entry::start(Path::new(path), true)
+        }
+        [_, role, path] if role == "--fresh-owner" => fresh_entry::restore(Path::new(path))
+            .and_then(|()| terminal_owner::run(Path::new(path), true)),
         [_, path] => run(Path::new(path), None),
         [_, role, path] if role == "--owned-parent" => terminal_owner::run(Path::new(path), true),
         [_, role, path, parent] if role == "--owned-child" => parent

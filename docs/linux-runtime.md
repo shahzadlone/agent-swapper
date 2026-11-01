@@ -31,7 +31,8 @@ Local validation passed 16 runtime tests (plus the receiver role they invoke),
 20 remaining core supervision tests, the cross-process admission probe,
 60 isolated-manager tests, strict Clippy for the runtime/core and all isolated
 targets, both locked dependency audits and the dependency-boundary check.
-Hosted platform, terminal, packaging and rebuild qualification remains pending.
+Hosted platform, terminal, packaging and rebuild qualification passed in
+[run 41279851409](https://github.com/shahzadlone/agent-swapper/actions/runs/41279851409).
 The [production integration sequence](linux-production-integration.md) describes
 the remaining installation, fresh helper, exec/journal and retirement work.
 
@@ -62,7 +63,7 @@ doctests, all nine outer-terminal cases and all nine surviving-owner cases,
 strict runtime and qualification Clippy, both dependency audits and the boundary
 check. The stopped-parent case required its companion shell executable to be
 built before running; it then passed. Hosted managed-terminal and full packaging
-qualification remain pending.
+qualification passed in [run 41280349161](https://github.com/shahzadlone/agent-swapper/actions/runs/41280349161).
 
 ## Terminal guard and cleanup order
 
@@ -93,5 +94,8 @@ nor a process-scope retirement receipt.
 
 Terminal extraction validation passed 18 runtime tests, three compile-fail
 doctests, all 18 local owned-terminal/owner cases, strict runtime and isolated
-Clippy, both locked dependency audits and the dependency-boundary check. Hosted
-managed-terminal, cross-platform packaging and rebuild results remain pending.
+Clippy, both locked dependency audits and the dependency-boundary check. The terminal guard and subsequent fresh-entry composition passed hosted
+managed-terminal, cross-platform packaging and rebuild qualification in
+[run 41281405713](https://github.com/shahzadlone/agent-swapper/actions/runs/41281405713).
+An earlier terminal-only attempt refused installation on a runner with noexec
+`/run`; alternate fixture placement is being qualified separately.

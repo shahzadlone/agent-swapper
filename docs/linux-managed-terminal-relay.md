@@ -129,7 +129,9 @@ complete terminal restoration and original-scope retirement. It deliberately
 crosses the former 25/30/35-second relay/target/guardian fixture lifetimes.
 Those component fixture limits are now 55 seconds, below the unchanged
 60-second root-manager lifetime; cleanup and external harness bounds remain.
-This fixed-duration regression awaits hosted results and does not claim an
+This fixed-duration regression passed both Ubuntu versions at `edb07b2`; the
+complete [run 41278778150](https://github.com/shahzadlone/agent-swapper/actions/runs/41278778150)
+also passed all platform, packaging and rebuild jobs. It does not claim an
 unbounded production session or qualify arbitrary provider runtimes.
 
 The exec-gated relay now returns an authenticated target code to its caller,
@@ -145,5 +147,8 @@ Three new hosted cases require exact exit 7, real-time signal status through the
 retained target pidfd, and failure after guardian loss without a target report.
 The exec-gated Ctrl-C cases now require 130, including the actual shell status
 after stop/background/foreground transitions. The total becomes 32 ordinary
-cases plus the separate long-session case. Hosted results for this extension
-are pending; all nine local surviving-owner cases pass with code preservation.
+cases plus the separate long-session case. All passed on Ubuntu 22.04 and 24.04
+at `5be7b7f`, and the complete
+[run 41279456494](https://github.com/shahzadlone/agent-swapper/actions/runs/41279456494)
+passed all platform, packaging and rebuild jobs. All nine local surviving-owner
+cases also pass with code preservation.

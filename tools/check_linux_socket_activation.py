@@ -582,8 +582,8 @@ def suite():
                                         str(relay)], environment=test_env)
                 print(result.stdout[-16000:], end='', flush=True)
                 print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
-                require(result.returncode == 0 and result.stdout.count(': pass') == 56,
-                        'managed relay did not pass all fifty-six owned-PTY cases: '
+                require(result.returncode == 0 and result.stdout.count(': pass') == 58,
+                        'managed relay did not pass all fifty-eight owned-PTY cases: '
                         + (result.stdout + result.stderr)[-4000:])
                 result = owned_fixture(['/usr/bin/python3', str(Path(__file__).with_name('check_linux_managed_terminal_relay.py')),
                                         str(relay), '--long-session'], environment=test_env)

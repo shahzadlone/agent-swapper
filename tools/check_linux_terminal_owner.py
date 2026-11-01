@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify a surviving terminal owner using only PTYs and processes created here."""
 import os
+import json
 from pathlib import Path
 import select
 import shlex
@@ -32,13 +33,39 @@ def cleanup_child(fd):
         os.close(fd)
 
 
-def direct(binary, scenario):
+def fresh_observed(root, data):
+    before = json.loads((root / 'entry-before.json').read_text())
+    after = json.loads((root / 'entry-after.json').read_text())
+    assert before['threads'] > 1 and after['threads'] == 1
+    assert before['pid'] == after['pid'] == data['pid']
+    assert before['group'] == after['group'] == data['group']
+
+
+def fresh_refusal(binary, role):
+    with tempfile.TemporaryDirectory(prefix='aswp-fresh-refusal-') as path:
+        root = Path(path)
+        owned = OwnedPty(binary, root, arguments=(role,))
+        try:
+            owned.finish(125)
+            assert termios.tcgetattr(owned.master) == owned.original
+            assert not (root / 'ready').exists() and not (root / 'entry-after.json').exists()
+            if role == '--fresh-entry-fail':
+                assert (root / 'entry-exec-failed').read_text() == 'original stdin restored'
+            print(f'fresh-refusal-{role}: pass', flush=True)
+        finally:
+            owned.close()
+
+
+def direct(binary, scenario, fresh=False):
     with tempfile.TemporaryDirectory(prefix='aswp-terminal-owner-') as path:
         root = Path(path)
-        owned = OwnedPty(binary, root)
+        owned = OwnedPty(binary, root, arguments=('--fresh-entry',) if fresh else (),
+                         environment={'ASWP_ENTRY_UNTRUSTED_CANARY': 'must-not-cross'})
         child = None
         try:
             data = owned.ready(greeting=b'OWNED-CHILD-READY\r\n')
+            if fresh:
+                fresh_observed(root, data)
             child = child_handle(binary, data)
             if scenario == 'normal':
                 owned.send(b'exit\n')
@@ -63,22 +90,25 @@ def direct(binary, scenario):
                 raise AssertionError('unknown terminal-owner scenario')
             assert select.select([child], [], [], 0)[0]
             assert termios.tcgetattr(owned.master) == owned.original
-            print(f'terminal-owner-{scenario}: pass', flush=True)
+            print(f'{"fresh-" if fresh else ""}terminal-owner-{scenario}: pass', flush=True)
         finally:
             cleanup_child(child)
             owned.close()
 
 
-def shell_job(binary, forced, cancel=False):
+def shell_job(binary, forced, cancel=False, fresh=False):
     with tempfile.TemporaryDirectory(prefix='aswp-terminal-owner-shell-') as path:
         root = Path(path)
-        owned = OwnedPty(binary, root, shell=True)
+        owned = OwnedPty(binary, root, shell=True, environment={'ASWP_ENTRY_UNTRUSTED_CANARY': 'must-not-cross'})
         child = None
         try:
             prompt = b'__ASWP_OUTER_PROMPT__ '
             owned.wait(lambda: prompt in owned.output)
-            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {shlex.quote(str(root))}\n'.encode())
+            role = '--fresh-entry ' if fresh else ''
+            owned.send(f'/usr/bin/stty -g > before; {shlex.quote(str(binary))} {role}{shlex.quote(str(root))}\n'.encode())
             data = owned.ready(greeting=b'OWNED-CHILD-READY\r\n')
+            if fresh:
+                fresh_observed(root, data)
             child = child_handle(binary, data)
             offset = len(owned.output)
             if forced:
@@ -123,7 +153,7 @@ def shell_job(binary, forced, cancel=False):
             owned.wait(lambda: (root / 'after').exists())
             assert (root / 'after').read_text() == (root / 'before').read_text()
             assert select.select([child], [], [], 0)[0]
-            print(f'terminal-owner-shell-{"sigstop" if forced else "self-stop"}: pass', flush=True)
+            print(f'{"fresh-" if fresh else ""}terminal-owner-shell-{"sigstop" if forced else "self-stop"}: pass', flush=True)
         finally:
             cleanup_child(child)
             owned.close()
@@ -173,7 +203,11 @@ def main():
     shell_job(binary, False, cancel=True)
     shell_job(binary, True, cancel=True)
     stopped_parent_loss(binary)
-    print('::notice::surviving terminal owner: nine owned-PTY cases passed; stopped parent loss works under a same-session subreaper; no active whole-group restoration guarantee', flush=True)
+    direct(binary, 'normal', fresh=True)
+    shell_job(binary, False, fresh=True)
+    fresh_refusal(binary, '--fresh-owner')
+    fresh_refusal(binary, '--fresh-entry-fail')
+    print('::notice::surviving terminal owner: thirteen owned-PTY cases passed; stopped parent loss works under a same-session subreaper; no active whole-group restoration guarantee', flush=True)
 
 
 if __name__ == '__main__':

@@ -96,7 +96,7 @@ It checks terminal wait status before terminal hangup. Eleven new native cases
 cover stopped SIGKILL through fg, bg/fg and background expiry, a held resume
 with concurrent target death, a three-second reader pause, permanently blocked
 final output, and refused diagnostic marker replacement. Local Rust and strict
-Clippy pass; the 56-case managed suite awaits native qualification.
+Clippy pass; the 58-case combined managed suite (including fresh entry) awaits native qualification.
 
 The preceding admission checkpoint `815a878` passed all 45 managed cases plus
 the long-session check on Ubuntu 22.04/24.04 in jobs 124777197243 and
