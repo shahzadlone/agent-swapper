@@ -131,7 +131,7 @@ fn lookup_result(
     }
 }
 
-async fn lookup(
+pub(crate) async fn lookup(
     connection: &Manager,
     sender: &str,
     invocation: &[u8],

@@ -135,7 +135,14 @@ impl BoundService {
             linux::owner(manager).await?.as_str() == sender,
             "manager owner changed before service binding",
         )?;
-        let path = linux::get_invocation(manager, sender, &invocation).await?;
+        let path = invocation::lookup(manager, sender, &invocation)
+            .await?
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "bound guardian invocation is absent",
+                )
+            })?;
         let text = async |interface, name| -> io::Result<String> {
             String::try_from(property(manager, sender, &path, interface, name).await?)
                 .map_err(io::Error::other)

@@ -448,3 +448,13 @@ review corrections `e8cc4e8` in
 and active invocation rechecks `279cc96` in
 [41292389909](https://github.com/shahzadlone/agent-swapper/actions/runs/41292389909).
 These do not qualify the subsequent lifecycle, NOCTTY or bound-service revisions.
+
+The first bound-service native run
+[41293930402](https://github.com/shahzadlone/agent-swapper/actions/runs/41293930402)
+passed connection substitution, the mutable-template refusal, ordinary
+activation and initial journal cases on both Ubuntu versions. Both stopped at
+a stale assertion in the forged-invocation witness control: direct invocation
+lookup now refused absence before the former unit-name comparison. Binding now
+uses the existing authenticated absence decoder and exposes a stable NotFound
+error; the test requires both that kind and the precise absence message. It does
+not accept arbitrary manager errors. The rest of the composition requires a rerun.
