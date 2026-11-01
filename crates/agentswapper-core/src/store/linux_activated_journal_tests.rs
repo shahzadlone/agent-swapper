@@ -1,7 +1,7 @@
 //! Real journal/lease integration with the opted-in, root-installed CI fixture.
 #![allow(clippy::unwrap_used)]
 use super::*;
-use aswp_linux_manager_evaluation::journal_client::{Bound, Identity, Prepared};
+use aswp_linux_manager_evaluation::journal_client::{Bound, Identity, Prepared, StartCause};
 use std::{fs, os::fd::AsFd, thread};
 
 fn environment() -> (String, PathBuf) {
@@ -38,13 +38,19 @@ fn prepare(store: &mut Store, alias: &str, prefix: &str) -> (ProfileId, String, 
     (profile.id, run, prepared)
 }
 
-fn heartbeat(directory: &Path, id: &Identity, nonce: &[u8; 16], previous: Option<&str>) -> String {
+fn heartbeat(
+    directory: &Path,
+    id: &Identity,
+    pid: u32,
+    nonce: &[u8; 16],
+    previous: Option<&str>,
+) -> String {
     let prefix: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let value = fs::read_to_string(directory.join(&id.invocation).join("heartbeat"));
         if let Ok(value) = value
-            && value.starts_with(&format!("{prefix}:"))
+            && value.starts_with(&format!("{pid}:{prefix}:"))
             && previous != Some(value.as_str())
         {
             return value;
@@ -55,6 +61,36 @@ fn heartbeat(directory: &Path, id: &Identity, nonce: &[u8; 16], previous: Option
         );
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn quiescent(prepared: &Prepared, directory: &Path) {
+    let run = directory.join(prepared.identity().invocation);
+    assert_eq!(
+        fs::read_to_string(run.join("ready")).unwrap(),
+        prepared.pid().to_string()
+    );
+    prepared.observe_ready().unwrap();
+    thread::sleep(Duration::from_millis(200));
+    assert!(!run.join("heartbeat").exists());
+    prepared.observe_ready().unwrap();
+}
+
+fn journal_while_gated(
+    store: &mut Store,
+    run: &str,
+    pid: u32,
+    directory: &Path,
+    id: &Identity,
+) -> Result<()> {
+    store.observe_spawn(run, pid)?;
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(store.run(run)?.observed_pid, Some(pid));
+    assert_eq!(
+        fs::read_to_string(directory.join(&id.invocation).join("ready"))?,
+        pid.to_string()
+    );
+    assert!(!directory.join(&id.invocation).join("heartbeat").exists());
+    Ok(())
 }
 
 fn unresolved(store: &Store, profile: ProfileId, run: &str) {
@@ -76,11 +112,15 @@ fn actual_lease_and_journal_gate_two_independent_activations() {
     let (profile_a, run_a, a) = prepare(&mut store, "activation-a", &prefix);
     let id_a = a.identity();
     assert!(!directory.join(&id_a.invocation).join("heartbeat").exists());
-    store.observe_spawn(&run_a, a.pid()).unwrap();
-    assert_eq!(store.run(&run_a).unwrap().observed_pid, Some(a.pid()));
+    let pid_a = a.pid();
+    quiescent(&a, &directory);
     let nonce_a = *Uuid::new_v4().as_bytes();
-    let a = a.start(nonce_a).unwrap();
-    heartbeat(&directory, &id_a, &nonce_a, None);
+    let a = a
+        .start_after(nonce_a, |pid| {
+            journal_while_gated(&mut store, &run_a, pid, &directory, &id_a)
+        })
+        .unwrap();
+    heartbeat(&directory, &id_a, pid_a, &nonce_a, None);
     let (profile_b, run_b, b) = prepare(&mut store, "activation-b", &prefix);
     let id_b = b.identity();
     assert_ne!(id_a.invocation, id_b.invocation);
@@ -90,16 +130,23 @@ fn actual_lease_and_journal_gate_two_independent_activations() {
         (id_b.directory_device, id_b.directory_inode)
     );
     assert!(!directory.join(&id_b.invocation).join("heartbeat").exists());
-    store.observe_spawn(&run_b, b.pid()).unwrap();
+    let pid_b = b.pid();
+    quiescent(&b, &directory);
     let nonce_b = *Uuid::new_v4().as_bytes();
-    let b = b.start(nonce_b).unwrap();
-    heartbeat(&directory, &id_b, &nonce_b, None);
+    let b = b
+        .start_after(nonce_b, |pid| {
+            journal_while_gated(&mut store, &run_b, pid, &directory, &id_b)
+        })
+        .unwrap();
+    heartbeat(&directory, &id_b, pid_b, &nonce_b, None);
     assert!(started.elapsed() < Duration::from_secs(20));
-    assert_eq!(a.close().retire().unwrap(), id_a);
-    let before = heartbeat(&directory, &id_b, &nonce_b, None);
-    heartbeat(&directory, &id_b, &nonce_b, Some(&before));
+    assert!(a.close().retire().unwrap().connection_close_error.is_none());
+    unresolved(&store, profile_a, &run_a);
+    let before = heartbeat(&directory, &id_b, pid_b, &nonce_b, None);
+    heartbeat(&directory, &id_b, pid_b, &nonce_b, Some(&before));
     assert!(matches!(store.acquire_lease(profile_b), Err(Error::Busy)));
-    assert_eq!(b.close().retire().unwrap(), id_b);
+    assert!(b.close().retire().unwrap().connection_close_error.is_none());
+    unresolved(&store, profile_b, &run_b);
     for id in [&id_a, &id_b] {
         assert!(
             !directory
@@ -116,6 +163,8 @@ fn actual_lease_and_journal_gate_two_independent_activations() {
     let reopened = Store::open(&root).unwrap();
     unresolved(&reopened, profile_a, &run_a);
     unresolved(&reopened, profile_b, &run_b);
+    assert_eq!(reopened.run(&run_a).unwrap().observed_pid, Some(pid_a));
+    assert_eq!(reopened.run(&run_b).unwrap().observed_pid, Some(pid_b));
     assert!(reopened.verify().unwrap().consistent);
     println!(
         "::notice title=Linux activated journal::two distinct invocations kept real leases, journaled PID before nonce-bound GO, retired independently and retained unresolved intent after reopening"
@@ -131,17 +180,42 @@ fn sqlite_write_failure_withholds_go_and_keeps_unresolved_intent() {
     let mut store = Store::open(&root).unwrap();
     let (profile, run, prepared) = prepare(&mut store, "activation-busy", &prefix);
     let id = prepared.identity();
+    quiescent(&prepared, &directory);
     store.db.busy_timeout(Duration::from_millis(20)).unwrap();
     let blocker = Connection::open(root.join("registry.sqlite3")).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let result = store.observe_spawn(&run, prepared.pid());
+    let failure = match prepared.start_after(*Uuid::new_v4().as_bytes(), |pid| {
+        store.observe_spawn(&run, pid)
+    }) {
+        Err(failure) => failure,
+        Ok(_) => panic!("journal failure unexpectedly released GO"),
+    };
+    assert!(matches!(failure.live_at_refusal, Some(Ok(()))));
+    let result = failure.cause;
     assert!(
-        matches!(result, Err(Error::Database(rusqlite::Error::SqliteFailure(ref error, _)))
+        matches!(result, StartCause::Journal(Error::Database(rusqlite::Error::SqliteFailure(ref error, _)))
         if error.code == rusqlite::ErrorCode::DatabaseBusy),
         "unexpected journal failure: {result:?}"
     );
     assert!(!directory.join(&id.invocation).join("heartbeat").exists());
-    assert_eq!(prepared.close().retire().unwrap(), id);
+    assert!(
+        failure
+            .closed
+            .retire()
+            .unwrap()
+            .connection_close_error
+            .is_none()
+    );
+    assert_eq!(
+        fs::read_to_string(
+            directory
+                .join(&id.invocation)
+                .join("guardian-withdrawn-before-go")
+        )
+        .unwrap(),
+        id.invocation
+    );
+    unresolved(&store, profile, &run);
     assert!(!directory.join(&id.invocation).join("heartbeat").exists());
     blocker.execute_batch("ROLLBACK").unwrap();
     drop(blocker);
@@ -152,5 +226,67 @@ fn sqlite_write_failure_withholds_go_and_keeps_unresolved_intent() {
     assert!(reopened.verify().unwrap().consistent);
     println!(
         "::notice title=Linux activated journal refusal::actual SQLite BUSY withheld GO; gated child retired without heartbeat and unresolved intent survived reopening"
+    );
+}
+
+#[test]
+#[ignore = "requires the opted-in root-owned activation fixture on a hosted runner"]
+fn invalid_or_independently_locked_lease_never_spawns_writer() {
+    use std::os::unix::fs::PermissionsExt;
+    let (prefix, directory) = environment();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("state");
+    let mut store = Store::open(&root).unwrap();
+    for reason in ["metadata", "locked"] {
+        let profile = store
+            .register(Harness::Claude, format!("lease-{reason}").parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let bound = Bound::connect(&prefix).unwrap();
+        let id = bound.identity();
+        let run = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
+            )
+            .unwrap();
+        let wrong = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+        if reason == "metadata" {
+            wrong
+                .as_file()
+                .set_permissions(fs::Permissions::from_mode(0o644))
+                .unwrap();
+        } else {
+            wrong.as_file().try_lock().unwrap();
+        }
+        let independent = File::open(wrong.path()).unwrap();
+        let failure = match bound.prepare(independent.as_fd()) {
+            Err(failure) => failure,
+            Ok(_) => panic!("invalid lease spawned a writer"),
+        };
+        assert!(!directory.join(&id.invocation).exists());
+        assert_eq!(
+            fs::read_to_string(directory.join(format!("{}.lease-refused", id.invocation))).unwrap(),
+            reason
+        );
+        drop(lease);
+        assert!(
+            failure
+                .closed
+                .retire()
+                .unwrap()
+                .connection_close_error
+                .is_none()
+        );
+        unresolved(&store, profile.id, &run);
+        let reopened = Store::open(&root).unwrap();
+        unresolved(&reopened, profile.id, &run);
+        assert_eq!(reopened.run(&run).unwrap().observed_pid, None);
+        assert!(reopened.verify().unwrap().consistent);
+    }
+    println!(
+        "::notice title=Linux activated lease refusal::invalid metadata and independently locked lease refused before writer creation; real planned runs remain unresolved"
     );
 }

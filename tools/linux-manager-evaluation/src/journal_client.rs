@@ -38,9 +38,14 @@ struct Session {
 impl Drop for Session {
     fn drop(&mut self) {
         drop(std::mem::replace(&mut self.control, Control(None)));
-        drop(self.connection.take());
         if let Some(runtime) = self.runtime.take() {
+            {
+                let _entered = runtime.enter();
+                drop(self.connection.take());
+            }
             runtime.shutdown_background();
+        } else {
+            drop(self.connection.take());
         }
     }
 }
@@ -163,6 +168,43 @@ impl std::fmt::Debug for TransitionFailure {
     }
 }
 
+/// Transport failure can mean GO was delivered; journal intent remains unresolved.
+#[derive(Debug)]
+pub enum StartCause<E> {
+    Journal(E),
+    Transport(io::Error),
+}
+pub struct StartFailure<E> {
+    pub cause: StartCause<E>,
+    pub live_at_refusal: Option<io::Result<()>>,
+    pub closed: Box<Closed>,
+}
+impl<E: std::fmt::Debug> std::fmt::Debug for StartFailure<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StartFailure")
+            .field("cause", &self.cause)
+            .field("live_at_refusal", &self.live_at_refusal)
+            .finish_non_exhaustive()
+    }
+}
+pub struct RetireFailure {
+    pub error: io::Error,
+    pub closed: Box<Closed>,
+}
+impl std::fmt::Debug for RetireFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RetireFailure")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+/// Original identity plus successful independent retirement observations.
+/// Neither this value nor its identity is a production custody receipt.
+pub struct Retired {
+    pub identity: Identity,
+    pub connection_close_error: Option<io::Error>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     pub unit: String,
@@ -179,6 +221,34 @@ fn identity(session: &Session) -> Identity {
         directory_device: session.unit.kernel.device,
         directory_inode: session.unit.kernel.inode,
     }
+}
+
+fn validate_prepared(
+    packet: &activation_packet::Packet,
+    guardian: u32,
+    uid: u32,
+    gid: u32,
+    invocation: &str,
+) -> io::Result<u32> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Offer {
+        kind: String,
+        child: u32,
+        invocation: String,
+    }
+    let offer: Offer = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
+    require(
+        packet.sender.pid() == guardian as i32
+            && packet.sender.uid() == uid
+            && packet.sender.gid() == gid
+            && offer.invocation == invocation
+            && offer.kind == "aswp-fixture-prepared-1"
+            && offer.child > 1
+            && offer.child != guardian,
+        "prepared writer sender or framing differs",
+    )?;
+    Ok(offer.child)
 }
 
 impl Bound {
@@ -209,14 +279,24 @@ impl Bound {
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "fixture binding expired"))?
         })?;
+        let (unit, binding) = match (report.unit, binding) {
+            (Some(unit), Some(binding)) => (unit, binding),
+            _ => {
+                runtime.block_on(async {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), connection.close()).await;
+                });
+                runtime.shutdown_background();
+                return Err(io::Error::other(
+                    "fixture admission lacks unit or kernel binding",
+                ));
+            }
+        };
         Ok(Self(Session {
             control,
             connection: Some(connection),
             owner,
-            unit: report
-                .unit
-                .ok_or_else(|| io::Error::other("fixture unit absent"))?,
-            binding: binding.ok_or_else(|| io::Error::other("fixture kernel binding absent"))?,
+            unit,
+            binding,
             child: None,
             deadline,
             runtime: Some(runtime),
@@ -234,23 +314,16 @@ impl Bound {
             self.0.recheck()?;
             transport::send_until(self.0.socket()?, transport::GO, &[lease], self.0.deadline)?;
             let packet = activation_packet::receive(self.0.socket()?, self.0.deadline)?;
-            #[derive(Deserialize)]
-            #[serde(deny_unknown_fields)]
-            struct Offer {
-                child: u32,
-                invocation: String,
-            }
-            let offer: Offer = serde_json::from_slice(&packet.bytes).map_err(io::Error::other)?;
-            require(
-                packet.sender.pid() == self.0.unit.pid as i32
-                    && packet.sender.uid() == self.0.unit.user
-                    && packet.sender.gid() == rustix::process::getgid().as_raw()
-                    && offer.invocation == self.0.unit.invocation,
-                "prepared writer sender changed",
+            let child_pid = validate_prepared(
+                &packet,
+                self.0.unit.pid,
+                self.0.unit.user,
+                rustix::process::getgid().as_raw(),
+                &self.0.unit.invocation,
             )?;
-            self.0.child = Some(self.0.binding.child(offer.child, self.0.unit.pid)?);
+            self.0.child = Some(self.0.binding.child(child_pid, self.0.unit.pid)?);
             self.0.recheck()?;
-            Ok(offer.child)
+            Ok(child_pid)
         })();
         match result {
             Ok(pid) => Ok(Prepared {
@@ -275,9 +348,36 @@ impl Prepared {
     pub fn close(self) -> Closed {
         self.session.close()
     }
-    /// Caller must durably journal the returned PID before invoking this method.
-    pub fn start(self, nonce: [u8; 16]) -> Result<Running, TransitionFailure> {
+    pub fn observe_ready(&self) -> io::Result<()> {
+        self.session.recheck()
+    }
+
+    /// The callback runs synchronously, outside any entered async runtime.
+    /// Only a successful durable journal write may release GO. A transport
+    /// failure afterwards must be treated as GO possibly having been delivered.
+    pub fn start_after<E>(
+        self,
+        nonce: [u8; 16],
+        journal: impl FnOnce(u32) -> Result<(), E>,
+    ) -> Result<Running, StartFailure<E>> {
+        if let Err(error) = self.session.recheck() {
+            return Err(StartFailure {
+                cause: StartCause::Transport(error),
+                live_at_refusal: None,
+                closed: Box::new(self.session.close()),
+            });
+        }
+        if let Err(error) = journal(self.pid) {
+            let live_at_refusal = Some(self.session.recheck());
+            return Err(StartFailure {
+                cause: StartCause::Journal(error),
+                live_at_refusal,
+                closed: Box::new(self.session.close()),
+            });
+        }
         let result = self.session.recheck().and_then(|()| {
+            // The client socket is nonblocking. A full queue fails immediately;
+            // send_until bounds the attempt but does not wait for queue space.
             transport::send_until(
                 self.session.socket()?,
                 &journal_protocol::start_packet(&nonce),
@@ -287,8 +387,9 @@ impl Prepared {
         });
         match result {
             Ok(()) => Ok(Running(self.session)),
-            Err(error) => Err(TransitionFailure {
-                error,
+            Err(error) => Err(StartFailure {
+                cause: StartCause::Transport(error),
+                live_at_refusal: None,
                 closed: Box::new(self.session.close()),
             }),
         }
@@ -303,33 +404,47 @@ impl Running {
     }
 }
 impl Closed {
-    /// Return only observed identity, with no conversion to a custody receipt.
-    pub fn retire(mut self) -> io::Result<Identity> {
-        let result = self.0.runtime()?.block_on(crate::watch::retire(
-            self.0.connection()?,
-            self.0.owner.as_str(),
-            &self.0.unit,
-            &self.0.binding,
-        ));
-        result?;
-        if let Some(child) = &self.0.child {
-            require(
-                child.exited()?,
-                "writer pidfd remains live after retirement",
-            )?;
+    /// Observation failure retains the witnesses for retry. Connection-close
+    /// failure after proven retirement is reported separately from that result.
+    pub fn retire(mut self) -> Result<Retired, RetireFailure> {
+        let observed = (|| -> io::Result<()> {
+            self.0.runtime()?.block_on(crate::watch::retire(
+                self.0.connection()?,
+                self.0.owner.as_str(),
+                &self.0.unit,
+                &self.0.binding,
+            ))?;
+            if let Some(child) = &self.0.child {
+                require(
+                    child.exited()?,
+                    "writer pidfd remains live after retirement",
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = observed {
+            return Err(RetireFailure {
+                error,
+                closed: Box::new(self),
+            });
         }
-        let connection = self
-            .0
-            .connection
-            .take()
-            .ok_or_else(|| io::Error::other("manager connection is closed"))?;
-        self.0.runtime()?.block_on(async {
-            tokio::time::timeout(Duration::from_secs(2), connection.close())
-                .await
-                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "manager close expired"))?
-                .map_err(io::Error::other)
-        })?;
-        Ok(identity(&self.0))
+        let closed = (|| -> io::Result<()> {
+            let connection = self
+                .0
+                .connection
+                .take()
+                .ok_or_else(|| io::Error::other("manager connection is closed"))?;
+            self.0.runtime()?.block_on(async {
+                tokio::time::timeout(Duration::from_secs(2), connection.close())
+                    .await
+                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "manager close expired"))?
+                    .map_err(io::Error::other)
+            })
+        })();
+        Ok(Retired {
+            identity: identity(&self.0),
+            connection_close_error: closed.err(),
+        })
     }
 }
 
@@ -337,6 +452,56 @@ impl Closed {
 mod tests {
     use super::*;
     use std::os::fd::AsFd;
+
+    #[test]
+    fn prepared_packets_bind_version_sender_invocation_and_child() -> io::Result<()> {
+        let invocation = "0123456789abcdef0123456789abcdef";
+        let credentials = unix_ancillary::ScmCredentials::new(4000, 1000, 1001);
+        let value = serde_json::json!({"kind":"aswp-fixture-prepared-1", "child":4001, "invocation":invocation});
+        let packet = |value: &serde_json::Value| -> io::Result<activation_packet::Packet> {
+            Ok(activation_packet::Packet {
+                bytes: serde_json::to_vec(value).map_err(io::Error::other)?,
+                sender: credentials,
+            })
+        };
+        assert_eq!(
+            validate_prepared(&packet(&value)?, 4000, 1000, 1001, invocation)?,
+            4001
+        );
+        for (field, changed) in [
+            ("child", serde_json::json!(0)),
+            ("child", serde_json::json!(1)),
+            ("child", serde_json::json!(4000)),
+            ("kind", serde_json::json!("other")),
+            ("invocation", serde_json::json!("other")),
+            ("unknown", serde_json::json!(true)),
+        ] {
+            let mut bad = value.clone();
+            bad[field] = changed;
+            assert!(validate_prepared(&packet(&bad)?, 4000, 1000, 1001, invocation).is_err());
+        }
+        for field in ["kind", "child", "invocation"] {
+            let mut bad = value.clone();
+            bad.as_object_mut()
+                .ok_or_else(|| io::Error::other("test object absent"))?
+                .remove(field);
+            assert!(validate_prepared(&packet(&bad)?, 4000, 1000, 1001, invocation).is_err());
+        }
+        for sender in [
+            unix_ancillary::ScmCredentials::new(0, 1000, 1001),
+            unix_ancillary::ScmCredentials::new(4001, 1000, 1001),
+            unix_ancillary::ScmCredentials::new(4000, 0, 1001),
+            unix_ancillary::ScmCredentials::new(4000, 1000, 1002),
+        ] {
+            let mut bad = packet(&value)?;
+            bad.sender = sender;
+            assert!(validate_prepared(&bad, 4000, 1000, 1001, invocation).is_err());
+        }
+        let mut bad = packet(&value)?;
+        bad.bytes = b"not JSON".to_vec();
+        assert!(validate_prepared(&bad, 4000, 1000, 1001, invocation).is_err());
+        Ok(())
+    }
 
     #[test]
     fn control_drop_disconnects_even_with_a_retained_socket_duplicate() -> io::Result<()> {
@@ -352,8 +517,15 @@ mod tests {
     fn synchronous_client_refuses_nested_runtime_before_any_activation() -> io::Result<()> {
         let runtime = tokio::runtime::Builder::new_current_thread().build()?;
         runtime.block_on(async {
-            assert!(outside_runtime().is_err());
-        });
+            let error = Bound::connect("not-an-opted-in-prefix")
+                .err()
+                .ok_or_else(|| io::Error::other("nested runtime unexpectedly admitted"))?;
+            assert_eq!(
+                error.to_string(),
+                "fixture client cannot run inside an async runtime"
+            );
+            Ok::<(), io::Error>(())
+        })?;
         outside_runtime()
     }
 }

@@ -403,3 +403,51 @@ interrupt, raw-mode input and disconnect. Then qualify shell suspend/resume,
 redirection, foreground restoration, client/guardian loss and sessions beyond
 startup timeouts. Do not infer these properties from the earlier delegated
 fixture: a root-manager service starts with a different terminal relationship.
+
+### Journal review follow-up under qualification
+
+The focused Opus review of `9ca328e` found no ADMIT execution path preceding the
+separate start grant, but identified gaps in the assertions and failure APIs.
+The follow-up centralizes recheck → synchronous journal callback → recheck → GO
+in `Prepared::start_after`; the callback runs outside an entered async runtime.
+A failed write records whether the prepared writer was still live before the
+channel closes. The only public start method uses this ordering. A later
+transport error means GO might have been delivered; intent remains unresolved.
+
+The test now observes a live, ready writer without a heartbeat across ten
+writer intervals before GO, repeats that check after journaling, and requires
+PID plus nonce in heartbeats. Lock transitions are checked in the still-open
+store as well as after reopening, where the successful spawn PID must persist.
+Invalid lease metadata and a separately held file lock must refuse before
+writer creation, with exact fixture-only fault attribution.
+
+Retirement observation errors retain the original witnesses for retry.
+Connection-close errors after successful observation are separate diagnostic
+results, not a lost observation. Connection destruction runs under the owned
+runtime context before nonblocking shutdown. Prepared packets now carry an
+explicit version tag and have independent malformed/sender regression cases.
+The writer authenticates its gate's peer and null outputs; the guardian drops
+its extra child-stdin descriptor and checks atomically published readiness.
+
+Withdrawal before GO has distinct attribution only after strict EOF. A
+credential-requesting peek with zero ancillary capacity distinguishes even an
+empty queued record from closure, without decoding credentials. The flags may
+include `MSG_CMSG_CLOEXEC` at EOF, so only data/control truncation participates
+in that distinction. Modes and timeout restoration are explicit and tested,
+including delayed delivery, expiry, queued-empty-plus-shutdown and discarded
+rights. The blocking receiver refuses a nonblocking or credential-enabled
+channel. Client sends remain bounded nonblocking attempts and can fail without
+waiting for queue space.
+
+The review's failed-unit lifecycle concern was already covered by
+`CollectMode=inactive-or-failed`, the watcher's explicit failed-state handling
+and both native jobs. Stderr already goes to the journal; stdout must remain
+the protocol socket. Tests already run individually with one test thread, and
+the runner now also requires exactly one passing test and publishes its own
+annotation. The single twelve-second client startup budget remains intentional
+and conservative relative to the guardian's fifteen-second window; it is not
+reset around a slow journal callback. The legacy GO mode remains a separate
+fixed-writer control; journal-order claims apply to ADMIT only.
+
+This follow-up passes local protocol tests and strict Clippy. Its revised
+native tests and focused withdrawal/ordering follow-up review remain pending.

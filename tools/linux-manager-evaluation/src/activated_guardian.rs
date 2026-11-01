@@ -252,7 +252,8 @@ pub(crate) fn writer_check(prefix: &str, directory: &Path) -> io::Result<()> {
     protected_executable(prefix)?;
     private_directory(directory)?;
     // Collect names, not DirEntry objects, so the enumeration descriptor is
-    // closed before verifying that exec retained only the three null streams.
+    // closed before verifying that exec retained only standard streams.
+    // The gated role authenticates its stdin socket and null outputs separately.
     let names = fs::read_dir("/proc/self/fd")?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<io::Result<Vec<_>>>()?;
@@ -330,6 +331,9 @@ mod tests {
         for (bytes, descriptor, accepted) in [
             (b"BIND\n".as_slice(), false, true),
             (b"ADMIT\n".as_slice(), false, true),
+            (b"ADMIT".as_slice(), false, false),
+            (b"ADMIT\nX".as_slice(), false, false),
+            (b"ADMIT\n".as_slice(), true, false),
             (b"GO\n".as_slice(), false, true),
             (b"".as_slice(), false, false),
             (b"GO\nextra".as_slice(), false, false),

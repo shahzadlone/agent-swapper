@@ -509,7 +509,8 @@ def suite():
                 test_env = dict(os.environ, ASWP_ACTIVATION_PREFIX=prefix,
                                 ASWP_ACTIVATION_DIRECTORY=str(directory))
                 for test in ('actual_lease_and_journal_gate_two_independent_activations',
-                             'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent'):
+                             'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent',
+                             'invalid_or_independently_locked_lease_never_spawns_writer'):
                     result = subprocess.run(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
                                     '--lib', 'store::linux_activated_journal_tests::' + test,
                                     '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],
@@ -520,6 +521,8 @@ def suite():
                             and 'test result: ok. 1 passed; 0 failed;' in result.stdout,
                             'activated journal test did not pass exactly once: '
                             + (result.stdout + result.stderr)[-3000:])
+                    print('::notice title=Linux activated journal qualification::' + test
+                          + ': exactly one test passed with the real Store and retained manager/kernel witnesses', flush=True)
 
         finally:
             for connection in connections:
