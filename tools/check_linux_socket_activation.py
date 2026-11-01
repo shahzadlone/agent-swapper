@@ -581,7 +581,17 @@ def verify_cleanup(prefix):
         require(not os.path.lexists(path), 'owned activation asset survived cleanup: ' + path.name)
 
 
-def generation_control(observer, mode, prefix, directory, admin_args, identity_args, environment):
+def generation_result(mode, returncode, stdout, stderr, expected_failure):
+    if expected_failure is None:
+        valid = returncode == 0 and stdout == f'generation: {mode} passed\n'.encode() and not stderr
+    else:
+        valid = returncode == 125 and not stdout and stderr == (
+            'generation probe refused: ' + expected_failure + '\n').encode()
+    require(valid, f'generation {mode} control failed: ' + stderr.decode(errors='replace')[-2000:])
+
+
+def generation_control(observer, mode, prefix, directory, admin_args, identity_args, environment,
+                       expected_failure=None):
     command = [observer, '--activation-generation-probe', mode, prefix, str(directory)]
     with subprocess.Popen(command, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE) as child:
@@ -592,15 +602,15 @@ def generation_control(observer, mode, prefix, directory, admin_args, identity_a
             action = 'stamp-image' if mode == 'image-change' else 'select-next'
             subprocess.run(admin_args + [action] + identity_args, env=environment, check=True, timeout=15)
             stdout, stderr = child.communicate(b'R', timeout=30)
-            require(child.returncode == 0 and stdout == f'generation: {mode} passed\n'.encode() and not stderr,
-                    f'generation {mode} control failed: ' + stderr.decode(errors='replace')[-2000:])
+            generation_result(mode, child.returncode, stdout, stderr, expected_failure)
         finally:
             if child.poll() is None:
                 child.kill()
                 child.communicate(timeout=5)
             subprocess.run(admin_args + ['select-original'] + identity_args,
                            env=environment, check=True, timeout=15)
-    print(f'::notice title=Linux generation admission::{mode}: pass; original binding and selector lifetime checked', flush=True)
+    outcome = 'expected mutation detected' if expected_failure else 'original admission verified'
+    print(f'::notice title=Linux generation admission::{mode}: pass; {outcome}', flush=True)
 
 
 def suite():
@@ -689,6 +699,16 @@ def suite():
             # them after the malformed-packet controls that require no files.
             for mode in ('before-final-check', 'after-bind', 'image-change'):
                 generation_control(observer, mode, prefix, directory, admin_args, identity_args, environment)
+            mutants = os.environ.get('ASWP_ADMISSION_MUTANTS')
+            if mutants:
+                root = Path(mutants)
+                require(root.is_absolute() and root.is_dir(), 'invalid admission mutation directory')
+                for name, mode, diagnostic in (
+                    ('missing-transition', 'after-bind', 'installed configuration changed since admission began'),
+                    ('premature-transition', 'before-final-check', 'selector switch during admission was accepted'),
+                ):
+                    generation_control(str(root / name), mode, prefix, directory, admin_args,
+                                       identity_args, environment, expected_failure=diagnostic)
             for label, packets, shutdown in [
                     ('unexpected command', (b'X',), False),
                     ('empty record on open peer', (b'',), False),

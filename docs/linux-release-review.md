@@ -175,8 +175,15 @@ builds and executes every normal admission check. A default-build compile-fail
 test checks that it is absent. Binding also rejects an already-admitted policy.
 Local manager tests, default doctests, strict evaluator Clippy and 48 Linux
 harness controls passed. Real service controls await hosted CI; deliberately
-mutated observers are still needed to demonstrate that these cases detect a
-missing or prematurely executed admission transition.
+mutated observers additionally check that these cases detect a missing or
+prematurely executed admission transition. The builder edits disposable source
+copies, requires exactly one matching transition and barrier, and uses separate
+Cargo targets. It neither changes the checkout nor adds a runtime fault feature.
+The guardian always uses the original binary. Only the ordinary observers carry
+the faults; both must fail with the specific expected diagnostic, after the
+unmodified controls pass. Two dedicated Ubuntu jobs keep this compilation out
+of the bounded journal/terminal step. Both mutated observers built locally and
+all 50 ordinary Linux harness controls passed. Native results remain pending.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
