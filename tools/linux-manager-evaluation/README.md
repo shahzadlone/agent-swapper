@@ -170,3 +170,11 @@ References: [systemd's D-Bus interface](https://www.freedesktop.org/software/sys
 [D-Bus credentials](https://dbus.freedesktop.org/doc/dbus-specification.html#bus-messages-get-connection-credentials),
 and the pinned zbus 6.2.0 registry source. Version 6 uses the async API and
 `zbus::wire`; older blocking-builder examples do not describe this version.
+
+The client side is additionally available to Linux-only core development tests.
+Its bound/prepared/running/closed states exercise real lease transfer and durable
+journal-before-GO ordering with the fixed gated writer. The service/writer are
+binary-only roles, never linked by the client library. These tests are hosted,
+opt-in and ignored by ordinary test runs. No observed retirement becomes a
+custody receipt. See the activated journal checkpoint in
+[the design notes](../../docs/linux-managed-launch.md).

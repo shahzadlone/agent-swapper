@@ -23,6 +23,8 @@ mod journal;
 #[cfg(all(test, target_os = "linux"))]
 mod lease_transfer_tests;
 #[cfg(all(test, target_os = "linux"))]
+mod linux_activated_journal_tests;
+#[cfg(all(test, target_os = "linux"))]
 mod linux_journal_guardian_tests;
 mod runs;
 mod sessions;

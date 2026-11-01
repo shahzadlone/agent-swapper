@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn private_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn private_directory(path: &Path) -> io::Result<()> {
     let meta = fs::symlink_metadata(path)?;
     require(
         path.is_absolute()
@@ -28,7 +28,7 @@ fn private_directory(path: &Path) -> io::Result<()> {
     )
 }
 
-fn protected_executable(prefix: &str) -> io::Result<()> {
+pub(crate) fn protected_executable(prefix: &str) -> io::Result<()> {
     activation::protected_fragment(&format!("/run/systemd/system/{prefix}@.service"))?;
     let path = format!("/run/{prefix}.guardian");
     require(
@@ -42,7 +42,14 @@ fn protected_executable(prefix: &str) -> io::Result<()> {
     )
 }
 
-fn request(channel: &OwnedFd) -> io::Result<bool> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Request {
+    Bind,
+    Run,
+    Admit,
+}
+
+fn request(channel: &OwnedFd) -> io::Result<Request> {
     require(
         sockopt::socket_type(channel)? == net::SocketType::SEQPACKET,
         "activation control socket is not sequenced-packet",
@@ -67,13 +74,20 @@ fn request(channel: &OwnedFd) -> io::Result<bool> {
             .flags
             .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
             && Instant::now() < deadline
-            && matches!(packet, b"GO\n" | b"BIND\n"),
+            && matches!(packet, b"GO\n" | b"BIND\n" | b"ADMIT\n"),
         "invalid fixture activation request",
     )?;
-    Ok(packet == b"BIND\n")
+    Ok(match packet {
+        b"BIND\n" => Request::Bind,
+        b"ADMIT\n" => Request::Admit,
+        _ => Request::Run,
+    })
 }
 
-fn wait_until(deadline: Instant, mut ready: impl FnMut() -> io::Result<bool>) -> io::Result<()> {
+pub(crate) fn wait_until(
+    deadline: Instant,
+    mut ready: impl FnMut() -> io::Result<bool>,
+) -> io::Result<()> {
     loop {
         require(
             Instant::now() < deadline,
@@ -118,10 +132,11 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
         "invalid activation invocation",
     )?;
     let _binding = kernel::Binding::bind(unit, uid, std::process::id())?;
-    let bind_only = request(&channel)?;
+    let request = request(&channel)?;
+    let bind_only = request == Request::Bind;
     let run = directory.join(&invocation);
     let mut worker = None;
-    if !bind_only {
+    if request == Request::Run {
         fs::DirBuilder::new().mode(0o700).create(&run)?;
         // A fixed, bounded writer in this same root-owned image. No client
         // command, environment, launch envelope or descriptor is accepted.
@@ -170,6 +185,9 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
         net::send(&channel, &bytes, SendFlags::NOSIGNAL)? == bytes.len(),
         "incomplete activation offer",
     )?;
+    if request == Request::Admit {
+        return crate::activated_journal::serve(&channel, prefix, &run, &invocation);
+    }
     if bind_only {
         // The coordinator queues the entire negative-control sequence before
         // releasing this bounded, private fixture barrier.
@@ -225,7 +243,7 @@ fn serve(prefix: &str, uid: u32, gid: u32, directory: &Path, unit: &str) -> io::
     Ok(())
 }
 
-fn writer(prefix: &str, directory: &Path) -> io::Result<()> {
+pub(crate) fn writer_check(prefix: &str, directory: &Path) -> io::Result<()> {
     activation::gate(prefix)?;
     require(
         rustix::process::getuid().as_raw() != 0,
@@ -256,6 +274,11 @@ fn writer(prefix: &str, directory: &Path) -> io::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn writer(prefix: &str, directory: &Path) -> io::Result<()> {
+    writer_check(prefix, directory)?;
     rustix::process::setsid()?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut counter = 0_u64;
@@ -280,6 +303,13 @@ pub(crate) fn dispatch() -> Option<io::Result<()>> {
             let gid = args[3].parse::<u32>().map_err(io::Error::other)?;
             serve(&args[1], uid, gid, Path::new(&args[4]), &args[5])
         })()),
+        Some("--activation-gated-writer") => Some((|| {
+            require(
+                args.len() == 3,
+                "gated writer requires prefix and directory",
+            )?;
+            crate::activated_journal::writer(&args[1], Path::new(&args[2]))
+        })()),
         Some("--activation-writer") => Some((|| {
             require(
                 args.len() == 3,
@@ -296,9 +326,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_accepts_only_two_fixed_commands_without_descriptors() -> io::Result<()> {
+    fn request_accepts_only_fixed_commands_without_descriptors() -> io::Result<()> {
         for (bytes, descriptor, accepted) in [
             (b"BIND\n".as_slice(), false, true),
+            (b"ADMIT\n".as_slice(), false, true),
             (b"GO\n".as_slice(), false, true),
             (b"".as_slice(), false, false),
             (b"GO\nextra".as_slice(), false, false),

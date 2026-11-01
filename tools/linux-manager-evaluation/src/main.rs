@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod activated_guardian;
+mod activated_journal;
 #[allow(
     dead_code,
     reason = "service uses only the shared peer credential decoder"
@@ -15,6 +16,7 @@ mod activation_packet;
 mod admission_transport;
 mod common;
 mod fixture_policy;
+mod journal_protocol;
 #[allow(dead_code, reason = "service uses only the shared own-scope witness")]
 mod kernel;
 use common::{identity_map, require, valid_invocation};

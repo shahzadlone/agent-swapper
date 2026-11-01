@@ -329,8 +329,38 @@ resources and never grants a journal completion. Observations have no conversion
 to a Linux custody receipt. The library must stay absent from the core's normal
 dependency graph and resolve the same pinned versions through the root lock.
 
-New tests will combine those real boundaries: journaling failure withholds GO,
+New tests combine those real boundaries: journaling failure withholds GO,
 the guardian's duplicate alone retains the lease, and the durable unresolved
 run continues to block reuse after cleanup and reopening. They will use a
 cooperating gated writer, not claim provider exec confirmation. Existing
 operator-attestation behavior need not change to complete this checkpoint.
+
+### Activated journal checkpoint under qualification
+
+The client library now owns bound, prepared, running and closed states. Its
+development-only synchronous boundary refuses nested runtimes, retains the
+original manager/cgroup/process witnesses, and shuts down the control socket
+on drop even if an in-flight fork still holds a duplicate. Drop never waits for
+retirement or clears a journal record. Explicit retirement uses the original
+manager invocation and retained kernel objects, including the writer pidfd.
+
+The fixed service's ADMIT mode receives a duplicate real profile lease and
+starts a cooperating writer that waits for a separate versioned GO record.
+The client independently checks its PID, UID, cgroup and guardian parent before
+the test journals the spawn. A fresh 16-byte nonce sent only after that durable
+write appears in the first heartbeat. The writer has already executed the
+fixture image while gated: this is not a provider pre-exec barrier or exec
+confirmation. Lease release on guardian exit alone is not scope retirement.
+
+Two explicitly opted-in hosted tests exercise the real Store: sibling
+activations retire independently while the remaining guardian retains its
+lock; an actual SQLite BUSY error withholds GO and leaves no heartbeat. Both
+reopen the store after retirement and require the durable unresolved run to
+block launch even though a raw lock can be acquired. No completion receipt,
+operator attestation or production launch enablement is added.
+
+Local protocol, wrong-parent/group, duplicate-socket and runtime-boundary
+regressions pass. Native activation/journal validation and focused Opus review
+remain pending for this checkpoint. The library is a Linux-only core dev
+dependency; CI checks matching audited transport/runtime pins in both lockfiles
+and excludes the evaluation library, zbus and Tokio from normal/build graphs.

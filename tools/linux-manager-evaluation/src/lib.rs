@@ -11,6 +11,12 @@ mod activation_packet;
 mod admission_transport;
 mod common;
 mod fixture_policy;
+pub mod journal_client;
+#[allow(
+    dead_code,
+    reason = "client uses only the shared start packet constructor"
+)]
+mod journal_protocol;
 mod kernel;
 mod watch;
 use common::{identity_map, require, valid_invocation};

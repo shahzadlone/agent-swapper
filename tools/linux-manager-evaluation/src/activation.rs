@@ -25,11 +25,11 @@ pub(crate) struct Fact {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Offer {
-    unit: String,
-    invocation: String,
-    pid: u32,
-    uid: u32,
+pub(crate) struct Offer {
+    pub(crate) unit: String,
+    pub(crate) invocation: String,
+    pub(crate) pid: u32,
+    pub(crate) uid: u32,
     group: String,
     peer_uid: u32,
     peer_pid: u32,
@@ -37,7 +37,7 @@ struct Offer {
     _started: f64,
 }
 
-fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
+pub(crate) fn connect(prefix: &str, request: &[u8]) -> io::Result<(OwnedFd, Fact, Offer)> {
     require(valid_prefix(prefix), "invalid activation fixture prefix")?;
     require(
         rustix::process::getuid() == rustix::process::geteuid()
@@ -71,11 +71,7 @@ fn connect(prefix: &str) -> io::Result<(OwnedFd, Fact, Offer)> {
         "activation listener is not the original system-manager endpoint",
     )?;
     require(
-        net::send(
-            &socket,
-            b"BIND\n",
-            SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
-        )? == 5,
+        net::send(&socket, request, SendFlags::NOSIGNAL | SendFlags::DONTWAIT)? == request.len(),
         "incomplete activation binding request",
     )?;
     let packet = activation_packet::receive(&socket, Instant::now() + Duration::from_secs(4))?;
@@ -116,7 +112,7 @@ fn validate_offer(packet: &activation_packet::Packet, prefix: &str) -> io::Resul
 }
 
 pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Report> {
-    let (socket, activation, offer) = connect(prefix)?;
+    let (socket, activation, offer) = connect(prefix, b"BIND\n")?;
     let expected = Expected {
         unit: offer.unit,
         user: offer.uid,

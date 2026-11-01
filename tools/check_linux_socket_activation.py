@@ -108,7 +108,7 @@ SocketMode=0600
 Accept=yes
 MaxConnections=4
 TriggerLimitIntervalSec=30s
-TriggerLimitBurst=16
+TriggerLimitBurst=24
 RemoveOnStop=yes
 '''
     service_unit = f'''[Unit]
@@ -505,6 +505,16 @@ def suite():
             second.close()
             retired(directory, second_report, second_fd)
             print('::notice title=Linux fixed-user activation::two ordinary connections received distinct root-managed scopes; both refused migration writes; each guardian recorded clean client EOF before stopped detached writer and original scope removal; sibling continued; no production launch qualification', flush=True)
+            if os.environ.get('ASWP_CI_ACTIVATED_JOURNAL') == '1':
+                test_env = dict(os.environ, ASWP_ACTIVATION_PREFIX=prefix,
+                                ASWP_ACTIVATION_DIRECTORY=str(directory))
+                for test in ('actual_lease_and_journal_gate_two_independent_activations',
+                             'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent'):
+                    subprocess.run(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
+                                    '--lib', 'store::linux_activated_journal_tests::' + test,
+                                    '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],
+                                   env=test_env, check=True, timeout=55)
+
         finally:
             for connection in connections:
                 connection.close()
