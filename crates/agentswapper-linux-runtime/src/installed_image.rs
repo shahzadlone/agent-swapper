@@ -39,6 +39,10 @@ fn protected_directory(fd: impl AsFd) -> io::Result<()> {
 #[must_use = "keep the validated image handle through the operation it protects"]
 pub struct ProtectedImage(OwnedFd);
 impl ProtectedImage {
+    /// Check a fixed installed location in an independently trusted namespace.
+    /// UID 0 metadata alone does not establish initial-user-namespace identity
+    /// or who authored a mounted filesystem. Refusing nosuid mounts narrows
+    /// common user-mount exposure; it is not a complete provenance proof.
     pub fn open(path: &Path) -> io::Result<Self> {
         require(
             path.is_absolute() && path.as_os_str().len() <= 4096,
@@ -77,9 +81,17 @@ impl ProtectedImage {
             "image is not a root-owned mode-0755 regular file",
         )?;
         require(
-            !fstatvfs(&image)?.f_flag.contains(StatVfsMountFlags::NOEXEC),
-            "image filesystem does not permit execution",
+            !fstatvfs(&image)?
+                .f_flag
+                .intersects(StatVfsMountFlags::NOEXEC | StatVfsMountFlags::NOSUID),
+            "image filesystem is noexec or nosuid",
         )?;
+        let mut capabilities = [0_u8; 64];
+        match rustix::fs::fgetxattr(&image, "security.capability", &mut capabilities[..]) {
+            Err(rustix::io::Errno::NODATA) => {}
+            Ok(_) => return Err(io::Error::other("image has file capabilities")),
+            Err(error) => return Err(error.into()),
+        }
         Ok(Self(image))
     }
 
@@ -140,10 +152,25 @@ mod tests {
     }
     #[test]
     fn refuses_staging_paths_special_files_and_directories() -> io::Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = tempfile::tempdir_in("/tmp")?;
         let image = directory.path().join("image");
         std::os::unix::fs::symlink("/usr/bin/true", &image)?;
-        assert!(ProtectedImage::open(&image).is_err());
+        let error = ProtectedImage::open(&image)
+            .err()
+            .ok_or_else(|| io::Error::other("mutable image ancestry accepted"))?;
+        assert_eq!(
+            error.to_string(),
+            "image ancestor is not root-owned and protected"
+        );
+        // Reach a leaf symlink beneath protected ancestry; /tmp's earlier
+        // refusal must not masquerade as coverage of leaf O_NOFOLLOW.
+        let error = ProtectedImage::open(Path::new("/proc/self"))
+            .err()
+            .ok_or_else(|| io::Error::other("leaf symlink accepted"))?;
+        assert_eq!(
+            error.raw_os_error(),
+            Some(rustix::io::Errno::LOOP.raw_os_error())
+        );
         for path in ["/dev/null", "/usr/lib"] {
             assert!(ProtectedImage::open(Path::new(path)).is_err());
         }

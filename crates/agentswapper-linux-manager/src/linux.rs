@@ -82,8 +82,11 @@ pub fn prerequisites() -> io::Result<Vec<PathFact>> {
 
 pub fn unit_path(unit: &str) -> String {
     let mut path = String::from("/org/freedesktop/systemd1/unit/");
-    for b in unit.bytes() {
-        if b.is_ascii_alphanumeric() {
+    if unit.is_empty() {
+        path.push('_');
+    }
+    for (index, b) in unit.bytes().enumerate() {
+        if b.is_ascii_alphabetic() || (index > 0 && b.is_ascii_digit()) {
             path.push(char::from(b));
         } else {
             path.push_str(&format!("_{b:02x}"));
@@ -119,6 +122,14 @@ async fn driver_call<T: serde::Serialize + zbus::DynamicType>(
         .await
         .map_err(io::Error::other)?;
     checked_reply(reply, DRIVER)
+}
+
+fn destination(owner: &str) -> io::Result<zbus::names::UniqueName<'_>> {
+    require(
+        owner.starts_with(':'),
+        "manager destination is not a peer unique name",
+    )?;
+    zbus::names::UniqueName::try_from(owner).map_err(io::Error::other)
 }
 
 /// An authenticated connection paired with its original unique manager owner.
@@ -163,7 +174,7 @@ pub async fn property(
     name: &str,
 ) -> io::Result<OwnedVariant> {
     connection.require_sender(owner)?;
-    let unique = zbus::names::UniqueName::try_from(owner).map_err(io::Error::other)?;
+    let unique = destination(owner)?;
     // Only the authenticated unique name is a destination. Unique names cannot
     // be auto-activated; no interactive-authorization flag or proxy is used.
     let reply = connection
@@ -190,7 +201,7 @@ async fn manager_call<T: serde::Serialize + zbus::DynamicType>(
     body: &T,
 ) -> io::Result<OwnedObjectPath> {
     connection.require_sender(owner)?;
-    let unique = zbus::names::UniqueName::try_from(owner).map_err(io::Error::other)?;
+    let unique = destination(owner)?;
     let reply = connection
         .connection
         .call_method(
@@ -246,7 +257,12 @@ pub struct TransportFact {
 /// Connect through the fixed protected path and authenticate root PID 1.
 /// Bounds its own admission; the caller must also bound its entire unit-binding phase.
 pub async fn connect() -> io::Result<(Manager, zbus::names::OwnedUniqueName, TransportFact)> {
-    tokio::time::timeout(Duration::from_secs(8), connect_inner())
+    admission_deadline(connect_inner()).await
+}
+async fn admission_deadline<T>(
+    future: impl std::future::Future<Output = io::Result<T>>,
+) -> io::Result<T> {
+    tokio::time::timeout(Duration::from_secs(8), future)
         .await
         .map_err(|_| {
             io::Error::new(
@@ -278,6 +294,7 @@ async fn connect_inner() -> io::Result<(Manager, zbus::names::OwnedUniqueName, T
         .map_err(io::Error::other)?;
     let result = async {
         let owner_before = driver_owner(&connection).await?;
+        destination(owner_before.as_str())?;
         let credentials: zbus::fdo::ConnectionCredentials =
             driver_call(&connection, "GetConnectionCredentials", &(&owner_before,))
                 .await?
@@ -336,6 +353,37 @@ async fn connect_inner() -> io::Result<(Manager, zbus::names::OwnedUniqueName, T
 mod tests {
     use super::*;
     #[test]
+    fn transport_admission_deadline_is_independent() -> io::Result<()> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()?
+            .block_on(async {
+                tokio::time::pause();
+                let start = tokio::time::Instant::now();
+                // The outer nine-second guard makes a missing inner deadline fail
+                // deterministically rather than hanging. No manager/socket is used.
+                let observed = tokio::time::timeout(
+                    Duration::from_secs(9),
+                    admission_deadline(std::future::pending::<io::Result<()>>()),
+                )
+                .await;
+                assert!(observed.is_ok(), "transport deadline missing or late");
+                let error = observed
+                    .map_err(io::Error::other)?
+                    .err()
+                    .ok_or_else(|| io::Error::other("pending connection completed"))?;
+                assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+                let elapsed = tokio::time::Instant::now() - start;
+                // Tokio rounds deadlines to millisecond ticks, including when
+                // its test clock is paused.
+                assert!(
+                    elapsed >= Duration::from_secs(8) && elapsed <= Duration::from_millis(8002)
+                );
+                Ok(())
+            })
+    }
+
+    #[test]
     fn replies_require_the_bound_sender_and_bounded_decoding()
     -> Result<(), Box<dyn std::error::Error>> {
         let request = Message::method_call(MANAGER_PATH, "GetUnit").build(&("fixture",))?;
@@ -369,11 +417,30 @@ mod tests {
     }
 
     #[test]
-    fn unit_paths_escape_every_non_alphanumeric_byte() {
+    fn manager_destination_excludes_the_driver_alias_exception() -> io::Result<()> {
+        assert!(zbus::names::UniqueName::try_from(DRIVER).is_ok());
+        for value in [DRIVER, MANAGER, "", ":no-dots"] {
+            assert!(destination(value).is_err());
+        }
+        assert_eq!(destination(":1.42")?.as_str(), ":1.42");
+        Ok(())
+    }
+
+    #[test]
+    fn unit_paths_follow_systemd_bus_label_encoding() {
         assert_eq!(
             unit_path("agentswapper-1000@1.service"),
             "/org/freedesktop/systemd1/unit/agentswapper_2d1000_401_2eservice"
         );
         assert_eq!(unit_path("a_b"), "/org/freedesktop/systemd1/unit/a_5fb");
+        assert_eq!(
+            unit_path("1a.service"),
+            "/org/freedesktop/systemd1/unit/_31a_2eservice"
+        );
+        assert_eq!(unit_path(""), "/org/freedesktop/systemd1/unit/_");
+        assert_eq!(
+            unit_path("é.service"),
+            "/org/freedesktop/systemd1/unit/_c3_a9_2eservice"
+        );
     }
 }

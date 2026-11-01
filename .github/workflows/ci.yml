@@ -253,6 +253,14 @@ jobs:
         env:
           ASWP_MANAGER_REFUSALS: '1'
         run: python3 tools/check_linux_manager_refusals.py "${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation"
+      - name: Refuse untrusted image mounts and file privileges
+        timeout-minutes: 1
+        env:
+          ASWP_CI_IMAGE_MOUNTS: '1'
+        run: |
+          cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example protected_image
+          python3 -m unittest discover -s tools -p test_linux_image_mounts.py -v
+          python3 tools/check_linux_image_mounts.py "${{ github.workspace }}/tools/linux-manager-evaluation/target/debug/examples/protected_image"
       - name: Evaluate fixed-child final-exec observation
         timeout-minutes: 1
         run: cargo +1.98.0 run --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example exec_event

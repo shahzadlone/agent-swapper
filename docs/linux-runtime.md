@@ -188,8 +188,8 @@ Connection admission revalidates protected paths and the initial namespace,
 checks that the socket identity did not change during connect, and authenticates
 the same unique manager before returning. Its own eight-second bound fits inside
 the consumer's existing whole-admission bound. Every property query still validates
-the reply sender and post-receive decoding size. Unique-name parsing also rejects
-well-known destination aliases before sending. GetUnit and GetUnitByInvocationID
+the reply sender and post-receive decoding size. The bound manager handle and explicit colon-prefixed destination check reject
+well-known destination aliases, including zbus's special bus-driver exception. GetUnit and GetUnitByInvocationID
 are explicit read operations; no arbitrary manager-method entry point is public.
 The caller retains responsibility for installation policy, service properties,
 original kernel handles and manager rechecks throughout the run.
@@ -282,3 +282,18 @@ wire behavior change. Native qualification of this API boundary remains pending.
 
 The bound-handle change passes five manager tests, all 51 existing consumer tests,
 strict manager/consumer/core Clippy and the dependency-boundary check locally.
+
+The [manager/image source review](linux-manager-image-review.md) records the
+subsequent destination, label-encoding, mount-policy, file-capability and test
+corrections, including the independent deadline negative control. The combined
+revision still requires native qualification; earlier individual runs do not
+establish the merged result.
+
+Individual extraction checkpoints passed complete pipelines: manager transport
+`16277f9` in [41288395690](https://github.com/shahzadlone/agent-swapper/actions/runs/41288395690),
+protected images before the new mount/capability checks at `1787a26` in
+[41288859678](https://github.com/shahzadlone/agent-swapper/actions/runs/41288859678),
+and the child waiter at `a719604` in
+[41288872078](https://github.com/shahzadlone/agent-swapper/actions/runs/41288872078).
+These close their earlier pending extraction results. The current combined
+manager-handle and review-correction revision still requires its own run.

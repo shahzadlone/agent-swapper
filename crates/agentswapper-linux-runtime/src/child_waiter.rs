@@ -40,6 +40,7 @@ pub struct ChildWaiter {
     _thread: PhantomData<Rc<()>>,
 }
 impl ChildWaiter {
+    /// Take a newly spawned child that has not been waited on or auto-reaped.
     pub fn new(child: Child) -> io::Result<Self> {
         let pid = Pid::from_raw(i32::try_from(child.id()).map_err(io::Error::other)?)
             .ok_or_else(|| io::Error::other("invalid owned child PID"))?;
