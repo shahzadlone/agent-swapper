@@ -7,6 +7,8 @@ import os
 import select
 import stat
 import socket
+import shutil
+import subprocess
 import tempfile
 import sys
 import threading
@@ -19,6 +21,49 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_isolated_entry_loads_only_explicit_helpers_and_ignores_shadow_modules(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ('check_linux_socket_activation.py', 'check_linux_managed_scope.py',
+                         'linux_manager_observer.py', 'check_linux_manager_refusals.py'):
+                shutil.copyfile(Path(__file__).with_name(name), root / name)
+            canary = root / 'shadow-loaded'
+            (root / 'json.py').write_text(
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('shadow-loaded').write_text('loaded')\n"
+                "raise RuntimeError('owned shadow module executed')\n")
+            environment = {'PATH': '/usr/bin:/bin', 'PYTHONPATH': str(root)}
+            for name, refusal in [('check_linux_socket_activation.py', 'unexpected activation fixture arguments'),
+                                  ('check_linux_managed_scope.py', 'unexpected fixture arguments'),
+                                  ('check_linux_manager_refusals.py', 'opted-in disposable hosted runner')]:
+                with self.subTest(script=name):
+                    result = subprocess.run([sys.executable, '-I', '-B', '-S', str(root / name), '--invalid'],
+                                            env=environment, cwd=root, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(refusal, result.stdout)
+                    self.assertEqual(result.stderr, '')
+                    self.assertFalse(canary.exists())
+                    self.assertFalse((root / '__pycache__').exists())
+            # This owned canary really would execute without isolation. It raises
+            # during import, before any fixture role or privileged action.
+            result = subprocess.run([sys.executable, '-B', '-S', str(root / 'check_linux_socket_activation.py'), '--invalid'],
+                                    env=environment, cwd=root, capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(canary.read_text(), 'loaded')
+
+    def test_cleanup_notice_requires_all_owned_names_absent(self):
+        prefix = 'aswp-activation-123-1'
+        with patch.object(probe.os.path, 'lexists', return_value=False) as exists:
+            probe.verify_cleanup(prefix)
+        paths = [call.args[0] for call in exists.call_args_list]
+        self.assertEqual(len(paths), 7)
+        self.assertEqual(len(set(paths)), 7)
+        for survivor in paths:
+            with self.subTest(path=survivor), \
+                 patch.object(probe.os.path, 'lexists', side_effect=lambda path: path == survivor), \
+                 self.assertRaisesRegex(RuntimeError, 'asset survived cleanup'):
+                probe.verify_cleanup(prefix)
+
     def test_installed_metadata_change_refuses_before_service_control(self):
         prefix, directory = 'aswp-activation-123-1', Path('/tmp/aswp-fixture')
         ownership = {'uid': 1000, 'gid': 1000, 'directory': str(directory),

@@ -46,6 +46,58 @@ def state(pid):
     return Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()[0]
 
 
+def check_journal_history(connection, metadata, record, readiness):
+    """Cross-check one snapshot; diagnostics here never grant runtime authority."""
+    scope = json.loads(record[4])
+    assert set(scope) == {'backend', 'id'} and scope['backend'] == 'linux_cgroup'
+    assert str(uuid.UUID(scope['id'])) == scope['id'] and uuid.UUID(scope['id']).int != 0
+    rows = connection.execute(
+        "SELECT payload FROM event_log WHERE json_extract(payload,'$.id')=? ORDER BY sequence",
+        (metadata['run'],)).fetchall()
+    events = [json.loads(row[0]) for row in rows]
+    expected = ['run_planned']
+    if record[5] is not None:
+        expected.append('linux_scope_bound')
+    if record[6] is not None:
+        expected.append('run_spawned')
+    if record[2] is not None:
+        expected.append('linux_scope_retired')
+    assert [event['type'] for event in events] == expected, 'journal lifecycle order differs'
+    planned = events[0]
+    assert planned['profile'] == metadata['profile'] and planned['kind'] == 'run'
+    assert planned['requires_spawn_observation'] is True and planned['local_scope'] == scope
+    binding = None if record[5] is None else json.loads(record[5])
+    if binding is None:
+        assert record[2] is None and record[6] is None and not readiness
+        return
+    assert set(binding) == {'unit', 'invocation', 'user', 'guardian', 'device', 'inode'}
+    for field in ('user', 'guardian', 'device', 'inode'):
+        assert type(binding[field]) is int and binding[field] > 0
+    assert binding['guardian'] > 1 and binding['user'] == os.getuid()
+    invocation = binding['invocation']
+    assert isinstance(invocation, list) and len(invocation) == 16 and any(invocation)
+    assert all(type(byte) is int and 0 <= byte <= 255 for byte in invocation)
+    invocation_hex = bytes(invocation).hex()
+    prefix = os.environ['ASWP_ACTIVATION_PREFIX']
+    assert re.fullmatch(r'aswp-activation-[0-9]{1,24}-[0-9]{1,8}', prefix)
+    assert isinstance(binding['unit'], str) and re.fullmatch(
+        re.escape(prefix) + r'@[0-9]+-[0-9]+-' + str(os.getuid()) + r'\.service', binding['unit'])
+    assert events[1]['binding'] == binding, 'bound event differs from projection'
+    for data in readiness.values():
+        assert data['guardian'] == binding['guardian'] and data['invocation'] == invocation_hex
+        assert type(data['target']) is int and data['target'] > 1
+        if record[6] is not None:
+            assert record[6] == data['target']
+    if readiness:
+        client = readiness.get('session-ready', readiness.get('ready'))
+        assert type(client['pid']) is int and client['pid'] > 1
+        assert binding['unit'].endswith(f"-{client['pid']}-{os.getuid()}.service")
+    if record[6] is not None:
+        assert events[2]['pid'] == record[6], 'spawn event differs from projection'
+    if record[2] is not None:
+        assert events[-1]['binding'] == binding and events[-1]['scope'] == scope['id']
+
+
 def lease_path(root):
     metadata = root / 'journal.json'
     if not metadata.exists():
@@ -57,15 +109,18 @@ def lease_path(root):
     database = root / 'state' / 'registry.sqlite3'
     audited = (root / 'journal-audited').exists()
     retired_before_read = (root / 'retired').exists()
+    readiness = {name: json.loads((root / name).read_text())
+                 for name in ('ready', 'session-ready') if (root / name).exists()}
     with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as connection:
-        record = connection.execute('SELECT profile, exit_code, outcome, requires_spawn_observation, local_scope, linux_binding FROM runs WHERE id=?', (data['run'],)).fetchone()
+        # Event history and projection must describe the same committed WAL
+        # snapshot even when the live consumer completes during this check.
+        connection.execute('BEGIN')
+        record = connection.execute('SELECT profile, exit_code, outcome, requires_spawn_observation, local_scope, linux_binding, observed_pid FROM runs WHERE id=?', (data['run'],)).fetchone()
         assert record is not None and record[0] == data['profile'] and record[1] is None and record[3] == 1
         assert record[2] in (None, 'local_scope_empty')
         if audited or retired_before_read:
             assert record[2] == 'local_scope_empty'
-        if record[2] == 'local_scope_empty':
-            assert isinstance(record[5], str) and isinstance(json.loads(record[5]), dict)
-        assert json.loads(record[4])['backend'] == 'linux_cgroup'
+        check_journal_history(connection, data, record, readiness)
         assert connection.execute('PRAGMA quick_check').fetchone() == ('ok',)
     if (root / 'retired').exists():
         assert (root / 'journal-audited').read_text() == 'scope retired; target outcome unknown'

@@ -1140,7 +1140,7 @@ fn v7_upgrade_refuses_future_receipts_and_schema_tampering_without_erasing_evide
                 )
                 .unwrap();
             store
-                .record(Event::LinuxScopeBound {
+                .record_scope_fixture(Event::LinuxScopeBound {
                     id: run,
                     binding: crate::store::linux_scope::LinuxBinding {
                         unit: "aswp@1.service".into(),

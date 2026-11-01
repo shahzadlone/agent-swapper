@@ -963,10 +963,11 @@ mod engine_tests {
             Err(Error::UnverifiedGents)
         ));
         store.bind_gents(&p.alias, binding(9192)).unwrap();
-        assert!(matches!(
-            plan.execute_prepared(&mut store),
-            Err(Error::EngineMismatch)
-        ));
+        let stale = plan.execute_prepared(&mut store);
+        assert!(
+            matches!(stale, Err(Error::EngineMismatch)),
+            "stale engine plan returned {stale:?}"
+        );
         assert!(store.runs(20).unwrap().is_empty());
         let p = store
             .register(Harness::Codex, "native".parse().unwrap())

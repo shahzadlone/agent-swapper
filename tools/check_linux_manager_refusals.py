@@ -72,7 +72,7 @@ def mounted_case(case, binary, uid, gid):
         try:
             # Hold the owned child at its input gate while installing only the
             # private namespace overlay. It executes the observer as the user.
-            target = subprocess.Popen(['/usr/bin/python3', script, '--probe-child', binary, str(uid), str(gid)],
+            target = subprocess.Popen(['/usr/bin/python3', '-I', '-B', '-S', script, '--probe-child', binary, str(uid), str(gid)],
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             # The child must validate its real namespace view before a fake
             # procfs overlay hides /proc/self/ns/mnt. Its ready byte is fixture
@@ -96,7 +96,7 @@ def mounted_case(case, binary, uid, gid):
                     os.chown(root, uid, gid)
                 source = root / 'bus'
                 role = '--listen-' + case.removeprefix('socket-') if root_listener else '--listen'
-                listener = subprocess.Popen(['/usr/bin/python3', script, role, str(source), str(uid), str(gid)],
+                listener = subprocess.Popen(['/usr/bin/python3', '-I', '-B', '-S', script, role, str(source), str(uid), str(gid)],
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 with selectors.DefaultSelector() as selector:
                     selector.register(listener.stdout, selectors.EVENT_READ)
@@ -182,7 +182,7 @@ def main():
         subprocess.run(['sudo', '-n', '--preserve-env=' + PRESERVE,
                         '/usr/bin/timeout', '--kill-after=3s', '25s', '/usr/bin/unshare',
                         '--mount', '--propagation', 'private', '--fork', '--kill-child',
-                        '/usr/bin/python3', str(Path(__file__).resolve()), '--inside', case,
+                        '/usr/bin/python3', '-I', '-B', '-S', str(Path(__file__).resolve()), '--inside', case,
                         str(binary), str(os.getuid()), str(os.getgid())],
                        stdin=subprocess.DEVNULL, check=True, timeout=35)
 

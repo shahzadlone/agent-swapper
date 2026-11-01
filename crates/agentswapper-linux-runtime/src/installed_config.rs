@@ -52,7 +52,11 @@ impl ProtectedConfig {
     pub fn require_current(&self, path: &Path) -> io::Result<()> {
         self.stamp.require_config(Stamp::read(&self.file)?)?;
         let current = Self::open(path)?;
-        self.stamp.require_config(current.stamp)?;
+        if self.stamp != current.stamp {
+            return Err(io::Error::other(
+                "installed configuration path no longer names the retained file",
+            ));
+        }
         self.stamp.require_config(Stamp::read(&self.file)?)
     }
 }

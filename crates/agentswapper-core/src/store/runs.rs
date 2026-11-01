@@ -50,7 +50,11 @@ pub struct RunRecord {
     pub spawned_at: Option<String>,
     /// Diagnostic observation only. Never use a stored PID to signal a process.
     pub observed_pid: Option<u32>,
+    /// Unknown target status is None even when scope retirement is recorded.
+    /// Consult `outcome` for journal completion and `custody` for its scope.
     pub exit_code: Option<i32>,
+    /// None means unresolved. A recorded outcome need not prove target success
+    /// or the retirement of work delegated outside the local process scope.
     pub outcome: Option<String>,
     pub custody: ProcessCustody,
     pub gents_session: Option<super::GentsSession>,

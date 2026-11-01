@@ -2,6 +2,7 @@
 """Qualify a nondelegated systemd scope on a disposable hosted Linux runner."""
 import os
 import errno
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -12,7 +13,13 @@ import sys
 import tempfile
 import time
 
-from linux_manager_observer import Observer, check_bound, check_retired
+# Privileged entry points run with isolated Python. Load only the explicitly
+# named sibling helper, without adding the checkout to the module search path.
+_observer_spec = importlib.util.spec_from_file_location(
+    'aswp_fixture_observer', Path(__file__).resolve().with_name('linux_manager_observer.py'))
+_observer = importlib.util.module_from_spec(_observer_spec)
+_observer_spec.loader.exec_module(_observer)
+Observer, check_bound, check_retired = _observer.Observer, _observer.check_bound, _observer.check_retired
 
 
 def require(condition, message):
@@ -156,7 +163,7 @@ def manager_command(directory, unit, expected, uid, gid, forced):
             '--property=Delegate=no', '--property=KillMode=control-group',
             '--property=SendSIGKILL=yes', '--property=TimeoutStopSec=2s',
             '--property=RuntimeMaxSec=30s', '--unit=' + unit,
-            '/usr/bin/python3', str(Path(__file__).resolve()), 'service',
+            '/usr/bin/python3', '-I', '-B', '-S', str(Path(__file__).resolve()), 'service',
             str(directory), expected, str(int(forced))]
 
 
@@ -213,7 +220,7 @@ def role(name, directory, expected, forced):
     (directory / 'controls-checked').write_text('checked')
     (directory / 'service-main-pid').write_text(str(os.getpid()))
     # Deliberately let this bounded child outlive the service's main process.
-    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'writer',
+    subprocess.Popen([sys.executable, '-I', '-B', '-S', str(Path(__file__).resolve()), 'writer',
                       str(directory), expected, str(int(forced))],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
@@ -231,7 +238,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
     scope = Path('/sys/fs/cgroup' + expected)
     require(not scope.exists(), "managed scope already exists")
     executable = str(Path(__file__).resolve())
-    outside = subprocess.Popen([sys.executable, executable, 'outside', str(directory), '', '0'],
+    outside = subprocess.Popen([sys.executable, '-I', '-B', '-S', executable, 'outside', str(directory), '', '0'],
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, close_fds=True)
     manager = None
@@ -241,7 +248,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
     try:
         wait_for(lambda: (directory / 'outside-heartbeat').exists())
         with (directory / 'manager.log').open('wb') as log:
-            command = (['sudo', '-n', '/usr/bin/python3', executable, 'client-helper', str(directory), expected]
+            command = (['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', executable, 'client-helper', str(directory), expected]
                        if client_loss else ['sudo', '-n'] + manager_command(
                            directory, unit, expected, os.getuid(), os.getgid(), forced))
             manager = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True)
@@ -254,7 +261,7 @@ def trial(root, forced, run_id, attempt, client_loss=False):
             invocation = inspect_identity(unit, expected, os.getuid(), main_pid)
             require(main_pid_text in (scope / 'cgroup.procs').read_text().splitlines(),
                     "manager main process is outside its reported scope")
-            subprocess.run([sys.executable, executable, 'peer', str(directory), expected, str(int(forced))],
+            subprocess.run([sys.executable, '-I', '-B', '-S', executable, 'peer', str(directory), expected, str(int(forced))],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, check=True, timeout=5)
             require((directory / 'peer-controls-checked').exists(), "same-user peer permissions were not checked")
