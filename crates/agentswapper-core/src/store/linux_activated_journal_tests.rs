@@ -67,6 +67,7 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
         assert!(original.claim_service_key().is_err());
         let mut candidate = Bound::connect(&prefix).unwrap();
         let _candidate_key = claim_candidate.then(|| candidate.claim_service_key().unwrap());
+        let candidate_identity = candidate.identity();
         let failure = match candidate.prepare(lease.as_fd(), &key) {
             Ok(_) => panic!("another binding's key prepared this target"),
             Err(failure) => failure,
@@ -75,7 +76,6 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
             failure.error.to_string(),
             "launch key does not match the claimed original service binding"
         );
-        failure.closed.retire().unwrap();
         // The same key and unchanged lease still prepare their original service.
         original
             .prepare(lease.as_fd(), &key)
@@ -83,6 +83,18 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
             .close()
             .retire()
             .unwrap();
+        failure.closed.retire().unwrap();
+        assert!(
+            !directory
+                .join(&candidate_identity.invocation)
+                .join("ready")
+                .exists()
+        );
+        assert!(
+            !directory
+                .join(format!("{}.lease-refused", candidate_identity.invocation))
+                .exists()
+        );
     }
 
     let (a_profile, a_run, a_pending, a) = pending(&mut store, "receipt-a", &prefix);
@@ -109,8 +121,31 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     let witness = Witness::bind(&prefix, &identity, prepared.pid()).unwrap();
     let duplicate = Witness::bind(&prefix, &identity, prepared.pid()).unwrap();
     let receipt = prepared.close().retire().unwrap().into_service();
+    let forged = witness.retire().unwrap().into_service();
+    let (foreign, expected) = (forged.identity(), receipt.identity());
+    assert_eq!(
+        (
+            foreign.unit,
+            foreign.invocation,
+            foreign.user,
+            foreign.main_pid
+        ),
+        (
+            expected.unit,
+            expected.invocation,
+            expected.user,
+            expected.main_pid
+        )
+    );
+    let (foreign, expected) = (forged.observation(), receipt.observation());
+    assert_eq!(
+        (foreign.device, foreign.inode),
+        (expected.device, expected.inode)
+    );
+    assert!(foreign.original_directory_removed && foreign.main_pidfd_exited);
+    assert!(!forged.matches(original.key()) && receipt.matches(original.key()));
     assert!(matches!(
-        store.retire_linux_scope(&original, witness.retire().unwrap().into_service()),
+        store.retire_linux_scope(&original, forged),
         Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
     ));
     unresolved(&store, profile, &run);

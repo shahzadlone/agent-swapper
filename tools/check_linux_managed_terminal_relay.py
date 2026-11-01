@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Connect the hosted fixed guardian to a relay inside newly created outer PTYs."""
 import fcntl
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -111,7 +112,7 @@ def lease_path(root):
     retired_before_read = (root / 'retired').exists()
     readiness = {name: json.loads((root / name).read_text())
                  for name in ('ready', 'session-ready') if (root / name).exists()}
-    with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as connection:
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection, connection:
         # Event history and projection must describe the same committed WAL
         # snapshot even when the live consumer completes during this check.
         connection.execute('BEGIN')

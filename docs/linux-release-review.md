@@ -14,8 +14,9 @@ must be checked against code and native behavior.
 ## Addressed in the association checkpoint
 
 - A service key can be claimed once and cannot be cloned by consumers.
-- Preparation requires the exact key retained by the journal before sending
-  launch data or transferring its lease.
+- Preparation requires the key claimed from that binding before sending launch
+  data or transferring its lease. The Store terminal relay borrows that key
+  from its pending journal association; other fixed fixtures retain it locally.
 - Schema 9 gives each manager invocation one durable run association, retained
   after completion, with migration and rollback checks.
 - Wrong-run and reopened-Store refusal controls subsequently commit the same
@@ -46,6 +47,10 @@ upgrade/revocation policy before installer integration.
 
 ## Native evidence
 
+- `4ef99d1`: full import-isolation, pathname and journal-authority pipeline passed
+  (`41304050468`), including both native Ubuntu suites and independent rebuilds.
+- `7df8703`: full retirement-retry CI passed (`41304842096`), including
+  both native Ubuntu suites and independent release rebuilds.
 - `17f74e3`: full durable-journal CI passed (`41297948160`).
 - `db9220a`: full selector and Python-3.10 boundary CI passed (`41300192166`).
 - `0a3167e`: full installed-policy CI passed (`41300687178`).
@@ -75,7 +80,7 @@ foreign invocation metadata are negative controls. These checks corroborate
 qualification evidence and never grant the runtime a completion capability.
 
 Local default and qualification strict Clippy, all 75 Store tests, and all 43
-Linux Python controls pass. This revision's native result is pending.
+Linux Python controls pass. Full CI for `7d7a8c6` passed (`41303766347`).
 
 ## Protected pathname controls
 
@@ -89,7 +94,8 @@ confined to the hosted fixture's recursively private mount namespace and owned
 tmpfs; a leaf overlay is unmounted before its parent.
 
 Local runtime tests, strict Clippy and the ordinary-file ancestor control pass.
-The four new privileged cases require native CI; none ran on the developer host.
+The four new privileged cases passed both native Ubuntu suites in the full
+`7791f02` pipeline (`41303860668`); none ran on the developer host.
 
 ## Privileged fixture isolation
 
@@ -106,7 +112,8 @@ do not execute the shadow and leave no bytecode. The same owned canary executes
 without isolation, proving the negative control is meaningful. Cleanup reporting
 also requires all owned filesystem names to be absent, including dangling
 symlinks; the administrator separately checks its units and scope teardown.
-All 46 local Linux harness controls pass. Native qualification is pending.
+All 46 local Linux harness controls pass. Full CI for `4ef99d1` passed
+(`41304050468`), including both native Ubuntu suites.
 
 ## Retirement retry and consumer semantics
 
@@ -130,7 +137,7 @@ qualification Clippy and workspace doctests. A parallel `cargo test` run hit
 the existing stale-engine-plan assertion once; the isolated control and a later
 139-test core run passed. That assertion now includes the unexpected result for
 diagnosis if it recurs. No cause or runtime fix is claimed from a passing retry.
-Native qualification of the retirement retry remains pending.
+Full CI for `7df8703` passed (`41304842096`), including both native Ubuntu suites.
 
 ## Historical migration evidence
 
@@ -184,6 +191,30 @@ the faults; both must fail with the specific expected diagnostic, after the
 unmodified controls pass. Two dedicated Ubuntu jobs keep this compilation out
 of the bounded journal/terminal step. Both mutated observers built locally and
 all 50 ordinary Linux harness controls passed. Native results remain pending.
+
+## Source-review follow-up at 7df8703
+
+A third tool-disabled Opus 5.5 review found no exploitable authority issue in the
+key, preparation, writer-authorization, retry or observer changes. It identified
+two false-refusal risks and several missing controls. The follow-up closes the
+Python SQLite connection explicitly even on assertion failure, exercises a real
+concurrent WAL commit between projection and event reads, and checks mismatched
+fields in each lifecycle event plus an unsupported audit marker.
+
+The native wrong-key control now prepares its original service before waiting
+for the rejected candidate to retire, preserving the original admission budget.
+It also checks that the candidate wrote no target-ready or lease-refusal marker.
+The independent-witness control explicitly matches all serialized identity and
+retirement facts while proving its key differs. These observations distinguish
+the live-key check from a refusal caused by mismatched diagnostics.
+
+Binding failure currently consumes the claimed key and leaves the run unresolved;
+the consumer closes the control connection rather than retrying preparation.
+`scope_already_retired` is a terminal retry result: the original retirement was
+committed and no new event was written. A receipt is still returned for explicit
+disposal. These semantics do not provide restart recovery or automatic fallback.
+All ten local observer controls and strict workspace qualification Clippy pass.
+The revised native receipt controls await this revision's hosted CI result.
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
