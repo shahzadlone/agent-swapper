@@ -141,7 +141,7 @@ and the dependency-boundary check confirms identical pinned graphs.
 
 Cooked foreground admission and final raw entry now share this runtime too.
 The [suspension review](linux-suspension-review.md) records the three corrected
-job-control defects, actual negative control and pending native evidence.
+job-control defects, actual negative control and completed native/pipeline evidence.
 
 ## Exclusive direct-child waiting
 

@@ -31,7 +31,8 @@ The native matrix now expects 68 file-journal cases and 30 real-Store cases,
 plus a long-session case and four stopped/background expiry cases. New background
 re-stop cases retain the original owner pidfd, check it before reading process
 state, and require no target execution or retirement while admission is stopped.
-Native results for this correction are pending.
+Both native Ubuntu runners and the complete cross-platform packaging/rebuild
+pipeline passed in [run 41288506782](https://github.com/shahzadlone/agent-swapper/actions/runs/41288506782).
 
 Local validation passes 26 runtime tests and three compile-fail doctests,
 54 isolated evaluation tests, strict runtime/evaluation Clippy, 14 activation
