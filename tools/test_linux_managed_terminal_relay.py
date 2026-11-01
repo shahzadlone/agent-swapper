@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from check_linux_managed_terminal_relay import lease_path
+import check_linux_managed_terminal_relay as relay
 
 
 class JournalObservationTests(unittest.TestCase):
@@ -150,6 +151,44 @@ class JournalObservationTests(unittest.TestCase):
                     event['binding'] = altered
                 self.save_events()
                 self.refused()
+
+    def test_history_and_projection_use_one_snapshot_during_a_wal_commit(self):
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.bound(spawned=True)
+        original = relay.check_journal_history
+        def commit_between(connection, metadata, record, readiness):
+            # This is a separate real WAL writer, committed after the observer
+            # reads the projection but before it reads the event history.
+            self.db.execute('INSERT INTO event_log(payload) VALUES (?)', (json.dumps({
+                'type': 'linux_scope_retired', 'id': self.run,
+                'scope': self.scope['id'], 'binding': self.binding}),))
+            self.db.execute("UPDATE runs SET outcome='local_scope_empty'")
+            self.db.commit()
+            return original(connection, metadata, record, readiness)
+        with mock.patch.object(relay, 'check_journal_history', commit_between):
+            self.accepted()
+        self.accepted()
+
+    def test_each_event_field_must_match_its_projection(self):
+        self.bound(spawned=True, retired=True)
+        original = deepcopy(self.events)
+        for index, key, value in [(0, 'profile', self.run), (0, 'requires_spawn_observation', False),
+                                 (0, 'local_scope', {**self.scope, 'id': self.profile}),
+                                 (1, 'binding', {**self.binding, 'inode': 256}),
+                                 (2, 'pid', 99), (3, 'scope', self.profile)]:
+            with self.subTest(index=index, field=key):
+                self.events = deepcopy(original)
+                self.events[index][key] = value
+                self.save_events()
+                self.refused()
+        self.events = original
+        self.save_events()
+        self.accepted()
+
+    def test_audited_marker_cannot_turn_pending_work_into_retirement(self):
+        self.bound(spawned=True)
+        (self.root / 'journal-audited').write_text('scope retired; target outcome unknown')
+        self.refused()
 
 
 if __name__ == '__main__':

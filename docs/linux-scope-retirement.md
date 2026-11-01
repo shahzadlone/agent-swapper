@@ -19,13 +19,19 @@ A private pending association additionally retains the original `ServiceKey`,
 run/scope identity and an allocation identity for this exact Store instance.
 Neither that association nor a retirement value can be reconstructed from JSON.
 
-Each binding permits one claim of its non-cloneable service key. The journal
-owns that key and lends it back to target preparation, which checks the exact
+Each binding permits one claim of its non-cloneable service key. In the Store
+terminal relay, the journal owns that key and lends it back to target preparation,
+which checks the exact
 original binding before sending launch data or transferring the lease. A key
 from an independent witness cannot prepare the original target. Schema 9 also
 prevents one manager invocation from being associated with multiple runs,
 including after the original run retires. The Store records the canonical run
 identity returned by lookup rather than retaining a caller's spelling.
+
+Other fixed qualification consumers can hold the claimed key locally. The key
+check itself establishes the original binding; it does not independently prove
+that a journal transaction occurred or that the separately supplied lease belongs
+to a particular run. The Store relay's private association supplies that coupling.
 
 ```mermaid
 sequenceDiagram

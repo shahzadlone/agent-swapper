@@ -124,17 +124,26 @@ impl SelectedInstallation {
     }
     /// Layout override for fixed, disposable hosted fixtures only. Absent from
     /// ordinary builds; identity, generation, ownership and hash checks remain.
+    /// The selected manifest is `<manifest_prefix>.<generation>.json`, so an
+    /// upgrade need not replace a manifest retained by an admitted generation.
     #[cfg(feature = "qualification")]
     pub fn open_paths_for_qualification(
         selector: &Path,
-        manifest: &Path,
+        manifest_prefix: &Path,
         images: [&Path; 3],
         units: [&Path; 2],
     ) -> io::Result<Self> {
         let (user, group) = identity()?;
         Self::read(selector, |generation| {
+            let mut manifest = manifest_prefix.as_os_str().to_owned();
+            manifest.push(format!(".{generation}.json"));
             InstalledArtifacts::open_paths_for_qualification(
-                InstalledManifest::open_for_qualification(manifest, user, group, generation)?,
+                InstalledManifest::open_for_qualification(
+                    Path::new(&manifest),
+                    user,
+                    group,
+                    generation,
+                )?,
                 images,
                 units,
             )

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import signal
 import socket
 import stat
@@ -135,16 +136,29 @@ def ordinary_ids(uid, gid):
     return uid, gid
 
 
+def installation_generations(prefix):
+    return tuple(hashlib.sha256(value.encode()).hexdigest()[:32]
+                 for value in (prefix, prefix + ':next'))
+
+
+def installation_selections(prefix):
+    return tuple(json.dumps(dict(schema=1, generation=generation), sort_keys=True)
+                 for generation in installation_generations(prefix))
+
+
 def installation_files(prefix, uid, gid, image_hash, version, units):
     require(re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', version), 'invalid fixture installation version')
     require(re.fullmatch(r'[0-9a-f]{64}', image_hash), 'invalid fixture image hash')
-    generation = hashlib.sha256(prefix.encode()).hexdigest()[:32]
-    manifest = dict(schema=1, protocol=1, version=version, generation=generation, user=uid, group=gid,
+    generations = installation_generations(prefix)
+    manifest = dict(schema=1, protocol=1, version=version, user=uid, group=gid,
                     guardian_sha256=image_hash, session_helper_sha256=image_hash, exec_shim_sha256=image_hash,
                     service_template_sha256=hashlib.sha256(units[prefix + '@.service'].encode()).hexdigest(),
                     socket_unit_sha256=hashlib.sha256(units[prefix + '.socket'].encode()).hexdigest())
-    return {prefix + '.installation.json': json.dumps(manifest, sort_keys=True),
-            prefix + '.selection.json': json.dumps(dict(schema=1, generation=generation), sort_keys=True)}
+    files = {f'{prefix}.installation.{generation}.json':
+             json.dumps(dict(manifest, generation=generation), sort_keys=True)
+             for generation in generations}
+    files[prefix + '.selection.json'] = json.dumps(dict(schema=1, generation=generations[0]), sort_keys=True)
+    return files
 
 
 def verify_config(path, contents):
@@ -153,7 +167,8 @@ def verify_config(path, contents):
         meta = os.fstat(stream.fileno())
         require(stat.S_ISREG(meta.st_mode) and meta.st_uid == 0 and stat.S_IMODE(meta.st_mode) == 0o644,
                 'fixture installation metadata is not root-owned mode 0644')
-        require(stream.read(16 * 1024 + 1) == contents.encode(),
+        allowed = contents if isinstance(contents, tuple) else (contents,)
+        require(stream.read(16 * 1024 + 1) in tuple(value.encode() for value in allowed),
                 'fixture installation metadata changed; refusing service control')
 
 
@@ -254,6 +269,17 @@ def rollback_created(created):
         path.unlink()
 
 
+def replace_selector(path, replacement, selected):
+    created = []
+    try:
+        create_owned_file(replacement, selected.encode(), 0o644, created)
+        verify_config(replacement, selected)
+        os.replace(replacement, path)
+        created.clear()  # The reserved inode now lives at the selector path.
+    finally:
+        rollback_created(created)
+
+
 def template_refusal(template, contents, prefix, uid, gid):
     """Caller has authenticated the owned marker, image and every unit file."""
     before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
@@ -294,18 +320,20 @@ def template_refusal(template, contents, prefix, uid, gid):
 
 def admin(verb, directory, uid, gid):
     prefix = fixture_prefix()
-    require(os.geteuid() == 0 and verb in ('install', 'cleanup', 'template-refusal'), 'invalid fixture administrator role')
+    require(os.geteuid() == 0 and verb in ('install', 'cleanup', 'template-refusal', 'select-original', 'select-next', 'stamp-image'), 'invalid fixture administrator role')
     uid, gid = ordinary_ids(uid, gid)
     private_directory(directory, uid)
     files = unit_files(prefix, directory, uid, gid)
     identity = {'uid': uid, 'gid': gid, 'directory': str(directory), 'units': files}
     marker = Path('/run') / (prefix + '.owner')
+    replacement = Path('/run') / (prefix + '.selection.replacement')
     parent = Path('/run/systemd/system')
     metadata = parent.lstat()
     require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == 0 and metadata.st_mode & 0o022 == 0,
             'runtime unit directory is not root-owned and protected')
     if verb == 'install':
         protected_image_parent(prefix)
+        require(not os.path.lexists(replacement), 'fixture selector replacement name already exists')
         require(not os.path.lexists(endpoint(prefix)), 'fixture activation endpoint already exists')
         require(not os.statvfs(guardian_image(prefix).parent).f_flag & os.ST_NOEXEC,
                 'disposable Rust fixture requires an executable /usr/lib mount; no host mount will be changed')
@@ -366,21 +394,33 @@ def admin(verb, directory, uid, gid):
     if os.path.lexists(guardian_image(prefix)):
         verify_image(guardian_image(prefix), ownership['guardian_sha256'])
     configs = installation_files(prefix, uid, gid, ownership['guardian_sha256'], ownership['installation_version'], files)
+    configs[prefix + '.selection.json'] = installation_selections(prefix)
     for name, contents in configs.items():
         path = Path('/run') / name
-        if verb == 'template-refusal':
+        if verb != 'cleanup':
             require(os.path.lexists(path), 'template control lacks its installation metadata')
         if os.path.lexists(path):
             verify_config(path, contents)
     for name, contents in files.items():
         path = parent / name
-        if verb == 'template-refusal':
+        if verb != 'cleanup':
             require(os.path.lexists(path), 'template control lacks an installed fixture unit')
         if os.path.lexists(path):
             metadata = path.lstat()
             require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
                     and metadata.st_mode & 0o022 == 0 and path.read_text() == contents,
                     'fixture unit changed; refusing service control')
+    if os.path.lexists(replacement):
+        require(verb == 'cleanup', 'fixture selector replacement is already reserved')
+        verify_config(replacement, installation_selections(prefix))
+    if verb in ('select-original', 'select-next'):
+        selected = installation_selections(prefix)[int(verb == 'select-next')]
+        replace_selector(Path('/run') / (prefix + '.selection.json'), replacement, selected)
+        return
+    if verb == 'stamp-image':
+        verify_image(guardian_image(prefix), ownership['guardian_sha256'])
+        guardian_image(prefix).chmod(0o755)
+        return
     if verb == 'template-refusal':
         template_refusal(parent / (prefix + '@.service'), files[prefix + '@.service'], prefix, uid, gid)
         return
@@ -419,6 +459,9 @@ def admin(verb, directory, uid, gid):
         if os.path.lexists(path):
             verify_config(path, contents)
             path.unlink()
+    if os.path.lexists(replacement):
+        verify_config(replacement, installation_selections(prefix))
+        replacement.unlink()
     marker.unlink()
 
 
@@ -527,13 +570,47 @@ def live_before_disconnect(directory, report):
 
 def verify_cleanup(prefix):
     paths = [Path('/run') / (prefix + suffix)
-             for suffix in ('.owner', '.selection.json', '.installation.json')]
+             for suffix in ('.owner', '.selection.json', '.selection.replacement')]
+    paths += [Path('/run') / f'{prefix}.installation.{generation}.json'
+              for generation in installation_generations(prefix)]
     paths += [guardian_image(prefix), endpoint(prefix)]
     paths += [Path('/run/systemd/system') / (prefix + suffix)
               for suffix in ('@.service', '.socket')]
     for path in paths:
         # lexists also detects dangling symlinks, which are not clean removal.
         require(not os.path.lexists(path), 'owned activation asset survived cleanup: ' + path.name)
+
+
+def generation_result(mode, returncode, stdout, stderr, expected_failure):
+    if expected_failure is None:
+        valid = returncode == 0 and stdout == f'generation: {mode} passed\n'.encode() and not stderr
+    else:
+        valid = returncode == 125 and not stdout and stderr == (
+            'generation probe refused: ' + expected_failure + '\n').encode()
+    require(valid, f'generation {mode} control failed: ' + stderr.decode(errors='replace')[-2000:])
+
+
+def generation_control(observer, mode, prefix, directory, admin_args, identity_args, environment,
+                       expected_failure=None):
+    command = [observer, '--activation-generation-probe', mode, prefix, str(directory)]
+    with subprocess.Popen(command, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE) as child:
+        try:
+            ready, _, _ = select.select([child.stdout], [], [], 5)
+            require(bool(ready) and child.stdout.readline(128) == b'generation: held\n',
+                    'generation observer did not reach its checkpoint')
+            action = 'stamp-image' if mode == 'image-change' else 'select-next'
+            subprocess.run(admin_args + [action] + identity_args, env=environment, check=True, timeout=15)
+            stdout, stderr = child.communicate(b'R', timeout=30)
+            generation_result(mode, child.returncode, stdout, stderr, expected_failure)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.communicate(timeout=5)
+            subprocess.run(admin_args + ['select-original'] + identity_args,
+                           env=environment, check=True, timeout=15)
+    outcome = 'expected mutation detected' if expected_failure else 'original admission verified'
+    print(f'::notice title=Linux generation admission::{mode}: pass; {outcome}', flush=True)
 
 
 def suite():
@@ -618,6 +695,20 @@ def suite():
                                 label + ' was not refused at its framing check')
                         require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
                     print('Linux fixed-user activation: ' + label + ' refused before worker creation', flush=True)
+            # Generation controls intentionally create lifecycle markers. Run
+            # them after the malformed-packet controls that require no files.
+            for mode in ('before-final-check', 'after-bind', 'image-change'):
+                generation_control(observer, mode, prefix, directory, admin_args, identity_args, environment)
+            mutants = os.environ.get('ASWP_ADMISSION_MUTANTS')
+            if mutants:
+                root = Path(mutants)
+                require(root.is_absolute() and root.is_dir(), 'invalid admission mutation directory')
+                for name, mode, diagnostic in (
+                    ('missing-transition', 'after-bind', 'installed configuration changed since admission began'),
+                    ('premature-transition', 'before-final-check', 'selector switch during admission was accepted'),
+                ):
+                    generation_control(str(root / name), mode, prefix, directory, admin_args,
+                                       identity_args, environment, expected_failure=diagnostic)
             for label, packets, shutdown in [
                     ('unexpected command', (b'X',), False),
                     ('empty record on open peer', (b'',), False),

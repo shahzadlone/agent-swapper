@@ -1,0 +1,12 @@
+{
+  "schema": 7,
+  "revision": "63ac7462c617d5d9d0f3a241e142e66c9b9d0e72",
+  "sha256": "7436317c71e01c33bb5031aae01c3aa41a1a9cebbd83be60d00c5edd262b69c9",
+  "producer_binary_sha256": "18f22bbcafba6cb090ba94c72edf51a99dba068be34b8654feee938a7974abcf",
+  "stub_sha256": "6e8593c2d046a481697ad5dd53638c17557960c15f8e4bb6b41b637b81f71ee4",
+  "events": 7,
+  "completed_exit": 7,
+  "pending_runs": 1,
+  "current_schema": 9,
+  "historical_downgrade_exit": 125
+}

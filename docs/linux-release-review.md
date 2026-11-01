@@ -14,8 +14,9 @@ must be checked against code and native behavior.
 ## Addressed in the association checkpoint
 
 - A service key can be claimed once and cannot be cloned by consumers.
-- Preparation requires the exact key retained by the journal before sending
-  launch data or transferring its lease.
+- Preparation requires the key claimed from that binding before sending launch
+  data or transferring its lease. The Store terminal relay borrows that key
+  from its pending journal association; other fixed fixtures retain it locally.
 - Schema 9 gives each manager invocation one durable run association, retained
   after completion, with migration and rollback checks.
 - Wrong-run and reopened-Store refusal controls subsequently commit the same
@@ -31,8 +32,7 @@ separately. These changes do not supply restart recovery or target-exit evidence
 
 | Area | Required follow-up |
 | --- | --- |
-| Migration fixtures | Supplement synthetic downgrade tests with databases produced by actual historical schema-5/6/7 revisions. |
-| Admission lifetime | Test real binding across a selector switch before admission and after admission; metadata-only lifetime tests are insufficient. |
+| Admission lifetime | Real binding across both selector boundaries and both deliberately broken observers passed in complete CI at `f6cce6d` (`41306933304`). |
 | Observation lifetime | Separate observing an admitted older generation from selecting a generation for a new launch; observers must not gain launch authority. |
 | systemd path compatibility | Measure `/lib` versus `/usr/lib` `FragmentPath` on both runners; permit an alias only with a protected same-file check. |
 | Installed inode lifetime | Specify no hardlink deduplication or metadata rewrites of live generations, then enforce and test the chosen host/installer prerequisites. |
@@ -42,14 +42,20 @@ separately. These changes do not supply restart recovery or target-exit evidence
 Source review suggested that selector admission ends at successful `bind`.
 That is the current implementation: already-bound services retain their original
 generation even if launch preparation happens later. A selector change does not
-terminate existing work. This needs a real-service control and a documented
-upgrade/revocation policy before installer integration.
+terminate existing work. Real-service controls now pass on both Ubuntu images.
+Installer integration still needs a documented update/removal policy and its
+own active-generation tests.
 
 ## Native evidence
 
-- `9cff2a5`: full association and installed-policy CI passed (`41303525675`),
-  including both native Ubuntu suites and independent release rebuilds.
-
+- `f6cce6d`: complete generation/journal CI passed (`41306933304`), including
+  both deliberate-mutation jobs, both native Ubuntu suites, all three platform
+  test jobs and independent candidate rebuilds.
+- `9cff2a5`: full association and installed-policy CI passed (`41303525675`).
+- `4ef99d1`: full import-isolation, pathname and journal-authority pipeline passed
+  (`41304050468`), including both native Ubuntu suites and independent rebuilds.
+- `7df8703`: full retirement-retry CI passed (`41304842096`), including
+  both native Ubuntu suites and independent release rebuilds.
 - `17f74e3`: full durable-journal CI passed (`41297948160`).
 - `db9220a`: full selector and Python-3.10 boundary CI passed (`41300192166`).
 - `0a3167e`: full installed-policy CI passed (`41300687178`).
@@ -93,7 +99,7 @@ confined to the hosted fixture's recursively private mount namespace and owned
 tmpfs; a leaf overlay is unmounted before its parent.
 
 Local runtime tests, strict Clippy and the ordinary-file ancestor control pass.
-The four privileged cases passed both native Ubuntu suites in the complete
+The four new privileged cases passed both native Ubuntu suites in the full
 `7791f02` pipeline (`41303860668`); none ran on the developer host.
 
 ## Privileged fixture isolation
@@ -109,7 +115,7 @@ An ordinary-user subprocess control copies the scripts into an owned directory
 with a shadow `json.py`: isolated invocations reach the intended early refusal,
 do not execute the shadow and leave no bytecode. The same owned canary executes
 without isolation, proving the negative control is meaningful. Cleanup reporting
-also requires all seven owned filesystem names to be absent, including dangling
+also requires all owned filesystem names to be absent, including dangling
 symlinks; the administrator separately checks its units and scope teardown.
 All 46 local Linux harness controls pass. Full CI for `4ef99d1` passed
 (`41304050468`), including both native Ubuntu suites.
@@ -136,8 +142,87 @@ qualification Clippy and workspace doctests. A parallel `cargo test` run hit
 the existing stale-engine-plan assertion once; the isolated control and a later
 139-test core run passed. That assertion now includes the unexpected result for
 diagnosis if it recurs. No cause or runtime fix is claimed from a passing retry.
-Full CI for `7df8703` passed (`41304842096`), including both native Ubuntu suites
-and independent release rebuilds.
+Full CI for `7df8703` passed (`41304842096`), including both native Ubuntu suites.
+
+## Historical migration evidence
+
+Clean schema-5 (`da6b2d9`), schema-6 (`533c355`) and schema-7 (`63ac746`) executables
+each produced a real registry containing one completed stub run and one
+interrupted stub run. Every source database upgraded to schema 9, and each
+historical executable then refused the upgraded copy with exit 125. These were
+ordinary-user, provider-free processes in temporary homes.
+
+The checked-in databases retain their original journal, timestamps and schema;
+provenance sidecars and a generator document their origin. A regression test
+checks complete event preservation, pending-run fencing, completed-run reuse,
+verified backups and reopening. That test and strict workspace Clippy passed
+locally, and the checked-in generator reproduced a valid fixture. Full CI passed
+at `4494f35` (`41306277254`) after the macOS fixture used the Store's canonical
+temporary path, preserving SQLite's no-symlink policy. See
+[the fixture notes](../crates/agentswapper-core/tests/fixtures/historical/README.md).
+
+## Generation-layout preparation
+
+The activated fixture now reserves distinct manifests for its original and next
+generation; the reader derives their paths from the selector. Both reference the
+same fixed images and units. A pure contract test verifies the exact Rust-facing
+field inventory, distinct valid generations, initial selection and artifact
+hashes. All 47 Linux harness controls passed locally. Full CI at `f6cce6d`
+(`41306933304`) passed the subsequent real selector-switch and mutation controls
+on both Ubuntu images, closing this qualified consumer's admission-lifetime finding.
+
+### Service admission across selector replacement
+
+Three hosted controls now exercise actual service bindings: replacing the
+selector between initial observations and the final binding check must refuse;
+replacing it after successful binding must permit preparation and retirement
+using the original key; changing the retained guardian image's metadata must
+refuse revalidation while still allowing observation of original retirement.
+Both generation manifests and every other artifact remain installed throughout.
+The administrator authenticates its ownership marker and exact fixture assets
+before each action, replaces only its reserved selector, and restores the
+original selection after each control. This is not an installer or revocation API.
+
+The deterministic pre-admission barrier is available only to qualification
+builds and executes every normal admission check. A default-build compile-fail
+test checks that it is absent. Binding also rejects an already-admitted policy.
+Local manager tests, default doctests, strict evaluator Clippy and 48 Linux
+harness controls passed. Deliberately
+mutated observers additionally check that these cases detect a missing or
+prematurely executed admission transition. The builder edits disposable source
+copies, requires exactly one matching transition and barrier, and uses separate
+Cargo targets. It neither changes the checkout nor adds a runtime fault feature.
+The guardian always uses the original binary. Only the ordinary observers carry
+the faults; both must fail with the specific expected diagnostic, after the
+unmodified controls pass. Two dedicated Ubuntu jobs keep this compilation out
+of the bounded journal/terminal step. Both mutated observers built locally and
+all 50 ordinary Linux harness controls passed. Complete CI at `f6cce6d`
+(`41306933304`) subsequently passed both mutation jobs and both native suites.
+
+## Source-review follow-up at 7df8703
+
+A third tool-disabled Opus 5.5 review found no exploitable authority issue in the
+key, preparation, writer-authorization, retry or observer changes. It identified
+two false-refusal risks and several missing controls. The follow-up closes the
+Python SQLite connection explicitly even on assertion failure, exercises a real
+concurrent WAL commit between projection and event reads, and checks mismatched
+fields in each lifecycle event plus an unsupported audit marker.
+
+The native wrong-key control now prepares its original service before waiting
+for the rejected candidate to retire, preserving the original admission budget.
+It also checks that the candidate wrote no target-ready or lease-refusal marker.
+The independent-witness control explicitly matches all serialized identity and
+retirement facts while proving its key differs. These observations distinguish
+the live-key check from a refusal caused by mismatched diagnostics.
+
+Binding failure currently consumes the claimed key and leaves the run unresolved;
+the consumer closes the control connection rather than retrying preparation.
+`scope_already_retired` is a terminal retry result: the original retirement was
+committed and no new event was written. A receipt is still returned for explicit
+disposal. These semantics do not provide restart recovery or automatic fallback.
+All ten local observer controls and strict workspace qualification Clippy pass.
+Complete CI passed at `b9c3bb6` (`41306625239`) and the combined generation
+checkpoint `f6cce6d` (`41306933304`).
 
 The trusted-namespace gate, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,

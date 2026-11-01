@@ -21,6 +21,28 @@ import check_linux_socket_activation as probe
 
 
 class ActivationTests(unittest.TestCase):
+    def test_selector_replacement_preserves_old_handle_and_rolls_back_failure(self):
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+                root = Path(temporary)
+                selector, replacement = root / 'selector', root / 'replacement'
+                selector.write_text('original')
+                # Only transaction mechanics are under test here. Protected
+                # metadata validation has its separate mode/UID/link controls.
+                stack.enter_context(patch.object(probe, 'verify_config',
+                    side_effect=lambda path, text: self.assertEqual(path.read_text(), text)))
+                if failed:
+                    stack.enter_context(patch.object(probe.os, 'replace', side_effect=OSError('injected replace failure')))
+                with selector.open('r') as original:
+                    if failed:
+                        with self.assertRaisesRegex(OSError, 'injected replace failure'):
+                            probe.replace_selector(selector, replacement, 'next')
+                    else:
+                        probe.replace_selector(selector, replacement, 'next')
+                    self.assertEqual(original.read(), 'original')
+                    self.assertEqual(selector.read_text(), 'original' if failed else 'next')
+                    self.assertFalse(replacement.exists())
+
     def test_isolated_entry_loads_only_explicit_helpers_and_ignores_shadow_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -56,13 +78,38 @@ class ActivationTests(unittest.TestCase):
         with patch.object(probe.os.path, 'lexists', return_value=False) as exists:
             probe.verify_cleanup(prefix)
         paths = [call.args[0] for call in exists.call_args_list]
-        self.assertEqual(len(paths), 7)
-        self.assertEqual(len(set(paths)), 7)
+        self.assertEqual(len(paths), 9)
+        self.assertEqual(len(set(paths)), 9)
         for survivor in paths:
             with self.subTest(path=survivor), \
                  patch.object(probe.os.path, 'lexists', side_effect=lambda path: path == survivor), \
                  self.assertRaisesRegex(RuntimeError, 'asset survived cleanup'):
                 probe.verify_cleanup(prefix)
+
+    def test_generation_manifests_have_distinct_paths_and_exact_artifact_hashes(self):
+        prefix = 'aswp-activation-123-1'
+        units = probe.unit_files(prefix, Path('/tmp/owned-fixture'), 1000, 1000)
+        files = probe.installation_files(prefix, 1000, 1000, 'a' * 64, '0.1.0-dev', units)
+        generations = probe.installation_generations(prefix)
+        self.assertEqual(len(set(generations)), 2)
+        self.assertEqual(len(files), 3)
+        self.assertEqual(json.loads(files[prefix + '.selection.json']),
+                         {'schema': 1, 'generation': generations[0]})
+        fields = {'schema', 'protocol', 'version', 'generation', 'user', 'group',
+                  'guardian_sha256', 'session_helper_sha256', 'exec_shim_sha256',
+                  'service_template_sha256', 'socket_unit_sha256'}
+        for generation in generations:
+            self.assertRegex(generation, r'^[0-9a-f]{32}$')
+            self.assertNotEqual(generation, '0' * 32)
+            document = json.loads(files[f'{prefix}.installation.{generation}.json'])
+            self.assertEqual(set(document), fields)
+            self.assertEqual(document['generation'], generation)
+            self.assertEqual((document['schema'], document['protocol']), (1, 1))
+            self.assertEqual((document['user'], document['group']), (1000, 1000))
+            for key in ('guardian_sha256', 'session_helper_sha256', 'exec_shim_sha256'):
+                self.assertEqual(document[key], 'a' * 64)
+            for role, name in [('service_template_sha256', '@.service'), ('socket_unit_sha256', '.socket')]:
+                self.assertEqual(document[role], hashlib.sha256(units[prefix + name].encode()).hexdigest())
 
     def test_installed_metadata_change_refuses_before_service_control(self):
         prefix, directory = 'aswp-activation-123-1', Path('/tmp/aswp-fixture')
@@ -77,8 +124,9 @@ class ActivationTests(unittest.TestCase):
              patch.object(Path, 'read_text', return_value=json.dumps(ownership)), patch.object(probe, 'verify_image'), \
              patch.object(probe, 'verify_config', side_effect=RuntimeError('installation metadata changed')), \
              patch.object(Path, 'unlink') as unlink, patch.object(probe, 'systemctl') as control:
-            with self.assertRaisesRegex(RuntimeError, 'installation metadata changed'):
-                probe.admin('cleanup', directory, 1000, 1000)
+            for verb in ('cleanup', 'select-original', 'select-next', 'stamp-image'):
+                with self.subTest(verb=verb), self.assertRaisesRegex(RuntimeError, 'installation metadata changed'):
+                    probe.admin(verb, directory, 1000, 1000)
             control.assert_not_called()
             unlink.assert_not_called()
 

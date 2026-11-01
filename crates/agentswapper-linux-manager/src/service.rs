@@ -344,6 +344,10 @@ fn template_instance(template: &str, unit: &str) -> bool {
     not(feature = "qualification"),
     doc = "\n```compile_fail,E0599\nuse agentswapper_linux_manager::BoundService;\nfn extract_signal(service: &BoundService) { let _ = service.guardian_pidfd(); }\n```"
 )]
+#[cfg_attr(
+    not(feature = "qualification"),
+    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_manager::BoundService;\nfn custom_checkpoint() { let _ = BoundService::bind_with_checkpoint_for_qualification; }\n```"
+)]
 pub struct BoundService {
     connection_id: Arc<()>,
     owner: String,
@@ -362,6 +366,33 @@ impl BoundService {
         policy: ServicePolicy,
         claim: ServiceClaim<'_>,
     ) -> io::Result<Self> {
+        Self::bind_checked(manager, sender, policy, claim, || Ok(())).await
+    }
+
+    /// A deterministic hosted-fixture barrier after initial observations and
+    /// before the final admission recheck. It cannot skip any admission check.
+    #[cfg(feature = "qualification")]
+    pub async fn bind_with_checkpoint_for_qualification(
+        manager: &Manager,
+        sender: &str,
+        policy: ServicePolicy,
+        claim: ServiceClaim<'_>,
+        checkpoint: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        Self::bind_checked(manager, sender, policy, claim, checkpoint).await
+    }
+
+    async fn bind_checked(
+        manager: &Manager,
+        sender: &str,
+        policy: ServicePolicy,
+        claim: ServiceClaim<'_>,
+        checkpoint: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        require(
+            !matches!(&policy.assets, Assets::Admitted(_)),
+            "service policy was already admitted",
+        )?;
         manager.require_sender(sender)?;
         let invocation = invocation::active_identity(claim.unit, claim.invocation, claim.main_pid)?;
         require(
@@ -418,6 +449,7 @@ impl BoundService {
             retirement_issued: false,
             key_claimed: false,
         };
+        checkpoint()?;
         value.recheck(manager).await?;
         // End selection admission only after the original manager/process and
         // loaded policy recheck. Active runs retain their original generation;

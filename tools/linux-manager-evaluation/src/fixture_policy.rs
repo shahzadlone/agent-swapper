@@ -87,7 +87,7 @@ pub(crate) fn activated_policy(
     let socket = format!("/run/systemd/system/{prefix}.socket");
     let selection = agentswapper_linux_runtime::installed_selection::SelectedInstallation::open_paths_for_qualification(
         Path::new(&format!("/run/{prefix}.selection.json")),
-        Path::new(&format!("/run/{prefix}.installation.json")),
+        Path::new(&format!("/run/{prefix}.installation")),
         // This single fixture executable contains all fixed test roles. It is
         // not a production three-helper installation or a target launch grant.
         [Path::new(&image); 3],
