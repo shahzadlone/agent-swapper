@@ -19,6 +19,7 @@ pub struct FixtureJournal {
     lease: Option<ProfileLease>,
     profile: ProfileId,
     run: String,
+    service: Option<agentswapper_linux_manager::ServiceKey>,
 }
 
 fn require(ok: bool, message: &str) -> Result<()> {
@@ -75,11 +76,20 @@ impl FixtureJournal {
             lease: Some(lease),
             profile,
             run,
+            service: None,
         })
     }
 
     pub fn lease(&self) -> Result<BorrowedFd<'_>> {
         self.lease.as_ref().map(AsFd::as_fd).ok_or(Error::Busy)
+    }
+    pub fn bind_scope(&mut self, key: agentswapper_linux_manager::ServiceKey) -> Result<()> {
+        require(
+            self.lease.is_some() && self.service.is_none(),
+            "journal scope already bound or lease absent",
+        )?;
+        self.service = Some(key);
+        Ok(())
     }
     pub fn confirm_intent(&mut self, pid: u32) -> Result<()> {
         let record = self.store.run(&self.run)?;
@@ -102,7 +112,16 @@ impl FixtureJournal {
 
     /// Audit conservative journal state after the observer retired its scope.
     /// This intentionally never calls finish_run or issues a reuse receipt.
-    pub fn audit_retired(&mut self) -> Result<()> {
+    pub fn audit_retired(
+        &mut self,
+        retired: agentswapper_linux_manager::RetiredService,
+    ) -> Result<()> {
+        require(
+            self.service
+                .as_ref()
+                .is_some_and(|key| retired.matches(key)),
+            "journal retirement does not belong to its original service binding",
+        )?;
         require(self.lease.is_none(), "client retained the profile lease")?;
         drop(self.store.acquire_lease(self.profile)?);
         require(

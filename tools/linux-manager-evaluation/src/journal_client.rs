@@ -264,6 +264,12 @@ impl std::fmt::Debug for RetireFailure {
 pub struct Retired {
     pub identity: Identity,
     pub connection_close_error: Option<io::Error>,
+    service: agentswapper_linux_manager::RetiredService,
+}
+impl Retired {
+    pub fn into_service(self) -> agentswapper_linux_manager::RetiredService {
+        self.service
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -413,6 +419,10 @@ fn validate_exit(
 }
 
 impl Bound {
+    pub fn service_key(&self) -> io::Result<agentswapper_linux_manager::ServiceKey> {
+        self.0.binding.key()
+    }
+
     pub fn connect(prefix: &str) -> io::Result<Self> {
         Self::connect_mode(prefix, Mode::Writer)
     }
@@ -1074,27 +1084,51 @@ impl Closed {
     /// Observation failure retains the witnesses for retry. Connection-close
     /// failure after proven retirement is reported separately from that result.
     pub fn retire(mut self) -> Result<Retired, RetireFailure> {
-        let observed = (|| -> io::Result<()> {
-            self.0.runtime()?.block_on(crate::watch::retire(
-                self.0.connection()?,
-                self.0.owner.as_str(),
-                &self.0.unit,
-                &self.0.binding,
-            ))?;
-            if let Some(child) = &self.0.child {
-                require(
-                    child.exited()?,
-                    "writer pidfd remains live after retirement",
-                )?;
-            }
-            Ok(())
+        let observed = (|| -> io::Result<agentswapper_linux_manager::RetiredService> {
+            outside_runtime()?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            let session = &mut self.0;
+            let connection = session
+                .connection
+                .as_ref()
+                .ok_or_else(|| io::Error::other("manager connection is closed"))?;
+            session.runtime.get()?.block_on(async {
+                tokio::time::timeout_at(
+                    deadline,
+                    crate::watch::retire(
+                        connection,
+                        session.owner.as_str(),
+                        &session.unit,
+                        &session.binding,
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "retirement observation expired")
+                })??;
+                if let Some(child) = &session.child {
+                    require(
+                        child.exited()?,
+                        "writer pidfd remains live after retirement",
+                    )?;
+                }
+                // Issuance follows the original target pidfd check, under the
+                // same total deadline. Failure leaves the witnesses available.
+                session
+                    .binding
+                    .observe_retirement(connection, deadline)
+                    .await
+            })
         })();
-        if let Err(error) = observed {
-            return Err(RetireFailure {
-                error,
-                closed: Box::new(self),
-            });
-        }
+        let service = match observed {
+            Ok(service) => service,
+            Err(error) => {
+                return Err(RetireFailure {
+                    error,
+                    closed: Box::new(self),
+                });
+            }
+        };
         let closed = (|| -> io::Result<()> {
             outside_runtime()?;
             let runtime = self.0.runtime.get()?;
@@ -1113,6 +1147,7 @@ impl Closed {
         Ok(Retired {
             identity: identity(&self.0),
             connection_close_error: closed.err(),
+            service,
         })
     }
 }

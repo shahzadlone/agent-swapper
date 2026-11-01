@@ -48,10 +48,16 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
 pub trait AdmissionJournal: Sized {
     fn open(directory: &Path) -> io::Result<Self>;
     fn lease(&self) -> io::Result<BorrowedFd<'_>>;
+    fn bind_scope(&mut self, _key: agentswapper_linux_manager::ServiceKey) -> io::Result<()> {
+        Ok(())
+    }
     fn confirm_intent(&mut self, pid: u32) -> io::Result<()>;
     fn observe_spawn(&mut self, pid: u32) -> io::Result<()>;
     fn release_lease(&mut self);
-    fn audit_retired(&mut self) -> io::Result<()> {
+    fn audit_retired(
+        &mut self,
+        _retired: agentswapper_linux_manager::RetiredService,
+    ) -> io::Result<()> {
         Ok(())
     }
 }
@@ -447,14 +453,18 @@ fn admission_barrier(directory: &Path, phase: &str) -> io::Result<()> {
     }
     Ok(())
 }
-fn retire_closed(directory: &Path, closed: Closed, identity: &Identity) -> io::Result<()> {
+fn retire_closed(
+    directory: &Path,
+    closed: Closed,
+    identity: &Identity,
+) -> io::Result<agentswapper_linux_manager::RetiredService> {
     match closed.retire() {
         Ok(retired) => {
             require(
                 retired.identity == *identity,
                 "relay retirement observation failed",
             )?;
-            if let Some(error) = retired.connection_close_error {
+            if let Some(error) = &retired.connection_close_error {
                 // The original scope is already proven retired. A bus close
                 // error is diagnostic, not a reversal of that observation.
                 let _ = marker(directory, "retirement-connection-error", &error.to_string());
@@ -463,7 +473,8 @@ fn retire_closed(directory: &Path, closed: Closed, identity: &Identity) -> io::R
                 directory,
                 "retired",
                 "original scope and child retired; journal policy unchanged",
-            )
+            )?;
+            Ok(retired.into_service())
         }
         Err(failure) => {
             // A bounded observation failure stays unresolved. Closing control
@@ -490,6 +501,12 @@ fn admit<J: AdmissionJournal>(
     cancelled: &Cell<Option<nix::sys::signal::Signal>>,
     mode: AdmissionMode,
 ) -> Result<Running, AdmissionFailure> {
+    if let Err(error) = bound.service_key().and_then(|key| journal.bind_scope(key)) {
+        return Err(AdmissionFailure {
+            error,
+            closed: Box::new(bound.close()),
+        });
+    }
     let prepared = match journal.lease() {
         Ok(lease) => bound.prepare(lease).map_err(AdmissionFailure::from)?,
         Err(error) => {
@@ -627,7 +644,7 @@ fn run<J: AdmissionJournal>(
         Err(failure) => {
             let _ = marker(directory, "admission-error", &failure.error.to_string());
             let retired = retire_closed(directory, *failure.closed, &identity)
-                .and_then(|()| journal.audit_retired());
+                .and_then(|retired| journal.audit_retired(retired));
             drop(terminal);
             signals.finish_after_cleanup(cancelled.get())?;
             return Err(match retired {
@@ -686,8 +703,8 @@ fn run<J: AdmissionJournal>(
         );
     }
     let target_exit = running.observed_exit();
-    let retired =
-        retire_closed(directory, running.close(), &identity).and_then(|()| journal.audit_retired());
+    let retired = retire_closed(directory, running.close(), &identity)
+        .and_then(|retired| journal.audit_retired(retired));
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.

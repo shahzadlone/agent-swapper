@@ -74,7 +74,21 @@ pub struct ServiceIdentity {
 /// Opaque in-memory identity for one binding. Copies can select an expected
 /// binding, but cannot prove retirement or be reconstructed after a crash.
 #[derive(Clone)]
-pub struct ServiceKey(Arc<()>);
+pub struct ServiceKey(Arc<ServiceOrigin>);
+struct ServiceOrigin {
+    identity: ServiceIdentity,
+    device: u64,
+    inode: u64,
+}
+impl ServiceKey {
+    /// Diagnostics associated with this key at original admission.
+    pub fn identity(&self) -> ServiceIdentity {
+        self.0.identity.clone()
+    }
+    pub fn directory_identity(&self) -> (u64, u64) {
+        (self.0.device, self.0.inode)
+    }
+}
 
 /// One independently observed original-service retirement. Fields are private;
 /// diagnostics cannot manufacture this value. It says nothing about a Store
@@ -293,21 +307,28 @@ impl BoundService {
         )?;
         kernel.require_main_image(&policy.image)?;
         kernel.require_main_credentials(&policy.credentials)?;
+        let observed = kernel.observe()?;
+        let identity = ServiceIdentity {
+            unit: claim.unit.to_owned(),
+            invocation: invocation
+                .try_into()
+                .map_err(|_| io::Error::other("invalid invocation size"))?,
+            user: policy.credentials.user(),
+            main_pid: claim.main_pid,
+        };
+        let key = ServiceKey(Arc::new(ServiceOrigin {
+            identity: identity.clone(),
+            device: observed.device,
+            inode: observed.inode,
+        }));
         let value = Self {
             connection_id: Arc::clone(&manager.identity),
             owner: sender.to_owned(),
             path,
-            identity: ServiceIdentity {
-                unit: claim.unit.to_owned(),
-                invocation: invocation
-                    .try_into()
-                    .map_err(|_| io::Error::other("invalid invocation size"))?,
-                user: policy.credentials.user(),
-                main_pid: claim.main_pid,
-            },
+            identity,
             kernel,
             policy,
-            key: ServiceKey(Arc::new(())),
+            key,
             retirement_issued: false,
         };
         value.recheck(manager).await?;

@@ -553,3 +553,22 @@ and rejection of a second issuance. Its binding and substitution work share the
 existing admission deadline. Local manager tests, positive/negative doctests,
 49 consumer tests and strict manager/consumer Clippy pass; native qualification
 and a real Store consumer are the next gates.
+
+The terminal-session consumer now carries the opaque value out of `Closed::retire`.
+It checks the original target pidfd before receipt issuance and shares one
+twenty-second deadline across observation and issuance; failures retain the
+closed session's witnesses. Diagnostic connection-close errors remain separate.
+The relay supplies the journal with its original `ServiceKey` before target
+preparation, then transfers the receipt by value after cleanup. Keys retain
+admission identity and original directory device/inode alongside their private
+in-memory association.
+
+The real `FixtureJournal` requires that original key to match before auditing
+retirement. This checkpoint deliberately retains its previous conservative
+Store policy: scope retirement does not yet finish the durable run. The next
+change must atomically record scope completion separately from an unknown target
+exit, and reject wrong-run, duplicate and reconstructed-witness substitutions.
+The manager dependency is optional behind `linux-journal-qualification`; default
+application graphs remain isolated. Local manager/doctests, 49 evaluation tests,
+strict evaluation/core-feature Clippy and the dependency boundary pass. Native
+qualification of this consumer is pending.
