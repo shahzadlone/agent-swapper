@@ -132,7 +132,7 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
         invocation: Some(offer.invocation),
         kind: UnitKind::Activated { policy },
     };
-    let (connection, owner, mut report, binding) =
+    let (connection, owner, mut report, mut binding) =
         tokio::time::timeout(Duration::from_secs(8), crate::admit(paths, Some(expected)))
             .await
             .map_err(|_| {
@@ -143,27 +143,50 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
             })??;
     let result: io::Result<Report> = async {
         let binding = binding
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| io::Error::other("activation lacks retained kernel binding"))?;
         // Read-only hosted control: another independently authenticated manager
         // connection must not substitute for this binding, even with the same
         // unique-name spelling. No target or launch request exists in this mode.
-        tokio::time::timeout(Duration::from_secs(8), async {
+        let unrelated_key = tokio::time::timeout(Duration::from_secs(8), async {
             let (other, other_owner, _) = agentswapper_linux_manager::connect().await?;
-            let refused = binding.require_manager(&other);
-            other.close().await.map_err(io::Error::other)?;
-            require(
-                other_owner == owner,
-                "substitution control changed manager owner",
-            )?;
-            let error = refused.err().ok_or_else(|| {
-                io::Error::other("another manager connection substituted for the original")
-            })?;
-            require(
-                error.to_string() == "service belongs to another manager connection",
-                "substitution refused at the wrong boundary",
-            )?;
-            binding.require_manager(&connection)
+            let checked = async {
+                require(
+                    other_owner == owner,
+                    "substitution control changed manager owner",
+                )?;
+                let error = binding.require_manager(&other).err().ok_or_else(|| {
+                    io::Error::other("another manager connection substituted for the original")
+                })?;
+                require(
+                    error.to_string() == "service belongs to another manager connection",
+                    "substitution refused at the wrong boundary",
+                )?;
+                binding.require_manager(&connection)?;
+                let unit = report
+                    .unit
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("activation lacks unit identity"))?;
+                // A fresh witness of the same invocation has a different local
+                // key. It cannot replace the first observer after losing custody.
+                let other_bound = agentswapper_linux_manager::BoundService::bind(
+                    &other,
+                    other_owner.as_str(),
+                    activated_policy(prefix)?,
+                    agentswapper_linux_manager::ServiceClaim {
+                        unit: &unit.unit,
+                        invocation: &unit.invocation,
+                        main_pid: unit.pid,
+                    },
+                )
+                .await?;
+                Ok::<_, io::Error>(other_bound.key())
+            }
+            .await;
+            let closed = other.close().await.map_err(io::Error::other);
+            let key = checked?;
+            closed?;
+            Ok::<_, io::Error>(key)
         })
         .await
         .map_err(|_| {
@@ -172,6 +195,16 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
                 "manager substitution control expired",
             )
         })??;
+        let key = binding.key()?;
+        let expired = binding
+            .observe_retirement(&connection, tokio::time::Instant::now())
+            .await
+            .err()
+            .ok_or_else(|| io::Error::other("live scope retired under an expired deadline"))?;
+        require(
+            expired.kind() == io::ErrorKind::TimedOut,
+            "expired retirement did not retain a deadline refusal",
+        )?;
         activation.manager_connection_substitution_refused = Some(true);
         report.activation = Some(activation);
         report.phase = "activation_bound";
@@ -180,17 +213,29 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
         // This is a bind-only experiment. Closing the sole control connection
         // lets the cooperative guardian exit without ever launching a target.
         drop(socket);
-        let unit = report
-            .unit
-            .as_ref()
-            .ok_or_else(|| io::Error::other("activation lacks unit binding"))?;
-        report.retirement = Some(
-            crate::watch::retire(&connection, owner.as_str(), unit, binding)
-                .await
-                .map_err(|error| {
-                    io::Error::new(error.kind(), format!("activation retirement: {error}"))
-                })?,
-        );
+        let retired = binding
+            .observe_retirement(
+                &connection,
+                tokio::time::Instant::now() + Duration::from_secs(20),
+            )
+            .await?;
+        require(
+            retired.matches(&key) && !retired.matches(&unrelated_key),
+            "retirement matched another binding key",
+        )?;
+        let repeated = binding
+            .observe_retirement(
+                &connection,
+                tokio::time::Instant::now() + Duration::from_secs(20),
+            )
+            .await
+            .err()
+            .ok_or_else(|| io::Error::other("retirement was issued twice"))?;
+        require(
+            repeated.to_string() == "service retirement was already issued",
+            "duplicate retirement refused at wrong boundary",
+        )?;
+        report.retirement = Some(retired.observation().into());
         report.phase = "activation_retired";
         Ok(report)
     }

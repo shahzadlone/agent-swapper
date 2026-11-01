@@ -19,4 +19,6 @@ pub use lifecycle::require_direct_lifecycle;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(target_os = "linux")]
-pub use service::{BoundService, ServiceClaim, ServiceIdentity, ServicePolicy};
+pub use service::{
+    BoundService, RetiredService, ServiceClaim, ServiceIdentity, ServiceKey, ServicePolicy,
+};

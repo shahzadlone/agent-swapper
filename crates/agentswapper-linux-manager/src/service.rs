@@ -60,6 +60,38 @@ pub struct ServiceIdentity {
     pub main_pid: u32,
 }
 
+/// Opaque in-memory identity for one binding. Copies can select an expected
+/// binding, but cannot prove retirement or be reconstructed after a crash.
+#[derive(Clone)]
+pub struct ServiceKey(Arc<()>);
+
+/// One independently observed original-service retirement. Fields are private;
+/// diagnostics cannot manufacture this value. It says nothing about a Store
+/// run, profile lease, target exec/exit, or work delegated outside this scope.
+///
+/// ```compile_fail
+/// use agentswapper_linux_manager::RetiredService;
+/// fn duplicate(retired: RetiredService) { let _ = retired.clone(); }
+/// ```
+#[must_use = "retirement observation must be explicitly consumed or discarded"]
+pub struct RetiredService {
+    key: ServiceKey,
+    identity: ServiceIdentity,
+    observation: scope_observation::Retirement,
+}
+impl RetiredService {
+    pub fn matches(&self, expected: &ServiceKey) -> bool {
+        Arc::ptr_eq(&self.key.0, &expected.0)
+    }
+    pub fn identity(&self) -> ServiceIdentity {
+        self.identity.clone()
+    }
+    /// Printable kernel facts alone do not carry this value's authority.
+    pub fn observation(&self) -> &scope_observation::Retirement {
+        &self.observation
+    }
+}
+
 struct Properties {
     id: String,
     active: String,
@@ -121,6 +153,8 @@ pub struct BoundService {
     identity: ServiceIdentity,
     kernel: scope_observation::Binding,
     policy: ServicePolicy,
+    key: ServiceKey,
+    retirement_issued: bool,
 }
 impl BoundService {
     pub async fn bind(
@@ -195,6 +229,8 @@ impl BoundService {
             },
             kernel,
             policy,
+            key: ServiceKey(Arc::new(())),
+            retirement_issued: false,
         };
         value.recheck(manager).await?;
         Ok(value)
@@ -202,6 +238,76 @@ impl BoundService {
 
     pub fn identity(&self) -> ServiceIdentity {
         self.identity.clone()
+    }
+
+    pub fn key(&self) -> ServiceKey {
+        self.key.clone()
+    }
+
+    /// Observe original kernel removal, original guardian death and authenticated
+    /// invocation retirement under one deadline. Failures retain the binding for
+    /// retry; success issues only one value. No process is signalled or inferred
+    /// stopped from its PID, unit-name absence or a free profile lease.
+    pub async fn observe_retirement(
+        &mut self,
+        manager: &Manager,
+        deadline: tokio::time::Instant,
+    ) -> io::Result<RetiredService> {
+        self.require_manager(manager)?;
+        require(
+            !self.retirement_issued,
+            "service retirement was already issued",
+        )?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "service retirement deadline expired",
+            ));
+        }
+        let invocation = self
+            .identity
+            .invocation
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let observation = tokio::time::timeout_at(deadline, async {
+            loop {
+                require(
+                    linux::owner(manager).await?.as_str() == self.owner,
+                    "manager owner changed while observing retirement",
+                )?;
+                if let Some(observed) = self.kernel.retirement()?
+                    && crate::invocation_retired(
+                        manager,
+                        &self.owner,
+                        &self.identity.unit,
+                        &invocation,
+                    )
+                    .await?
+                {
+                    require(
+                        linux::owner(manager).await?.as_str() == self.owner,
+                        "manager owner changed at retirement",
+                    )?;
+                    return Ok::<_, io::Error>(observed);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "service retirement deadline expired",
+            )
+        })??;
+        // No await between revocation and returning the one-use value.
+        self.retirement_issued = true;
+        Ok(RetiredService {
+            key: self.key.clone(),
+            identity: self.identity(),
+            observation,
+        })
     }
 
     /// Require this exact authenticated transport, even if another connection
