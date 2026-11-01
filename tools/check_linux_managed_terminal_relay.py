@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Connect the hosted fixed guardian to a relay inside newly created outer PTYs."""
 import fcntl
+import json
 import os
 from pathlib import Path
 import re
@@ -312,6 +313,108 @@ def failures(binary, scenario, env, owned_parent=False):
             owned.close()
 
 
+def admission(binary, phase, scenario, env, owned_parent):
+    """Queue cancellation at a real send boundary, with original scope witnesses."""
+    with tempfile.TemporaryDirectory(prefix='aswp-managed-admission-') as path:
+        root = Path(path)
+        owned = OwnedPty(binary, root, environment=dict(env, ASWP_CI_ADMISSION_HOLD=phase),
+                         arguments=('--owned-parent',) if owned_parent else ())
+        descriptors = []
+        try:
+            owned.wait(lambda: (root / 'admission-held').exists())
+            assert (root / 'admission-held').read_text() == phase
+            data = json.loads((root / ('session-ready' if owned_parent else 'ready')).read_text())
+            assert data['group'] == data['session'] == owned.pid == os.tcgetpgrp(owned.master)
+            assert termios.tcgetattr(owned.master) == owned.original
+            if owned_parent:
+                stat = Path(f"/proc/{data['pid']}/stat").read_text().rsplit(') ', 1)[1].split()
+                assert int(stat[1]) == int(stat[2]) == owned.pid
+            else:
+                assert data['pid'] == owned.pid
+            assert os.path.samefile(f"/proc/{data['pid']}/exe", binary)
+            relay_fd = os.pidfd_open(data['pid'])
+            descriptors.append(relay_fd)
+            group = Path(f"/proc/{data['guardian']}/cgroup").read_text().strip()
+            assert group.startswith('0::/system.slice/' + env['ASWP_ACTIVATION_PREFIX'] + '@')
+            scope_path = Path('/sys/fs/cgroup' + group.removeprefix('0::'))
+            scope_fd = os.open(scope_path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            descriptors.append(scope_fd)
+            pidfds = []
+            for pid in (data['guardian'], data['target']):
+                fd = os.pidfd_open(pid)
+                descriptors.append(fd)
+                pidfds.append(fd)
+                assert not select.select([fd], [], [], 0)[0]
+                assert Path(f'/proc/{pid}/cgroup').read_text().strip() == group
+            marker_root = Path(os.environ['ASWP_ACTIVATION_DIRECTORY']) / data['invocation']
+            assert not (marker_root / 'final-exec').exists()
+            expected = 125
+            if scenario in ('term', 'ctrl-c'):
+                expected_signal = signal.SIGTERM if scenario == 'term' else signal.SIGINT
+                expected = -expected_signal
+                if scenario == 'ctrl-c':
+                    # The outer terminal is still cooked: this is a terminal
+                    # generated interrupt to the actual foreground job group.
+                    owned.send(b'\x03')
+                else:
+                    signal.pidfd_send_signal(relay_fd, expected_signal)
+                def pending():
+                    status = Path(f"/proc/{data['pid']}/status").read_text()
+                    bits = [int(x, 16) for x in re.findall(r'^(?:SigPnd|ShdPnd):\s*([0-9a-f]+)$', status, re.M)]
+                    return any(value & (1 << (int(expected_signal) - 1)) for value in bits)
+                owned.wait(pending)
+            elif scenario == 'intent-error':
+                assert phase == 'go'
+                (root / 'intent').write_text('existing intent canary')
+            elif scenario == 'spawn-error':
+                assert phase == 'release'
+                (root / 'spawn-observed').write_text('existing spawn canary')
+            elif scenario == 'ready-error':
+                assert phase == 'release'
+                # Fail a marker after raw entry; cleanup must still restore
+                # modes and observe retirement of the original scope.
+                (root / 'relay-ready').mkdir()
+            else:
+                raise AssertionError('unknown admission scenario')
+            (root / 'admission-release').write_text('release fixture barrier')
+            owned.finish(expected)
+            assert (root / 'retired').exists() and not (root / 'retirement-unresolved').exists()
+            if scenario == 'ready-error':
+                assert (root / 'relay-error').exists() and (root / 'restored').exists()
+            else:
+                assert (root / 'admission-error').exists()
+                assert not (root / 'relay-ready').exists()
+                assert not (marker_root / 'final-exec').exists(), 'cancelled/failed admission ran target instructions'
+            if owned_parent:
+                assert (root / 'owner-restored-exit').exists()
+            owned.wait(lambda: all(select.select([fd], [], [], 0)[0] for fd in pidfds), pump=False)
+            owned.wait(lambda: not scope_path.exists(), pump=False)
+            try:
+                fd = os.open('cgroup.events', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=scope_fd)
+            except FileNotFoundError:
+                pass
+            else:
+                os.close(fd)
+                raise AssertionError('original admission scope remains active')
+            with (root / 'lease').open('rb+') as lease:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if scenario == 'intent-error':
+                assert (root / 'intent').read_text() == 'existing intent canary'
+            elif scenario == 'spawn-error':
+                assert (root / 'spawn-observed').read_text() == 'existing spawn canary'
+            elif phase == 'go':
+                assert not (root / 'intent').exists()
+            else:
+                assert 'outcome unresolved' in (root / 'intent').read_text()
+            if scenario in ('term', 'ctrl-c'):
+                assert (root / 'spawn-observed').exists() == (phase == 'release-send')
+            print(f'exec-managed-admission-{phase}-{scenario}-{"owned" if owned_parent else "direct"}: pass', flush=True)
+        finally:
+            for descriptor in descriptors:
+                os.close(descriptor)
+            owned.close()
+
+
 def long_session(binary, env):
     with tempfile.TemporaryDirectory(prefix='aswp-managed-long-') as path:
         root = Path(path)
@@ -379,7 +482,16 @@ def main():
         shell_job(binary, raw_stop, exec_env, True)
     for scenario in ('outer-hangup', 'client-kill', 'blocked-drain', 'stopped-parent-loss', 'unknown-exit'):
         failures(binary, scenario, exec_env, True)
-    print('::notice::managed two-terminal relay: thirty-two owned-PTY cases passed, including thirteen exec-gated surviving-owner cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
+    for owned_parent in (False, True):
+        for phase in ('go', 'go-send', 'release', 'release-send'):
+            admission(binary, phase, 'term', exec_env, owned_parent)
+    for phase in ('go-send', 'release-send'):
+        admission(binary, phase, 'ctrl-c', exec_env, True)
+    for phase, scenario, owned_parent in (('go', 'intent-error', False),
+                                         ('release', 'spawn-error', True),
+                                         ('release', 'ready-error', True)):
+        admission(binary, phase, scenario, exec_env, owned_parent)
+    print('::notice::managed two-terminal relay: forty-five owned-PTY cases passed, including thirteen cancellation/error retirement cases; stopped parent loss under a same-session subreaper retires relay and original scope without client cleanup; no production custody, exec/exit receipt, or provider qualification', flush=True)
 
 
 if __name__ == '__main__':

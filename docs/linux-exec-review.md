@@ -10,11 +10,11 @@ The following findings require resolution before product integration:
 
 | Finding | Disposition |
 | --- | --- |
-| Cancellation can remain pending through admission and release | Reproduce at explicit pre-GO and pre-release barriers, then retire without release |
+| Cancellation can remain pending through admission and release | Cancellation guards now bracket journaling and run after the last recheck, immediately before GO/release; hosted barrier qualification pending |
 | A target dying while the relay is paused can lose its queued outcome | Add stopped-target death tests through shell fg/bg and repair event/drain ordering |
 | A known target exit can be replaced by a drain-timeout failure | Separate bounded output truncation from the authenticated target result |
 | Socket reset can hide a queued final report | Reproduced locally; bounded retry implemented, hosted qualification pending |
-| Early relay errors discard their retirement witness | Route post-binding failures through explicit retirement; preserve unresolved journal policy |
+| Early relay errors discard their retirement witness | Admission and post-entry errors now attempt explicit retirement using retained witnesses; hosted failure qualification pending |
 | Guardian resume/hangup/marker paths can discard a terminal wait result | Consolidate raw terminal-status handling and test the competing transitions |
 | External stops during cooked admission/cleanup windows | Explicitly outside the current fixture contract; define and qualify phase-specific behavior before production |
 
@@ -49,3 +49,22 @@ needs a policy for signals before the exec event, executable/wrapper identity,
 ptrace/LSM compatibility, protocol upgrades, guardian liveness and meaningful
 structured outcomes. A first-image exec observation is not provider readiness.
 Installation, provider qualification and CLI/TUI composition remain separate.
+
+The admission correction retains the Closed witness across prepare, hold,
+journal and transport failures. Post-admission errors use the same restoration
+and retirement path as normal exit, including a marker error after entering raw
+mode. Observation failure remains unresolved; a failed manager-connection close
+after proven retirement is separately diagnosed. No file marker completes a run.
+
+Thirteen new native cases hold the actual relay at pre-journal or final-send
+boundaries. They cover direct and surviving-owner SIGTERM, cooked terminal
+Ctrl-C, refused existing intent/spawn files, and a marker failure after raw entry.
+The harness retains original guardian/target pidfds and the original cgroup
+directory before releasing the barrier. It checks terminal modes, scope removal,
+lease release and (for withheld admission) absence of target instructions. The
+fixture barrier is bounded and available only in the hosted qualification helper.
+The checks do not make cancellation atomic with a later successful send.
+
+All 65 isolated Rust tests, 14 coordinator tests and strict qualification Clippy
+pass locally for the admission correction. The expanded 45-case native manager
+suite is pending; this remains qualification code, not a production launcher.

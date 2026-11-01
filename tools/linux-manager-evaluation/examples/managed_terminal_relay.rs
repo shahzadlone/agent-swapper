@@ -12,13 +12,17 @@ mod outer_terminal;
 mod terminal_owner;
 
 use agentswapper_linux_runtime::signals::Signals;
-use aswp_linux_manager_evaluation::journal_client::{Bound, JobEvent, Running, TargetExit};
+use aswp_linux_manager_evaluation::journal_client::{
+    Bound, Closed, Identity, JobEvent, Running, StartCause, StartFailure, TargetExit,
+    TransitionFailure,
+};
 use outer_terminal::{Terminal, require};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     termios,
 };
 use std::{
+    cell::Cell,
     collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{self, IsTerminal, Write},
@@ -282,6 +286,187 @@ fn relay(
     Ok(None)
 }
 
+struct AdmissionFailure {
+    error: io::Error,
+    closed: Box<Closed>,
+}
+impl From<TransitionFailure> for AdmissionFailure {
+    fn from(failure: TransitionFailure) -> Self {
+        Self {
+            error: failure.error,
+            closed: failure.closed,
+        }
+    }
+}
+impl From<StartFailure<io::Error>> for AdmissionFailure {
+    fn from(failure: StartFailure<io::Error>) -> Self {
+        Self {
+            error: match failure.cause {
+                StartCause::Journal(error) | StartCause::Transport(error) => error,
+            },
+            closed: failure.closed,
+        }
+    }
+}
+fn cancellation(
+    signals: &Signals,
+    cancelled: &Cell<Option<nix::sys::signal::Signal>>,
+) -> io::Result<()> {
+    let notices = signals.drain()?;
+    if cancelled.get().is_none() {
+        cancelled.set(notices.terminate);
+    }
+    require(
+        !notices.stop,
+        "external admission suspension is not yet qualified",
+    )?;
+    if cancelled.get().is_some() {
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "managed admission cancelled",
+        ))
+    } else {
+        Ok(())
+    }
+}
+fn admission_barrier(directory: &Path, phase: &str) -> io::Result<()> {
+    match std::env::var("ASWP_CI_ADMISSION_HOLD") {
+        Err(std::env::VarError::NotPresent) => return Ok(()),
+        Ok(value)
+            if matches!(
+                value.as_str(),
+                "go" | "release" | "go-send" | "release-send"
+            ) =>
+        {
+            if value != phase {
+                return Ok(());
+            }
+        }
+        _ => return Err(io::Error::other("invalid admission fixture barrier")),
+    }
+    marker(directory, "admission-held", phase)?;
+    let until = Instant::now() + Duration::from_secs(4);
+    while !directory.join("admission-release").exists() {
+        require(Instant::now() < until, "admission fixture barrier expired")?;
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+fn retire_closed(directory: &Path, closed: Closed, identity: &Identity) -> io::Result<()> {
+    match closed.retire() {
+        Ok(retired) => {
+            require(
+                retired.identity == *identity,
+                "relay retirement observation failed",
+            )?;
+            if let Some(error) = retired.connection_close_error {
+                // The original scope is already proven retired. A bus close
+                // error is diagnostic, not a reversal of that observation.
+                let _ = marker(directory, "retirement-connection-error", &error.to_string());
+            }
+            marker(
+                directory,
+                "retired",
+                "original scope and child retired; journal policy unchanged",
+            )
+        }
+        Err(failure) => {
+            // A bounded observation failure stays unresolved. Closing control
+            // requests cleanup, but cannot turn a timeout into retirement.
+            let _ = marker(
+                directory,
+                "retirement-unresolved",
+                &failure.error.to_string(),
+            );
+            Err(failure.error)
+        }
+    }
+}
+struct AdmissionMode {
+    owned: bool,
+    exec_gate: bool,
+}
+
+fn admit(
+    directory: &Path,
+    bound: Bound,
+    lease: &File,
+    terminal: &Terminal,
+    signals: &Signals,
+    cancelled: &Cell<Option<nix::sys::signal::Signal>>,
+    mode: AdmissionMode,
+) -> Result<Running, AdmissionFailure> {
+    let prepared = bound
+        .prepare(lease.as_fd())
+        .map_err(AdmissionFailure::from)?;
+    let identity = prepared.identity();
+    let target = prepared.pid();
+    let ready =
+        (|| {
+            resize(
+                terminal,
+                prepared
+                    .terminal()
+                    .ok_or_else(|| io::Error::other("prepared terminal absent"))?,
+            )?;
+            marker(directory, if mode.owned { "session-ready" } else { "ready" },
+            &serde_json::json!({"pid":std::process::id(), "group":terminal.group().as_raw_pid(),
+                "session":rustix::process::getsid(None)?.as_raw_pid(), "target":target,
+                "guardian":identity.guardian_pid, "invocation":identity.invocation}).to_string())?;
+            admission_barrier(directory, "go")?;
+            cancellation(signals, cancelled)
+        })();
+    if let Err(error) = ready {
+        return Err(AdmissionFailure {
+            error,
+            closed: Box::new(prepared.close()),
+        });
+    }
+    let mut running = prepared
+        .start_after_checked(
+            [0x41; 16],
+            |pid| {
+                cancellation(signals, cancelled)?;
+                durable_intent(directory, pid)?;
+                cancellation(signals, cancelled)
+            },
+            || {
+                admission_barrier(directory, "go-send")?;
+                cancellation(signals, cancelled)
+            },
+        )
+        .map_err(AdmissionFailure::from)?;
+    if mode.exec_gate {
+        let held = running.hold_exec().map_err(AdmissionFailure::from)?;
+        let observed = (|| {
+            held.observe_held()?;
+            marker(directory, "exec-held", &target.to_string())?;
+            admission_barrier(directory, "release")?;
+            cancellation(signals, cancelled)
+        })();
+        if let Err(error) = observed {
+            return Err(AdmissionFailure {
+                error,
+                closed: Box::new(held.close()),
+            });
+        }
+        running = held
+            .release_after_checked(
+                |pid| {
+                    cancellation(signals, cancelled)?;
+                    durable_record(directory, "spawn-observed", pid)?;
+                    cancellation(signals, cancelled)
+                },
+                || {
+                    admission_barrier(directory, "release-send")?;
+                    cancellation(signals, cancelled)
+                },
+            )
+            .map_err(AdmissionFailure::from)?;
+    }
+    Ok(running)
+}
+
 fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> {
     if let Some(parent) = owner {
         require(
@@ -322,91 +507,87 @@ fn run(directory: &Path, owner: Option<rustix::process::Pid>) -> io::Result<u8> 
     } else {
         Bound::connect_job_control(&prefix)?
     };
-    let prepared = bound
-        .prepare(lease.as_fd())
-        .map_err(|failure| failure.error)?;
-    drop(lease);
-    let identity = prepared.identity();
-    let target = prepared.pid();
-    resize(
-        &terminal,
-        prepared
-            .terminal()
-            .ok_or_else(|| io::Error::other("prepared terminal absent"))?,
-    )?;
-    marker(
+    let identity = bound.identity();
+    let cancelled = Cell::new(None);
+    let admitted = admit(
         directory,
-        if owner.is_some() {
-            "session-ready"
-        } else {
-            "ready"
+        bound,
+        &lease,
+        &terminal,
+        &signals,
+        &cancelled,
+        AdmissionMode {
+            owned: owner.is_some(),
+            exec_gate,
         },
-        &serde_json::json!({
-            "pid": std::process::id(), "group": terminal.group().as_raw_pid(),
-            "session": rustix::process::getsid(None)?.as_raw_pid(),
-            "target": target, "guardian": identity.guardian_pid, "invocation": identity.invocation
-        })
-        .to_string(),
-    )?;
-    let mut running = prepared
-        .start_after([0x41; 16], |pid| durable_intent(directory, pid))
-        .map_err(|failure| io::Error::other(format!("{failure:?}")))?;
-    if exec_gate {
-        let held = running.hold_exec().map_err(|failure| failure.error)?;
-        held.observe_held()?;
-        marker(directory, "exec-held", &target.to_string())?;
-        running = held
-            .release_after(|pid| durable_record(directory, "spawn-observed", pid))
-            .map_err(|failure| io::Error::other(format!("{failure:?}")))?;
-    }
-    terminal.enter()?;
-    marker(directory, "relay-ready", "raw")?;
-    if owner.is_some() {
-        marker(directory, "child-ready", &std::process::id().to_string())?;
-    }
-    let outcome = relay(directory, &signals, &mut terminal, &mut running);
+    );
+    drop(lease);
+    let mut running = match admitted {
+        Ok(running) => running,
+        Err(failure) => {
+            let _ = marker(directory, "admission-error", &failure.error.to_string());
+            let retired = retire_closed(directory, *failure.closed, &identity);
+            drop(terminal);
+            signals.finish(cancelled.get())?;
+            return Err(match retired {
+                Ok(()) => failure.error,
+                Err(error) => error,
+            });
+        }
+    };
+    // Every error after admission reaches the same restoration/retirement path.
+    let outcome = (|| {
+        // The admission guard may consume a resize notice; refresh from the
+        // actual outer terminal after detach rather than resizing a trace stop.
+        resize(
+            &terminal,
+            running
+                .terminal()
+                .ok_or_else(|| io::Error::other("running terminal absent"))?,
+        )?;
+        terminal.enter()?;
+        marker(directory, "relay-ready", "raw")?;
+        if owner.is_some() {
+            marker(directory, "child-ready", &std::process::id().to_string())?;
+        }
+        relay(directory, &signals, &mut terminal, &mut running)
+    })();
     if let Err(error) = &outcome {
-        marker(directory, "relay-error", &error.to_string())?;
+        let _ = marker(directory, "relay-error", &error.to_string());
     }
     // Restore promptly even if manager observation takes longer or fails.
     let restored = terminal.restore();
-    let mut watched = [PollFd::new(&terminal, PollFlags::empty())];
-    poll(
-        &mut watched,
-        Some(&Timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        }),
-    )?;
-    let disconnected = watched[0].revents().contains(PollFlags::HUP);
+    let disconnected = (|| -> io::Result<bool> {
+        let mut watched = [PollFd::new(&terminal, PollFlags::empty())];
+        poll(
+            &mut watched,
+            Some(&Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )?;
+        Ok(watched[0].revents().contains(PollFlags::HUP))
+    })();
     if restored.is_ok() {
-        marker(directory, "restored", "complete")?;
+        let _ = marker(directory, "restored", "complete");
     } else {
-        marker(
+        let _ = marker(
             directory,
             "restoration-unavailable",
-            if disconnected {
+            if matches!(disconnected, Ok(true)) {
                 "owned outer terminal disconnected"
             } else {
                 "terminal restoration failed"
             },
-        )?;
+        );
     }
     let target_exit = running.observed_exit();
-    let retired = running.close().retire().map_err(|failure| failure.error)?;
-    require(
-        retired.identity == identity && retired.connection_close_error.is_none(),
-        "relay retirement observation failed",
-    )?;
-    marker(
-        directory,
-        "retired",
-        "original scope and child retired; journal policy unchanged",
-    )?;
+    let retired = retire_closed(directory, running.close(), &identity);
     drop(terminal);
     // A vanished master cannot be restored. Record that limit without
     // skipping independent scope retirement or hiding a delivered fatal signal.
-    if disconnected && let Ok(Some(signal)) = &outcome {
+    retired?;
+    if disconnected? && let Ok(Some(signal)) = &outcome {
         return signals.finish(Some(*signal)).map(|()| 0);
     }
     restored?;
