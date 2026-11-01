@@ -250,6 +250,34 @@ impl Process {
     }
 }
 
+// A retained child witness; this is not an exec or custody receipt.
+pub(crate) struct Child {
+    process: Process,
+    parent: u32,
+}
+
+impl Child {
+    pub(crate) fn check(&self) -> io::Result<()> {
+        self.process.check()?;
+        let status = read_at(&self.process.proc_dir, "status", 65536)?;
+        let status = std::str::from_utf8(&status).map_err(io::Error::other)?;
+        let parents = status
+            .lines()
+            .filter_map(|line| line.strip_prefix("PPid:"))
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        require(
+            parents == [self.parent.to_string()],
+            "writer is not the bound guardian's direct child",
+        )?;
+        self.process.live()
+    }
+
+    pub(crate) fn exited(&self) -> io::Result<bool> {
+        self.process.exited()
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct Fact {
     // A directory can survive a failed invocation and be reused. These fields
@@ -284,7 +312,8 @@ impl Binding {
         require(
             !unit.contains('/')
                 && unit.ends_with(".service")
-                && (unit.starts_with("aswp-managed-") || crate::activation::valid_scope_unit(unit)),
+                && (unit.starts_with("aswp-managed-")
+                    || crate::fixture_policy::valid_scope_unit(unit)),
             "invalid scope leaf",
         )?;
         let mut dir = rustix::fs::open("/", DIRECTORY, Mode::empty())?;
@@ -325,6 +354,17 @@ impl Binding {
             main_pidfd_live: true,
             migration_controls_refused: true,
         })
+    }
+
+    pub(crate) fn child(&self, pid: u32, parent: u32) -> io::Result<Child> {
+        self.observe()?;
+        let child = Child {
+            process: Process::bind(pid, self.main.user, &self.main.group)?,
+            parent,
+        };
+        child.check()?;
+        self.observe()?;
+        Ok(child)
     }
 
     pub(crate) fn directory(&self) -> &OwnedFd {
@@ -407,6 +447,36 @@ mod tests {
         Process::bind(pid, user, group)?.check()?;
         assert!(Process::bind(pid, user.wrapping_add(1), group).is_err());
         assert!(Process::bind(pid, user, "/aswp-nonexistent-fixture").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn direct_child_check_rejects_wrong_parent_and_group() -> io::Result<()> {
+        struct Owned(std::process::Child);
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let child = Owned(std::process::Command::new("/bin/sleep").arg("10").spawn()?);
+        let membership = std::fs::read_to_string(format!("/proc/{}/cgroup", child.0.id()))?;
+        let group = membership
+            .strip_prefix("0::")
+            .and_then(|s| s.strip_suffix('\n'))
+            .ok_or_else(|| io::Error::other("test requires unified cgroup v2"))?;
+        let uid = rustix::process::getuid().as_raw();
+        let witness = Child {
+            process: Process::bind(child.0.id(), uid, group)?,
+            parent: std::process::id(),
+        };
+        witness.check()?;
+        let wrong = Child {
+            process: Process::bind(child.0.id(), uid, group)?,
+            parent: 1,
+        };
+        assert!(wrong.check().is_err());
+        assert!(Process::bind(child.0.id(), uid, "/aswp-wrong-child-group").is_err());
         Ok(())
     }
 

@@ -108,7 +108,7 @@ SocketMode=0600
 Accept=yes
 MaxConnections=4
 TriggerLimitIntervalSec=30s
-TriggerLimitBurst=16
+TriggerLimitBurst=24
 RemoveOnStop=yes
 '''
     service_unit = f'''[Unit]
@@ -458,7 +458,7 @@ def suite():
                         require(b'invalid fixture activation request' in diagnostic,
                                 label + ' was not refused at its framing check')
                         require(not any(directory.iterdir()), 'invalid activation packet started a fixture worker')
-                    print('::notice title=Linux fixed-user activation::' + label + ' refused before worker creation', flush=True)
+                    print('Linux fixed-user activation: ' + label + ' refused before worker creation', flush=True)
             for label, packets, shutdown in [
                     ('unexpected command', (b'X',), False),
                     ('empty record on open peer', (b'',), False),
@@ -483,7 +483,7 @@ def suite():
                             'guardian error control failed at a different observation')
                 else:
                     raise RuntimeError('guardian error was accepted as clean client EOF')
-                print('::notice title=Linux activation EOF control::' + label
+                print('Linux activation EOF control: ' + label
                       + ': worker stopped and scope removed but refused as clean EOF evidence', flush=True)
             first, first_report, first_fd = activate(prefix, directory)
             connections.append(first)
@@ -505,6 +505,25 @@ def suite():
             second.close()
             retired(directory, second_report, second_fd)
             print('::notice title=Linux fixed-user activation::two ordinary connections received distinct root-managed scopes; both refused migration writes; each guardian recorded clean client EOF before stopped detached writer and original scope removal; sibling continued; no production launch qualification', flush=True)
+            if os.environ.get('ASWP_CI_ACTIVATED_JOURNAL') == '1':
+                test_env = dict(os.environ, ASWP_ACTIVATION_PREFIX=prefix,
+                                ASWP_ACTIVATION_DIRECTORY=str(directory))
+                for test in ('actual_lease_and_journal_gate_two_independent_activations',
+                             'sqlite_write_failure_withholds_go_and_keeps_unresolved_intent',
+                             'invalid_or_independently_locked_lease_never_spawns_writer'):
+                    result = subprocess.run(['cargo', '+1.98.0', 'test', '--locked', '-p', 'agentswapper-core',
+                                    '--lib', 'store::linux_activated_journal_tests::' + test,
+                                    '--', '--exact', '--ignored', '--test-threads=1', '--nocapture'],
+                                   env=test_env, check=False, timeout=55, capture_output=True, text=True)
+                    print(result.stdout[-16000:], end='', flush=True)
+                    print(result.stderr[-8000:], end='', file=sys.stderr, flush=True)
+                    require(result.returncode == 0
+                            and 'test result: ok. 1 passed; 0 failed;' in result.stdout,
+                            'activated journal test did not pass exactly once: '
+                            + (result.stdout + result.stderr)[-3000:])
+                    print('::notice title=Linux activated journal qualification::' + test
+                          + ': exactly one test passed with the real Store and retained manager/kernel witnesses', flush=True)
+
         finally:
             for connection in connections:
                 connection.close()

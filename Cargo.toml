@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/agentswapper-core", "crates/agentswapper-cli", "crates/agentswapper-windows-security"]
+exclude = ["tools/linux-manager-evaluation"]
 resolver = "3"
 
 [workspace.package]

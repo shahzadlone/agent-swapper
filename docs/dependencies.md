@@ -248,9 +248,11 @@ No new advisory or licensing exception was added.
 The separate `tools/linux-manager-evaluation` workspace pins `nix = 0.31.3`
 (MIT, only `socket` enabled) for `SO_PEERCRED`, and `unix-ancillary = 0.6.1`
 (MIT, default features disabled) for credential-bearing packet receive. Root
-workspace dependencies are unchanged. These add three locked packages to the
-evaluation graph: nix, unix-ancillary and nix's build-time cfg_aliases; their
-other dependencies were already locked.
+workspace runtime dependencies are unchanged; the later journal integration
+adds this client only as a Linux development dependency. The original isolated
+checkpoint added three locked packages to its evaluation graph: nix,
+unix-ancillary and nix's build-time cfg_aliases; their other dependencies were
+already locked.
 
 This avoids the credential PID representation in rustix 1.1.6, which embeds a
 nonzero integer even though the kernel can supply PID zero. See
@@ -303,3 +305,10 @@ artwork notices remain in `assets/brand/THIRD_PARTY_NOTICES.txt`.
 
 Upstream implementation code has not been copied into the Rust application.
 The research clones and model-review transcripts are excluded from the repository.
+
+The evaluation client is also a Linux-only development dependency of core for
+real lease/journal integration tests. Service/writer roles remain binary-only.
+The root and nested lockfiles retain the same reviewed zbus, Tokio, zruntime,
+rustix, nix, unix-ancillary and fuxix versions; the CI dependency-boundary check
+rejects drift or evaluation dependencies in the normal/build graph. This adds
+no async runtime or manager client to the shipped CLI.

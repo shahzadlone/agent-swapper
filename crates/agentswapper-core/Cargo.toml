@@ -48,6 +48,7 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_F
 windows = { version = "=0.62.2", features = ["Win32_System_Threading"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+aswp-linux-manager-evaluation = { path = "../../tools/linux-manager-evaluation", version = "=0.0.0" }
 rustix = { version = "1", features = ["net", "pty", "termios"] }
 signal-hook = { version = "=0.3.18", default-features = false }
 
