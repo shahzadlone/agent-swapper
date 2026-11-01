@@ -461,6 +461,16 @@ impl Prepared {
                 closed: Box::new(self.session.close()),
             });
         }
+        if Instant::now() >= self.session.deadline {
+            return Err(StartFailure {
+                cause: StartCause::Transport(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "journal callback deadline expired",
+                )),
+                live_at_refusal: None,
+                closed: Box::new(self.session.close()),
+            });
+        }
         if let Err(error) = journal(self.pid) {
             let live_at_refusal = Some(self.session.recheck());
             return Err(StartFailure {
@@ -542,12 +552,14 @@ impl Closed {
             });
         }
         let closed = (|| -> io::Result<()> {
+            outside_runtime()?;
+            let runtime = self.0.runtime.get()?;
             let connection = self
                 .0
                 .connection
                 .take()
                 .ok_or_else(|| io::Error::other("manager connection is closed"))?;
-            self.0.runtime()?.block_on(async {
+            runtime.block_on(async {
                 tokio::time::timeout(Duration::from_secs(2), connection.close())
                     .await
                     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "manager close expired"))?
@@ -646,6 +658,24 @@ mod tests {
         drop(Control(Some(client)));
         assert!(transport::eof(&guardian)?);
         assert!(rustix::net::send(&duplicate, b"x", rustix::net::SendFlags::NOSIGNAL).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_control_drop_wakes_the_start_gate_as_withdrawal() -> io::Result<()> {
+        let (client, guardian) = transport::pair()?;
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(Control(Some(client)));
+        });
+        let error =
+            journal_protocol::receive_start(&guardian, Instant::now() + Duration::from_secs(1))
+                .err()
+                .ok_or_else(|| io::Error::other("dropped control unexpectedly started writer"))?;
+        closer
+            .join()
+            .map_err(|_| io::Error::other("control closer panicked"))?;
+        assert!(journal_protocol::is_withdrawal(&error));
         Ok(())
     }
 

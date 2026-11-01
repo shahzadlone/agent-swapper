@@ -156,6 +156,7 @@ mod tests {
         );
         assert!(!net::sockopt::socket_passcred(&receiver)?);
         let (_held, receiver) = transport::pair()?;
+        let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
         let started = Instant::now();
         let error = receive_start(&receiver, started + Duration::from_millis(40))
             .err()
@@ -163,6 +164,10 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(!net::sockopt::socket_passcred(&receiver)?);
+        assert_eq!(
+            net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+            previous
+        );
         net::sockopt::set_socket_passcred(&receiver, true)?;
         assert!(receive_start(&receiver, Instant::now() + Duration::from_secs(1)).is_err());
         net::sockopt::set_socket_passcred(&receiver, false)?;
@@ -181,6 +186,7 @@ mod tests {
             (true, true, true),
         ] {
             let (sender, receiver) = transport::pair()?;
+            let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
             if empty {
                 transport::send(&sender, b"", &[])?;
             }
@@ -195,6 +201,10 @@ mod tests {
                 .ok_or_else(|| io::Error::other("invalid GO unexpectedly accepted"))?;
             assert_eq!(is_withdrawal(&error), !empty);
             assert!(!net::sockopt::socket_passcred(&receiver)?);
+            assert_eq!(
+                net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+                previous
+            );
         }
         Ok(())
     }
@@ -202,10 +212,15 @@ mod tests {
     #[test]
     fn peeking_and_refusing_rights_releases_every_copy() -> io::Result<()> {
         let (sender, receiver) = transport::pair()?;
+        let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
         let (capability, witness) = transport::pair()?;
         transport::send(&sender, &start_packet(&[0; 16]), &[capability.as_fd()])?;
         drop(capability);
         assert!(receive_start(&receiver, Instant::now() + Duration::from_secs(1)).is_err());
+        assert_eq!(
+            net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+            previous
+        );
         let deadline = Instant::now() + Duration::from_secs(1);
         while !transport::eof(&witness)? {
             require(
@@ -214,6 +229,36 @@ mod tests {
             )?;
             thread::sleep(Duration::from_millis(5));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_full_close_withdraws_but_queued_go_survives_close() -> io::Result<()> {
+        let (sender, receiver) = transport::pair()?;
+        let previous = net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?;
+        let closer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            drop(sender);
+        });
+        let error = receive_start(&receiver, Instant::now() + Duration::from_secs(1))
+            .err()
+            .ok_or_else(|| io::Error::other("closed peer unexpectedly sent GO"))?;
+        closer
+            .join()
+            .map_err(|_| io::Error::other("closer panicked"))?;
+        assert!(is_withdrawal(&error));
+        assert!(!net::sockopt::socket_passcred(&receiver)?);
+        assert_eq!(
+            net::sockopt::socket_timeout(&receiver, net::sockopt::Timeout::Recv)?,
+            previous
+        );
+        let (sender, receiver) = transport::pair()?;
+        transport::send(&sender, &start_packet(&[9; 16]), &[])?;
+        drop(sender);
+        assert_eq!(
+            receive_start(&receiver, Instant::now() + Duration::from_secs(1))?,
+            [9; 16]
+        );
         Ok(())
     }
 

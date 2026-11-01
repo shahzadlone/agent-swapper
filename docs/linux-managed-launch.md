@@ -502,3 +502,26 @@ weaker retirement policy is introduced to make the tests pass.
 
 Local verification passes 33 client tests, 22 binary tests, 12 Python guards and
 strict Clippy. Native validation of these later changes remains pending.
+
+### Scoped withdrawal review and wake-up checks
+
+Opus's follow-up review of `2f87dc8` returned no must-fix finding for the supplied
+withdrawal peek, callback ordering and retryable-retirement mechanisms. The
+runtime entry check and admission deadline already run through `recheck`;
+the follow-up also checks the deadline immediately before the journal callback
+and obtains the runtime before taking the connection for final close.
+
+New local tests cover delayed full closure, the actual Control destructor
+waking the GO wait, GO queued immediately before full close, and timeout/socket
+policy restoration on refusal paths. They pass with the existing framing,
+empty-record and transferred-capability tests: 35 client tests and 23 binary
+tests, plus strict Clippy. Retirement still never resolves the journal, and a
+send-stage error remains possibly delivered because socket-option restoration
+can fail after the packet was queued.
+
+Both Ubuntu manager jobs passed the reviewed journal follow-up at `2f87dc8`
+([run 41265192617](https://github.com/shahzadlone/agent-swapper/actions/runs/41265192617))
+and the subsequent crash/harness follow-up at `60d67bb`
+([run 41265660485](https://github.com/shahzadlone/agent-swapper/actions/runs/41265660485)).
+Their remaining platform/packaging results, and the latest small wake-up
+follow-up, are tracked separately before integration.
