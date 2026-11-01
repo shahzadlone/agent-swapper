@@ -350,6 +350,13 @@ pub(crate) fn dispatch() -> Option<io::Result<()>> {
                 args[0] == "--activation-job-target",
             )
         })()),
+        Some("--activation-job-descendant") => Some((|| {
+            require(
+                args.len() == 3,
+                "job descendant requires prefix and directory",
+            )?;
+            crate::activated_terminal::descendant(&args[1], Path::new(&args[2]))
+        })()),
         Some("--activation-writer") => Some((|| {
             require(
                 args.len() == 3,

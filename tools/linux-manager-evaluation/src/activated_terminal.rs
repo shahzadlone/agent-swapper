@@ -219,8 +219,41 @@ pub(crate) fn target(
     )?;
     output.flush()?;
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut descendant = None;
     loop {
         match line(io::stdin().as_fd(), deadline)?.as_slice() {
+            b"spawn" if guardian_session => {
+                require(descendant.is_none(), "fixed descendant already exists")?;
+                let mut command = Command::new("/proc/self/exe");
+                command
+                    .args(["--activation-job-descendant", prefix])
+                    .arg(directory)
+                    .env_clear();
+                activated_journal::fixture_environment(&mut command)?;
+                let mut child = command.spawn()?;
+                drop(command);
+                activated_guardian::wait_until(Instant::now() + Duration::from_secs(3), || {
+                    require(
+                        child.try_wait()?.is_none(),
+                        "fixed descendant exited before readiness",
+                    )?;
+                    match fs::read_to_string(directory.join("descendant-ready")) {
+                        Ok(pid) => {
+                            require(
+                                pid == child.id().to_string(),
+                                "descendant readiness PID differs",
+                            )?;
+                            Ok(true)
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                        Err(error) => Err(error),
+                    }
+                })?;
+                writeln!(output, "CHILD:{}", child.id())?;
+                // Never signal or reap this descendant after readiness. The
+                // hosted case must observe manager-owned scope retirement.
+                descendant = Some(child);
+            }
             b"suspend" if guardian_session => {
                 let mut raw = saved.clone();
                 raw.make_raw();
@@ -262,6 +295,64 @@ pub(crate) fn target(
         }
         output.flush()?;
     }
+}
+
+pub(crate) fn descendant(prefix: &str, directory: &Path) -> io::Result<()> {
+    use nix::sys::signal::{SigSet, Signal};
+    activated_guardian::writer_check(prefix, directory)?;
+    crate::job_control::target_signals()?;
+    require(
+        nix::sys::prctl::get_pdeathsig()?.is_none(),
+        "descendant inherited a parent-death signal",
+    )?;
+    let parent =
+        rustix::process::getppid().ok_or_else(|| io::Error::other("target parent absent"))?;
+    let group = rustix::process::getpgrp();
+    let session = rustix::process::getsid(None)?;
+    require(
+        group == parent && session != parent && session != rustix::process::getpid(),
+        "descendant is outside its target group",
+    )?;
+    for stream in [
+        io::stdin().as_fd(),
+        io::stdout().as_fd(),
+        io::stderr().as_fd(),
+    ] {
+        crate::terminal::validate_slave(stream)?;
+        require(
+            termios::tcgetsid(stream)? == session && termios::tcgetpgrp(stream)? == group,
+            "descendant did not inherit the inner terminal",
+        )?;
+    }
+    // A blocked SIGHUP prevents terminal/session loss from being an alternate
+    // explanation for descendant death. No parent-death signal or destructor
+    // cleanup is installed; the root manager must retire this writer.
+    let mut mask = SigSet::empty();
+    mask.add(Signal::SIGHUP);
+    mask.thread_block()?;
+    fs::write(
+        directory.join("descendant-ready.tmp"),
+        std::process::id().to_string(),
+    )?;
+    fs::rename(
+        directory.join("descendant-ready.tmp"),
+        directory.join("descendant-ready"),
+    )?;
+    let until = Instant::now() + Duration::from_secs(45);
+    let mut counter = 0_u64;
+    while Instant::now() < until {
+        fs::write(
+            directory.join("descendant-heartbeat.tmp"),
+            counter.to_string(),
+        )?;
+        fs::rename(
+            directory.join("descendant-heartbeat.tmp"),
+            directory.join("descendant-heartbeat"),
+        )?;
+        counter += 1;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    fs::write(directory.join("descendant-voluntary-exit"), "deadline")
 }
 
 #[cfg(test)]

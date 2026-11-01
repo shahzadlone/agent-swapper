@@ -57,7 +57,7 @@ pub(crate) fn receive_resume(
 struct Withdrawn;
 impl std::fmt::Display for Withdrawn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("client withdrew before fixture GO")
+        f.write_str("client withdrew from fixture control gate")
     }
 }
 impl std::error::Error for Withdrawn {}

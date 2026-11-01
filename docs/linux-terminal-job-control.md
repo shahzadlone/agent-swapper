@@ -46,7 +46,7 @@ The pre-GO control-character test explicitly flushes its owned PTY after both
 signals have been witnessed. That is a fixture cleanup step, not a production
 typeahead rule. Both native Ubuntu jobs passed at `82ecbbf` in
 [run 41270270251](https://github.com/shahzadlone/agent-swapper/actions/runs/41270270251).
-Its remaining platform/package checks are tracked separately.
+Its complete platform/package pipeline subsequently passed.
 
 Opus 5.5 xhigh reviewed the topology and supported a guardian-owned session,
 while identifying hangup, signal normalization and child-wait ownership as
@@ -92,8 +92,36 @@ These checks do not claim that terminal hangup alone proves scope retirement.
 Local validation passes 39 library tests, 27 binary tests, 12 coordinator guard
 tests, the extracted shared job-control example and strict Clippy. New tests
 cover stop identity/sequence validation and resume withdrawal, replay, rights
-cleanup and timeout restoration. Hosted PTY2 execution and an independent
-implementation review remain pending.
+cleanup and timeout restoration. The initial PTY2 revision at `10bd84c` passed
+both Ubuntu manager jobs in
+[run 41270937633](https://github.com/shahzadlone/agent-swapper/actions/runs/41270937633).
+Its full platform/package pipeline and an independent implementation review
+remain separately tracked.
+
+### Descendant cleanup and stop scope
+
+The follow-up target can spawn one fixed descendant in its foreground group.
+That descendant verifies its inherited terminal and session, checks that it
+has no parent-death signal, then blocks SIGHUP before declaring readiness. It
+writes a bounded heartbeat and keeps its terminal descriptors open. The target
+never signals or reaps it after readiness. This removes terminal hangup and
+parent-death signalling as explanations for descendant death in the disconnect,
+guardian-crash and hangup cases. The final Ctrl+C case can legitimately signal
+both target and descendant and is not used to isolate manager cleanup.
+
+The test observes the descendant's PID, parent, session, group, cgroup and
+blocked SIGHUP, retains a pidfd before any fault, and requires pidfd exit and
+heartbeat quiescence after observed scope retirement. The descendant must not
+reach its voluntary deadline. These are fixed-fixture observations, not an
+arbitrary-descendant binding API or new authority to complete a journal.
+
+Canonical Ctrl+Z must stop both group members and freeze the descendant's
+heartbeat; foreground resume must restart it. In contrast, raw-mode self-
+suspension stops only the target, and the descendant must keep writing while
+the target is stopped. Thus a stop notice is not evidence that all writers are
+quiescent. The profile lease and unresolved journal policy continue to block
+reuse throughout this state. Strict Clippy passes locally; the strengthened
+hosted descendant checks remain pending.
 
 Remaining integration work includes the actual manager-owned guardian,
 authenticated stop/resume framing, durable launch ordering, arbitrary target
