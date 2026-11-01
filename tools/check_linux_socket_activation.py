@@ -522,6 +522,8 @@ def suite():
                             and 'test result: ok. 1 passed; 0 failed;' in result.stdout,
                             'activated journal test did not pass exactly once: '
                             + (result.stdout + result.stderr)[-3000:])
+                    print('::notice title=Linux activated journal qualification::' + test
+                          + ': exactly one test passed with the real Store and retained manager/kernel witnesses', flush=True)
 
         finally:
             for connection in connections:

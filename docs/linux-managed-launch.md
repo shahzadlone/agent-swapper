@@ -375,5 +375,7 @@ invocation, directory identity and child claims. Each trial verifies a live
 writer before the fault, original-scope retirement and lease release afterwards,
 and continued journal refusal after reopening. Guardian-loss must lack a clean
 EOF marker; client-loss requires guardian EOF handling without any client
-cleanup. These tests remain qualification code; native results and focused
-review are pending. No production custody receipt is added.
+cleanup. Both native manager jobs passed all four journal tests at `45cd72b` in
+[run 41264264431](https://github.com/shahzadlone/agent-swapper/actions/runs/41264264431).
+The coordinator requires exactly one passed test for each requested case.
+Focused review and the remaining platform/packaging checks are pending. No production custody receipt is added.
