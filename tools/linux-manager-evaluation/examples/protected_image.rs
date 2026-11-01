@@ -1,8 +1,8 @@
 //! Read-only installed-asset probe; the hosted harness creates its own assets.
 #![forbid(unsafe_code)]
 use agentswapper_linux_runtime::{
-    installed_config::ProtectedConfig, installed_image::ProtectedImage,
-    installed_manifest::InstalledManifest,
+    installed_artifacts::InstalledArtifacts, installed_config::ProtectedConfig,
+    installed_image::ProtectedImage, installed_manifest::InstalledManifest,
 };
 use std::{
     io::{self, Read, Write},
@@ -65,6 +65,24 @@ fn run() -> io::Result<()> {
                 "00112233445566778899aabbccddeeff",
             )?;
             manifest.require_current()?;
+        }
+        [_, mode, path] if mode == "--bundle" || mode == "--bundle-recheck" => {
+            let path = Path::new(path);
+            let manifest = InstalledManifest::open_for_qualification(
+                path,
+                rustix::process::getuid().as_raw(),
+                rustix::process::getgid().as_raw(),
+                "00112233445566778899aabbccddeeff",
+            )?;
+            let artifacts = InstalledArtifacts::open_for_qualification(
+                manifest,
+                path.parent()
+                    .ok_or_else(|| io::Error::other("missing fixture directory"))?,
+            )?;
+            if mode == "--bundle-recheck" {
+                hold()?;
+            }
+            artifacts.require_current()?;
         }
         [_, mode, path] if mode == "--config-recheck" => {
             let config = ProtectedConfig::open(Path::new(path))?;

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Installed-asset controls using owned tmpfs mounts in disposable hosted CI only."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,16 @@ CASES = {
     'image-replaced': 'installed image changed since admission began',
     'image-modified': 'installed image changed since admission began',
     'image-mode-changed': 'installed image changed since admission began',
+    'bundle-protected': None,
+    'bundle-guardian-mismatch': 'installed asset digest mismatch',
+    'bundle-session-helper-mismatch': 'installed asset digest mismatch',
+    'bundle-exec-shim-mismatch': 'installed asset digest mismatch',
+    'bundle-template-mismatch': 'installed asset digest mismatch',
+    'bundle-socket-mismatch': 'installed asset digest mismatch',
+    'bundle-missing-helper': '(os error 2)',
+    'bundle-guardian-replaced': 'installed image changed since admission began',
+    'bundle-template-replaced': 'installed configuration changed since admission began',
+    'bundle-manifest-replaced': 'installed configuration changed since admission began',
     'nosuid': 'image filesystem is noexec or nosuid',
     'noexec': 'image filesystem is noexec or nosuid',
     'capability': 'image has file capabilities',
@@ -42,6 +53,13 @@ CASES = {
     'user-owned': 'installed file is not a root-owned protected regular file',
 }
 PRESERVE = 'GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,ASWP_CI_IMAGE_MOUNTS,ASWP_CI_IMAGE_PACKAGE_VERSION'
+BUNDLE_FILES = {
+    'guardian': ('guardian', 'guardian_sha256', 0o755),
+    'session-helper': ('session-helper', 'session_helper_sha256', 0o755),
+    'exec-shim': ('exec-shim', 'exec_shim_sha256', 0o755),
+    'template': ('fixture@.service', 'service_template_sha256', 0o644),
+    'socket': ('fixture.socket', 'socket_unit_sha256', 0o644),
+}
 
 
 def require(ok, message):
@@ -88,10 +106,15 @@ def retained_asset_control(command, image, case):
             ready, _, _ = select.select([child.stdout], [], [], 5)
             require(bool(ready) and child.stdout.readline(128) == b'installed-asset: retained\n',
                     'retained asset observer did not reach its hold')
-            if case in ('config-replaced', 'image-replaced'):
+            if case.startswith('bundle-'):
+                selected = {'bundle-guardian-replaced': 'guardian',
+                            'bundle-template-replaced': 'fixture@.service',
+                            'bundle-manifest-replaced': 'image'}[case]
+                image = image.with_name(selected)
+            if case.endswith('-replaced'):
                 replacement = image.with_name('replacement')
                 replacement.write_bytes(image.read_bytes())
-                replacement.chmod(0o644 if case.startswith('config-') else 0o755)
+                replacement.chmod(image.stat().st_mode & 0o7777)
                 require(replacement.stat().st_ino != image.stat().st_ino,
                         'replacement control needs a distinct inode')
                 replacement.replace(image)
@@ -111,7 +134,7 @@ def mounted_case(case, binary, uid, gid):
     private_namespace()
     require(case in CASES, 'unknown image fixture case')
     version = os.environ.get('ASWP_CI_IMAGE_PACKAGE_VERSION', '')
-    if case.startswith('manifest-'):
+    if case.startswith(('manifest-', 'bundle-')):
         require(re.fullmatch(r'[0-9][A-Za-z0-9.+-]{0,127}', version), 'invalid fixture package version')
     base = Path(tempfile.mkdtemp(prefix='aswp-image-mount-', dir='/run'))
     original = base.stat(follow_symlinks=False)
@@ -128,8 +151,8 @@ def mounted_case(case, binary, uid, gid):
         image = base / 'image'
         # These inert bytes are never executed. The probe checks metadata/content.
         image.write_bytes(b'owned image-policy fixture\n')
-        image.chmod(0o644 if case.startswith(('config-', 'manifest-')) and case != 'config-executable' else 0o755)
-        if case.startswith('manifest-'):
+        image.chmod(0o644 if case.startswith(('config-', 'manifest-', 'bundle-')) and case != 'config-executable' else 0o755)
+        if case.startswith(('manifest-', 'bundle-')):
             document = dict(schema=1, protocol=1, version=version, generation='00112233445566778899aabbccddeeff',
                             user=uid, group=gid, guardian_sha256='a'*64, session_helper_sha256='b'*64,
                             exec_shim_sha256='c'*64, service_template_sha256='d'*64, socket_unit_sha256='e'*64)
@@ -139,6 +162,17 @@ def mounted_case(case, binary, uid, gid):
                 document['user'] = uid + 1
             elif case == 'manifest-unknown':
                 document['unexpected'] = 'manifest-private-canary'
+            if case.startswith('bundle-'):
+                for name, (filename, field, mode) in BUNDLE_FILES.items():
+                    # Different bytes and hashes catch accidentally crossed
+                    # field/role mappings. None of these files is executable code.
+                    payload = ('owned inert ' + name + '\n').encode()
+                    document[field] = hashlib.sha256(payload).hexdigest()
+                    asset = base / filename
+                    asset.write_bytes(payload if case != f'bundle-{name}-mismatch' else b'mismatched bytes\n')
+                    asset.chmod(mode)
+                if case == 'bundle-missing-helper':
+                    (base / 'session-helper').unlink()
             contents = json.dumps(document)
             if case == 'manifest-duplicate':
                 contents = '{"schema":1,' + contents[1:]
@@ -165,10 +199,14 @@ def mounted_case(case, binary, uid, gid):
         role = '--config-probe' if case.startswith('config-') else '--probe'
         if case.startswith('manifest-'):
             role = '--manifest-probe'
+        if case.startswith('bundle-'):
+            role = '--bundle-probe'
         retained = case in ('config-retained', 'config-replaced', 'config-modified', 'config-mode-changed',
-                           'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed')
+                           'image-retained', 'image-replaced', 'image-modified', 'image-mode-changed',
+                           'bundle-guardian-replaced', 'bundle-template-replaced', 'bundle-manifest-replaced')
         if retained:
-            role = '--config-recheck-probe' if case.startswith('config-') else '--image-recheck-probe'
+            role = ('--bundle-recheck-probe' if case.startswith('bundle-') else
+                    '--config-recheck-probe' if case.startswith('config-') else '--image-recheck-probe')
         elif case.startswith('config-digest'):
             role = '--config-digest-probe'
         elif case.startswith('image-digest'):
@@ -204,7 +242,8 @@ def main():
     args = sys.argv[1:]
     modes = {'--config-probe': '--config', '--config-recheck-probe': '--config-recheck', '--manifest-probe': '--manifest',
              '--config-digest-probe': '--config-digest', '--image-digest-probe': '--image-digest',
-             '--image-recheck-probe': '--image-recheck'}
+             '--image-recheck-probe': '--image-recheck', '--bundle-probe': '--bundle',
+             '--bundle-recheck-probe': '--bundle-recheck'}
     if len(args) == 5 and args[0] in ('--inside', '--probe', *modes):
         private_namespace()
         role, first, second, uid, gid = args

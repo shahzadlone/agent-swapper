@@ -74,3 +74,26 @@ and preserved file offsets. The hosted matrix adds eight controls: image and
 configuration hash matches/mismatches, retained-image stability, identical-byte
 replacement, in-place edits and mode changes. No fixture image is executed.
 Native qualification of these digest controls remains pending.
+
+## Complete retained artifact set
+
+`InstalledArtifacts::open` consumes a protected manifest, derives all five paths,
+opens the three executable images and two unit files, and checks each against
+its own manifest hash. It retains every descriptor and the original manifest.
+Before returning, it revalidates every protected path and the manifest. Later
+`require_current` checks detect changes relative to those original observations.
+The value is not cloneable; custom fixture locations require the qualification
+feature and are absent from ordinary application builds.
+
+This closes the connection between expected manifest hashes and retained files.
+It still does not prove which unit bytes systemd loaded, select the authorized
+generation, authorize execution, or freeze files against trusted-root changes.
+No production launcher consumes this value yet.
+
+The hosted matrix adds ten full-set controls with distinct bytes and hashes for
+each artifact: a valid set, one mismatched file for each of the five roles,
+a missing helper, and identical-byte replacement of a retained guardian,
+service template or manifest. All artifacts are inert and never executed.
+Local runtime tests, positive and negative API doctests, strict runtime/evaluator
+Clippy, dependency boundaries and harness refusal tests pass. Native results for
+the full-set controls are pending.

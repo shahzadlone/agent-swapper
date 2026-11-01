@@ -30,6 +30,8 @@ mod asset_digest;
 #[cfg(target_os = "linux")]
 mod file_stamp;
 #[cfg(target_os = "linux")]
+pub mod installed_artifacts;
+#[cfg(target_os = "linux")]
 pub mod installed_config;
 #[cfg(target_os = "linux")]
 pub mod installed_manifest;
