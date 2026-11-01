@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Read-only positives and hosted-only, disposable namespace refusal controls."""
+import ctypes
 import importlib.util
 import json
 import os
@@ -60,12 +61,13 @@ def ready(child):
 
 
 def expected(result, reason):
+    detail = f'exit={result.returncode}, stdout={result.stdout[-1200:]!r}, stderr={result.stderr[-1200:]!r}'
     if reason is None:
         require(result.returncode == 0 and result.stdout.startswith('origin: admitted ')
-                and not result.stderr, 'origin positive failed: ' + result.stderr[-1500:])
+                and not result.stderr, 'origin positive failed: ' + detail)
     else:
         require(result.returncode == 125 and result.stdout == '' and reason in result.stderr,
-                'origin refused at an unexpected boundary: ' + result.stderr[-1500:])
+                'origin refused at an unexpected boundary: ' + detail)
 
 
 def positives(binary, pidfd_support):
@@ -86,12 +88,21 @@ def positives(binary, pidfd_support):
 
 
 def child(binary, backend, uid, gid, user_namespace):
+    _mounts.private_namespace()
     if user_namespace:
+        require(os.readlink('/proc/self/ns/user') == INITIAL_USER,
+                'origin fixture child must start in the initial user namespace')
+        # Enter from this already-running root fixture. Executing Python before
+        # the parent installs maps would clear capabilities for the unmapped
+        # IDs, leaving the child unable to drop its groups/UID afterwards.
+        native = ctypes.CDLL(None, use_errno=True)
+        native.unshare.argtypes = [ctypes.c_int]
+        native.unshare.restype = ctypes.c_int
+        if native.unshare(0x10000000) != 0:  # Fixed CLONE_NEWUSER, hosted fixture only.
+            raise OSError(ctypes.get_errno(), 'fixture user namespace creation failed')
         require(os.readlink('/proc/self/ns/user') != INITIAL_USER
                 and not Path('/proc/self/uid_map').read_text().strip()
                 and not Path('/proc/self/gid_map').read_text().strip(), 'user namespace was not freshly created')
-    else:
-        _mounts.private_namespace()
     os.write(sys.stdout.fileno(), b'R')
     require(sys.stdin.buffer.read(2) == b'GO', 'missing origin fixture release')
     if user_namespace:
@@ -123,22 +134,11 @@ def inside(case, binary, backend, uid, gid):
             command = ['/usr/bin/python3', '-I', '-B', '-S', str(Path(__file__).resolve()),
                        '--child', binary, backend, str(uid), str(gid),
                        'user' if case == 'full-map-user' else 'mount']
-            if case == 'full-map-user':
-                # No map helpers, subordinate-ID changes or policy overrides.
-                # The root parent maps only its blocked, still-live owned child.
-                # Before mapping, the child cannot traverse private checkout
-                # ancestors as its overflow IDs. Stage only the two public
-                # fixture scripts in this root-owned, read-only directory.
-                base.chmod(0o755)
-                for name in ('check_linux_origin.py', 'check_linux_image_mounts.py'):
-                    with (base / name).open('xb') as output:
-                        output.write(Path(__file__).with_name(name).read_bytes())
-                    (base / name).chmod(0o644)
-                command[4] = str(base / 'check_linux_origin.py')
-                command = ['/usr/bin/unshare', '--user', *command]
             target = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             ready(target)
             if case == 'full-map-user':
+                # No map helpers, subordinate-ID changes or policy overrides.
+                # The root parent maps only its blocked, still-live owned child.
                 require(target.poll() is None and os.readlink(f'/proc/{target.pid}/ns/user') != INITIAL_USER,
                         'full-map target is not the owned user namespace child')
                 for kind in ('uid', 'gid'):
