@@ -7,6 +7,8 @@ unless the user explicitly requests them. Run checkpoint checks on `main` and
 record the tested commit; incomplete release features stay disabled until their
 required evidence is complete.
 
+When resuming after the requested shutdown, read `docs/continuation.md` first.
+
 ## Rust build cleanup (required)
 
 Build artifacts are temporary. Clean up your own Rust outputs regularly, after
