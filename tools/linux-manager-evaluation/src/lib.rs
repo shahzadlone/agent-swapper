@@ -15,6 +15,7 @@ pub mod journal_client;
 mod journal_protocol;
 mod kernel;
 pub mod managed_terminal_relay;
+mod socket_probe;
 #[allow(dead_code, reason = "client validates the PTY created by the service")]
 mod terminal;
 mod watch;
@@ -462,6 +463,28 @@ fn run() -> io::Result<Report> {
 /// Entry for the isolated client/observer executable. No custody receipts.
 pub fn run_cli() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|value| value == "--activation-socket-probe")
+    {
+        let result = if args.len() == 2 {
+            socket_probe::run(&args[1])
+        } else {
+            Err(io::Error::other("socket probe requires PREFIX"))
+        };
+        if let Err(error) = result {
+            eprintln!(
+                "socket probe refused: {}",
+                error
+                    .to_string()
+                    .escape_debug()
+                    .take(2000)
+                    .collect::<String>()
+            );
+            std::process::exit(125);
+        }
+        return;
+    }
     if args
         .first()
         .is_some_and(|value| value == "--activation-generation-probe")

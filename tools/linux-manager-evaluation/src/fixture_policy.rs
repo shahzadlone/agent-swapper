@@ -81,17 +81,22 @@ pub(crate) fn valid_scope_unit(unit: &str) -> bool {
 pub(crate) fn activated_policy(
     prefix: &str,
 ) -> io::Result<agentswapper_linux_manager::ServicePolicy> {
+    agentswapper_linux_manager::ServicePolicy::installed(selected_installation(prefix)?)
+}
+
+pub(crate) fn selected_installation(
+    prefix: &str,
+) -> io::Result<agentswapper_linux_runtime::installed_selection::SelectedInstallation> {
     gate(prefix)?;
     let image = format!("/usr/lib/{prefix}.guardian");
     let template = format!("/run/systemd/system/{prefix}@.service");
     let socket = format!("/run/systemd/system/{prefix}.socket");
-    let selection = agentswapper_linux_runtime::installed_selection::SelectedInstallation::open_paths_for_qualification(
+    agentswapper_linux_runtime::installed_selection::SelectedInstallation::open_paths_for_qualification(
         Path::new(&format!("/run/{prefix}.selection.json")),
         Path::new(&format!("/run/{prefix}.installation")),
         // This single fixture executable contains all fixed test roles. It is
         // not a production three-helper installation or a target launch grant.
         [Path::new(&image); 3],
         [Path::new(&template), Path::new(&socket)],
-    )?;
-    agentswapper_linux_manager::ServicePolicy::installed(selection)
+    )
 }

@@ -22,3 +22,8 @@ mod service;
 pub use service::{
     BoundService, RetiredService, ServiceClaim, ServiceIdentity, ServiceKey, ServicePolicy,
 };
+
+#[cfg(target_os = "linux")]
+mod socket;
+#[cfg(target_os = "linux")]
+pub use socket::{LoadedSocket, SocketFact, SocketPolicy};

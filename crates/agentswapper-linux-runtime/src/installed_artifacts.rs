@@ -139,6 +139,9 @@ impl InstalledArtifacts {
     pub fn service_template_path(&self) -> &std::path::Path {
         &self.paths.service_template
     }
+    pub fn socket_unit_path(&self) -> &std::path::Path {
+        &self.paths.socket_unit
+    }
     pub fn guardian(&self) -> &ProtectedImage {
         &self.guardian
     }

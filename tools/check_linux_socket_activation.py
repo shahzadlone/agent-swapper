@@ -633,6 +633,22 @@ def suite():
         identity_args = [str(directory), str(os.getuid()), str(os.getgid())]
         try:
             subprocess.run(admin_args + ['install'] + identity_args, env=environment, check=True, timeout=50)
+            socket_before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+            socket_probe = subprocess.run([observer, '--activation-socket-probe', prefix], env=environment,
+                                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+            require(socket_probe.returncode == 0 and not socket_probe.stderr and len(socket_probe.stdout) < 4096,
+                    'loaded socket observation failed: ' + socket_probe.stderr[-2000:])
+            socket_fact = json.loads(socket_probe.stdout)
+            require(set(socket_fact) == {'unit', 'endpoint', 'user', 'group', 'invocation'}
+                    and socket_fact['unit'] == prefix + '.socket' and socket_fact['endpoint'] == str(endpoint(prefix))
+                    and socket_fact['user'] == os.getuid() and socket_fact['group'] == os.getgid()
+                    and isinstance(socket_fact['invocation'], list) and len(socket_fact['invocation']) == 16
+                    and all(type(byte) is int and 0 <= byte <= 255 for byte in socket_fact['invocation'])
+                    and any(socket_fact['invocation']), 'loaded socket evidence differs from the installed fixture')
+            require(socket_before == unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+                    and not any(directory.iterdir()), 'read-only socket observer connected or started a guardian')
+            print('::notice title=Linux loaded socket::selected unit, sequential-packet endpoint, ordinary identity, '
+                  'permissions and stable invocation matched; another manager connection refused; no activation', flush=True)
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')
