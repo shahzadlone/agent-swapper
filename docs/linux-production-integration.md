@@ -9,8 +9,10 @@ opaque service binding passed the complete pipeline at `3ae40ee` in
 Guardian credentials, complete loaded-policy rechecks and the one-use retirement
 consumer also passed the full pipeline at `49948c8` in
 [41296785541](https://github.com/shahzadlone/agent-swapper/actions/runs/41296785541).
-Durable scope completion and installation metadata remain on qualification
-branches. Normal Linux execution is
+Durable scope completion, installation metadata and namespace-origin checks are
+integrated into `main`. Loaded socket and endpoint checks are under qualification;
+their current evidence is recorded in [socket policy](linux-socket-policy.md).
+Normal Linux execution is
 still the explicit uncontained preview. The fixed qualification crate must not
 be enabled as a production launcher by removing its CI checks.
 
@@ -31,6 +33,10 @@ The trusted session helper owns both Store and the original manager/process
 observation handles. The surviving parent restores terminal state and has no
 journal-completion authority. The existing CLI/TUI must start that fresh helper
 instead of changing signal masks in an already multithreaded process.
+
+The retained [fresh-entry proposal](linux-fresh-entry-design.md) explores moving
+Store ownership to the fresh outer process while preserving the shell's job.
+That alternative topology is not implemented or qualified.
 
 This remains local process custody under a trusted kernel/root manager. It does
 not isolate mutually hostile programs running as the same user, cover work

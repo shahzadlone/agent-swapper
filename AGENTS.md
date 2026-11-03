@@ -2,6 +2,11 @@
 
 Use conventional commits. Preserve uncommitted work belonging to other tasks.
 
+Work directly on `main`. Do not create feature branches or separate worktrees
+unless the user explicitly requests them. Run checkpoint checks on `main` and
+record the tested commit; incomplete release features stay disabled until their
+required evidence is complete.
+
 ## Rust build cleanup (required)
 
 Build artifacts are temporary. Clean up your own Rust outputs regularly, after
