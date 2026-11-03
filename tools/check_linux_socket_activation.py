@@ -320,7 +320,9 @@ def template_refusal(template, contents, prefix, uid, gid):
 
 def admin(verb, directory, uid, gid):
     prefix = fixture_prefix()
-    require(os.geteuid() == 0 and verb in ('install', 'cleanup', 'template-refusal', 'select-original', 'select-next', 'stamp-image'), 'invalid fixture administrator role')
+    require(os.geteuid() == 0 and verb in ('install', 'cleanup', 'template-refusal', 'select-original', 'select-next',
+                                         'stamp-image', 'stamp-socket', 'reload-socket', 'restart-socket'),
+            'invalid fixture administrator role')
     uid, gid = ordinary_ids(uid, gid)
     private_directory(directory, uid)
     files = unit_files(prefix, directory, uid, gid)
@@ -423,6 +425,26 @@ def admin(verb, directory, uid, gid):
         return
     if verb == 'template-refusal':
         template_refusal(parent / (prefix + '@.service'), files[prefix + '@.service'], prefix, uid, gid)
+        return
+    if verb in ('stamp-socket', 'reload-socket', 'restart-socket'):
+        # Ownership, exact unit contents and installation hashes were all
+        # checked above. These fixed actions cannot name any other unit.
+        unit = prefix + '.socket'
+        path = parent / unit
+        require(unit_properties(unit, ('NAccepted', 'NConnections')) == {'NAccepted': '0', 'NConnections': '0'},
+                'socket controls require a fixture with no accepted connections')
+        if verb == 'reload-socket':
+            systemctl('daemon-reload')
+        else:
+            effective_unit(unit, path)
+            if verb == 'stamp-socket':
+                stamp = path.stat()
+                os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 2_000_000_000), follow_symlinks=False)
+                require(unit_properties(unit, ('NeedDaemonReload',)) == {'NeedDaemonReload': 'yes'},
+                        'socket timestamp control did not make the loaded configuration stale')
+                return
+            systemctl('restart', unit)
+        effective_unit(unit, path)
         return
     # All names are reserved to this run. Stop activation before collecting its
     # service instances; no wildcard includes any unrelated unit prefix.
@@ -613,6 +635,80 @@ def generation_control(observer, mode, prefix, directory, admin_args, identity_a
     print(f'::notice title=Linux generation admission::{mode}: pass; {outcome}', flush=True)
 
 
+def socket_probe_result(result, prefix, uid, gid, invocation, refusal=None):
+    if refusal is not None:
+        require(result.returncode == 125 and not result.stdout
+                and result.stderr == 'socket probe refused: ' + refusal + '\n',
+                'socket control missed its intended refusal: ' + result.stderr[-2000:])
+        return
+    require(result.returncode == 0 and not result.stderr and len(result.stdout) < 4096,
+            'loaded socket observation failed: ' + result.stderr[-2000:])
+    fact = json.loads(result.stdout)
+    require(isinstance(fact, dict) and set(fact) == {'unit', 'endpoint', 'user', 'group', 'invocation'}
+            and fact['unit'] == prefix + '.socket' and fact['endpoint'] == str(endpoint(prefix))
+            and type(fact['user']) is int and fact['user'] == uid
+            and type(fact['group']) is int and fact['group'] == gid
+            and isinstance(fact['invocation'], list) and len(fact['invocation']) == 16
+            and all(type(byte) is int and 0 <= byte <= 255 for byte in fact['invocation'])
+            and any(fact['invocation']) and bytes(fact['invocation']).hex() == invocation,
+            'loaded socket evidence differs from the installed fixture')
+
+
+def socket_controls(observer, prefix, directory, admin_args, identity_args, environment):
+    unit = prefix + '.socket'
+
+    def no_activation():
+        require(unit_properties(unit, ('NAccepted', 'NConnections')) == {'NAccepted': '0', 'NConnections': '0'}
+                and not any(directory.iterdir()), 'read-only socket observer connected or started a guardian')
+
+    def probe(refusal=None):
+        invocation = unit_properties(unit, ('InvocationID',))['InvocationID']
+        result = subprocess.run([observer, '--activation-socket-probe', prefix], env=environment,
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+        socket_probe_result(result, prefix, os.getuid(), os.getgid(), invocation, refusal)
+        require(invocation == unit_properties(unit, ('InvocationID',))['InvocationID'],
+                'socket invocation changed during the fixed observer control')
+        no_activation()
+
+    no_activation()
+    probe()
+    try:
+        subprocess.run(admin_args + ['stamp-socket'] + identity_args, env=environment, check=True, timeout=15)
+        probe('socket unit is not the expected unchanged listening configuration')
+    finally:
+        # Restore the loaded metadata even when the refusal assertion fails.
+        subprocess.run(admin_args + ['reload-socket'] + identity_args, env=environment, check=True, timeout=15)
+    probe()
+    for restart in (False, True):
+        before = unit_properties(unit, ('InvocationID',))['InvocationID']
+        with subprocess.Popen([observer, '--activation-socket-probe', prefix, 'hold'], env=environment,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            try:
+                ready, _, _ = select.select([child.stdout], [], [], 8)
+                require(bool(ready) and child.stdout.readline(128) == b'socket: held\n',
+                        'socket observer did not reach its retained-observation checkpoint')
+                if restart:
+                    subprocess.run(admin_args + ['restart-socket'] + identity_args,
+                                   env=environment, check=True, timeout=15)
+                after = unit_properties(unit, ('InvocationID',))['InvocationID']
+                require(bool(re.fullmatch(r'[0-9a-f]{32}', after)) and after != '0' * 32
+                        and (before != after) == restart, 'socket restart did not produce the expected invocation')
+                stdout, stderr = child.communicate(b'R', timeout=15)
+                result = subprocess.CompletedProcess(child.args, child.returncode,
+                                                     stdout.decode(), stderr.decode())
+                socket_probe_result(result, prefix, os.getuid(), os.getgid(), before,
+                                    'socket invocation changed since observation' if restart else None)
+                no_activation()
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate(timeout=5)
+        probe()
+    print('::notice title=Linux loaded socket::installed protocol and permissions matched; stale loaded metadata, '
+          'another manager connection and a restarted invocation refused; unchanged retained observation passed; '
+          'fresh observation after reload/restart passed; no activation', flush=True)
+
+
 def suite():
     prefix = fixture_prefix()
     require(os.geteuid() != 0, 'activation suite requires an ordinary runner')
@@ -633,22 +729,7 @@ def suite():
         identity_args = [str(directory), str(os.getuid()), str(os.getgid())]
         try:
             subprocess.run(admin_args + ['install'] + identity_args, env=environment, check=True, timeout=50)
-            socket_before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
-            socket_probe = subprocess.run([observer, '--activation-socket-probe', prefix], env=environment,
-                                          stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
-            require(socket_probe.returncode == 0 and not socket_probe.stderr and len(socket_probe.stdout) < 4096,
-                    'loaded socket observation failed: ' + socket_probe.stderr[-2000:])
-            socket_fact = json.loads(socket_probe.stdout)
-            require(set(socket_fact) == {'unit', 'endpoint', 'user', 'group', 'invocation'}
-                    and socket_fact['unit'] == prefix + '.socket' and socket_fact['endpoint'] == str(endpoint(prefix))
-                    and socket_fact['user'] == os.getuid() and socket_fact['group'] == os.getgid()
-                    and isinstance(socket_fact['invocation'], list) and len(socket_fact['invocation']) == 16
-                    and all(type(byte) is int and 0 <= byte <= 255 for byte in socket_fact['invocation'])
-                    and any(socket_fact['invocation']), 'loaded socket evidence differs from the installed fixture')
-            require(socket_before == unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
-                    and not any(directory.iterdir()), 'read-only socket observer connected or started a guardian')
-            print('::notice title=Linux loaded socket::selected unit, sequential-packet endpoint, ordinary identity, '
-                  'permissions and stable invocation matched; another manager connection refused; no activation', flush=True)
+            socket_controls(observer, prefix, directory, admin_args, identity_args, environment)
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')

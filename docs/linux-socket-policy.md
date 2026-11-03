@@ -31,10 +31,23 @@ checks the bounded unresponsive path. Default builds lack the endpoint override.
 The hosted probe uses the actual installed fixture and authenticated bus. It
 observes, rechecks, refuses a second authenticated connection, and reports the
 selected unit/endpoint/identity/invocation. The controller independently checks
-that accepted-connection counts and the worker directory remain unchanged.
+the invocation against the manager, and requires zero accepted connections and
+an empty worker directory throughout the observation controls.
 
-Native results are pending. Follow-up controls must exercise stale loaded
-configuration and replacement of a retained socket invocation. Endpoint
+The hosted controller changes only its owned unit's timestamp, then opens a
+fresh selection. The retained contents still match the manifest, but stale
+loaded configuration must refuse until a daemon reload. A second control holds
+the original `LoadedSocket` across a restart of the owned listening unit. The
+manager must report a different nonzero invocation, and rechecking the retained
+object must refuse that specific change. The unchanged held observation and
+fresh observations after reload and restart must pass. Neither control connects
+to the socket or starts a guardian. Administrator roles validate the ownership
+marker, installation hashes and exact unit contents before any action. Cleanup
+restores loaded metadata and reaps the owned observer on failure.
+
+Local result controls reject foreign or malformed invocation evidence, crashes,
+unexpected output and unrelated diagnostics; only the intended refusal counts.
+Native results are pending. Endpoint
 ancestry/inode checks, kernel listener credentials, accepted-guardian binding,
 and composition around the actual connection remain separate open gates.
 Configuration observations cannot promise stability under later administrator

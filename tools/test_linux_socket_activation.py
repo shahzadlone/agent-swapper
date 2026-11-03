@@ -124,11 +124,39 @@ class ActivationTests(unittest.TestCase):
              patch.object(Path, 'read_text', return_value=json.dumps(ownership)), patch.object(probe, 'verify_image'), \
              patch.object(probe, 'verify_config', side_effect=RuntimeError('installation metadata changed')), \
              patch.object(Path, 'unlink') as unlink, patch.object(probe, 'systemctl') as control:
-            for verb in ('cleanup', 'select-original', 'select-next', 'stamp-image'):
+            for verb in ('cleanup', 'select-original', 'select-next', 'stamp-image',
+                         'stamp-socket', 'reload-socket', 'restart-socket'):
                 with self.subTest(verb=verb), self.assertRaisesRegex(RuntimeError, 'installation metadata changed'):
                     probe.admin(verb, directory, 1000, 1000)
             control.assert_not_called()
             unlink.assert_not_called()
+
+    def test_socket_evidence_requires_independent_invocation_and_exact_refusal(self):
+        prefix = 'aswp-activation-123-1'
+        invocation = '01' * 16
+        fact = {'unit': prefix + '.socket', 'endpoint': '/run/' + prefix + '.sock',
+                'user': 1000, 'group': 1001, 'invocation': [1] * 16}
+        def check(document, observed=invocation):
+            result = subprocess.CompletedProcess([], 0, json.dumps(document), '')
+            probe.socket_probe_result(result, prefix, 1000, 1001, observed)
+        check(fact)
+        for field, value in [('unit', 'other.socket'), ('endpoint', '/run/other.sock'), ('user', 0),
+                             ('group', 0), ('invocation', [0] * 16), ('invocation', [True] * 16),
+                             ('invocation', [256] * 16), ('invocation', [1] * 15), ('unexpected', True)]:
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(RuntimeError, 'evidence differs'):
+                check(fact | {field: value})
+        with self.assertRaisesRegex(RuntimeError, 'evidence differs'):
+            check(fact, '02' * 16)
+        refusal = 'socket invocation changed since observation'
+        diagnostic = 'socket probe refused: ' + refusal + '\n'
+        result = subprocess.CompletedProcess([], 125, '', diagnostic)
+        probe.socket_probe_result(result, prefix, 1000, 1001, invocation, refusal)
+        for code, output, error in [(0, '', diagnostic), (-9, '', diagnostic), (125, 'unexpected', diagnostic),
+                                    (125, '', 'socket probe refused: unrelated error\n'), (125, '', diagnostic + 'extra')]:
+            with self.subTest(code=code, output=output, error=error), \
+                 self.assertRaisesRegex(RuntimeError, 'intended refusal'):
+                probe.socket_probe_result(subprocess.CompletedProcess([], code, output, error),
+                                          prefix, 1000, 1001, invocation, refusal)
 
     def test_installation_metadata_refuses_different_bytes_mode_and_symlinks(self):
         with tempfile.TemporaryDirectory() as temporary:

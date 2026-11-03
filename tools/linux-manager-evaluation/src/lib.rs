@@ -467,10 +467,10 @@ pub fn run_cli() {
         .first()
         .is_some_and(|value| value == "--activation-socket-probe")
     {
-        let result = if args.len() == 2 {
-            socket_probe::run(&args[1])
+        let result = if args.len() == 2 || (args.len() == 3 && args[2] == "hold") {
+            socket_probe::run(&args[1], args.len() == 3)
         } else {
-            Err(io::Error::other("socket probe requires PREFIX"))
+            Err(io::Error::other("socket probe requires PREFIX [hold]"))
         };
         if let Err(error) = result {
             eprintln!(
