@@ -709,6 +709,38 @@ def socket_controls(observer, prefix, directory, admin_args, identity_args, envi
           'fresh observation after reload/restart passed; no activation', flush=True)
 
 
+def socket_permissions_control(observer, prefix, directory, environment):
+    """The ordinary owner changes only its own, already installed socket mode."""
+    path = endpoint(prefix)
+    descriptor = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        original = os.fstat(descriptor)
+        require(stat.S_ISSOCK(original.st_mode) and original.st_uid == os.getuid()
+                and original.st_gid == os.getgid() and stat.S_IMODE(original.st_mode) == 0o600,
+                'endpoint control requires its original ordinary-owned mode-0600 socket')
+        before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+        try:
+            os.chmod(path, 0o660, follow_symlinks=False)
+            result = subprocess.run([observer, '--activation-probe', prefix], env=environment,
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+            require(result.returncode == 125 and not result.stdout and result.stderr ==
+                    'manager observation unavailable or refused: installed socket type, identity, mode or link count differs\n',
+                    'mutable endpoint did not refuse before connecting: ' + result.stderr[-2000:])
+            require(before == unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+                    and not any(directory.iterdir()), 'mutable-endpoint observer activated a guardian')
+        finally:
+            current = path.lstat()
+            require((current.st_dev, current.st_ino) == (original.st_dev, original.st_ino),
+                    'endpoint control will not restore a different inode')
+            os.chmod(path, 0o600, follow_symlinks=False)
+            require(stat.S_IMODE(os.fstat(descriptor).st_mode) == 0o600,
+                    'owned socket mode was not restored')
+    finally:
+        os.close(descriptor)
+    print('::notice title=Linux protected socket::mode-0660 endpoint refused before connection; '
+          'accepted count unchanged; original inode and mode restored', flush=True)
+
+
 def suite():
     prefix = fixture_prefix()
     require(os.geteuid() != 0, 'activation suite requires an ordinary runner')
@@ -730,6 +762,7 @@ def suite():
         try:
             subprocess.run(admin_args + ['install'] + identity_args, env=environment, check=True, timeout=50)
             socket_controls(observer, prefix, directory, admin_args, identity_args, environment)
+            socket_permissions_control(observer, prefix, directory, environment)
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')

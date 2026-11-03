@@ -1,15 +1,15 @@
 //! Bind a fixture activation connection before sending any launch data.
 //! This probe deliberately sends no GO and starts no workload.
-use crate::fixture_policy::{activated_policy, connection_instance, valid_prefix};
+use crate::fixture_policy::{
+    activated_policy, connection_instance, selected_installation, valid_prefix,
+};
 use crate::{Expected, PathFact, Report, UnitKind, activation_packet, require};
-use rustix::net::{self, AddressFamily, SendFlags, SocketAddrUnix, SocketFlags, SocketType};
+use rustix::net::{self, SendFlags};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs, io,
-    os::{
-        fd::OwnedFd,
-        unix::fs::{FileTypeExt, MetadataExt},
-    },
+    io,
+    os::fd::OwnedFd,
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -39,9 +39,11 @@ pub(crate) struct Offer {
     _started: f64,
 }
 
-pub(crate) fn connect(
+pub(crate) async fn connect(
     prefix: &str,
     request: &[u8],
+    manager: &agentswapper_linux_manager::Manager,
+    sender: &str,
 ) -> io::Result<(
     OwnedFd,
     Fact,
@@ -54,32 +56,19 @@ pub(crate) fn connect(
             && rustix::process::getgid() == rustix::process::getegid(),
         "activation requires matching real and effective identities",
     )?;
-    let policy = activated_policy(prefix)?;
+    let selection = selected_installation(prefix)?;
     let path = format!("/run/{prefix}.sock");
-    let before = fs::symlink_metadata(&path)?;
-    require(
-        before.file_type().is_socket()
-            && before.uid() == rustix::process::geteuid().as_raw()
-            && before.mode() & 0o7777 == 0o600,
-        "activation endpoint owner or mode differs",
-    )?;
-    let socket = net::socket_with(
-        AddressFamily::UNIX,
-        SocketType::SEQPACKET,
-        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
-        None,
-    )?;
-    net::sockopt::set_socket_passcred(&socket, true)?;
-    net::connect(&socket, &SocketAddrUnix::new(&path)?)?;
-    let peer = activation_packet::peer(&socket)?;
-    let after = fs::symlink_metadata(&path)?;
-    require(
-        before.dev() == after.dev()
-            && before.ino() == after.ino()
-            && peer.pid() == 1
-            && peer.uid() == 0,
-        "activation listener is not the original system-manager endpoint",
-    )?;
+    let loaded = agentswapper_linux_manager::LoadedSocket::observe(
+        manager,
+        sender,
+        agentswapper_linux_manager::SocketPolicy::for_qualification(&selection, Path::new(&path))?,
+    )
+    .await?;
+    let socket = loaded.connect_endpoint(manager).await?;
+    // Once this particular connection is authenticated, original service
+    // binding takes over. No later socket restart may retarget its descriptor.
+    drop(loaded);
+    let policy = agentswapper_linux_manager::ServicePolicy::installed(selection)?;
     require(
         net::send(&socket, request, SendFlags::NOSIGNAL | SendFlags::DONTWAIT)? == request.len(),
         "incomplete activation binding request",
@@ -128,7 +117,15 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
     // both manager operations. Leave room before the guardian's 12-second
     // bind-only deadline, and before the outer 35-second fixture deadline.
     let admission_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let (socket, mut activation, offer, policy) = connect(prefix, b"BIND\n")?;
+    let connected = tokio::time::timeout_at(admission_deadline, crate::manager::connect())
+        .await
+        .map_err(|_| io::Error::other("activation manager connection timed out"))??;
+    let (socket, mut activation, offer, policy) = tokio::time::timeout_at(
+        admission_deadline,
+        connect(prefix, b"BIND\n", &connected.0, connected.1.as_str()),
+    )
+    .await
+    .map_err(|_| io::Error::other("activation endpoint admission timed out"))??;
     let expected = Expected {
         unit: offer.unit,
         user: offer.uid,
@@ -138,15 +135,17 @@ pub(crate) async fn inspect(paths: Vec<PathFact>, prefix: &str) -> io::Result<Re
             policy: Box::new(policy),
         },
     };
-    let (connection, owner, mut report, mut binding) =
-        tokio::time::timeout_at(admission_deadline, crate::admit(paths, Some(expected)))
-            .await
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "activation manager binding timed out",
-                )
-            })??;
+    let (connection, owner, mut report, mut binding) = tokio::time::timeout_at(
+        admission_deadline,
+        crate::admit_connected(paths, Some(expected), connected),
+    )
+    .await
+    .map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            "activation manager binding timed out",
+        )
+    })??;
     let result: io::Result<Report> = async {
         let binding = binding
             .as_mut()

@@ -37,7 +37,7 @@ pub(crate) fn single_link(stat: &rustix::fs::Stat) -> io::Result<()> {
         "installed file must have exactly one link",
     )
 }
-pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
+pub(crate) fn parent(path: &Path) -> io::Result<(OwnedFd, &std::ffi::OsStr)> {
     require(
         path.is_absolute() && path.as_os_str().len() <= 4096,
         "installed file path must be bounded and absolute",
@@ -64,10 +64,14 @@ pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
         directory = openat(&directory, part.as_os_str(), DIRECTORY, Mode::empty())?;
         protected_directory(&directory)?;
     }
+    Ok((directory, leaf.as_os_str()))
+}
+pub(crate) fn open(path: &Path) -> io::Result<OwnedFd> {
+    let (directory, leaf) = parent(path)?;
     // Resolve each component from an already validated directory handle.
     // NONBLOCK prevents a FIFO from blocking before fstat. NOCTTY prevents
     // opening a terminal device from acquiring process-wide terminal ownership.
-    let file = openat(&directory, leaf.as_os_str(), FILE, Mode::empty())?;
+    let file = openat(&directory, leaf, FILE, Mode::empty())?;
     let stat = fstat(&file)?;
     require(
         FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile

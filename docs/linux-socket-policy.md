@@ -1,9 +1,10 @@
 # Loaded Linux socket policy
 
 This candidate verifies the socket configuration reported by the authenticated
-system manager against a retained installation selection. It does not connect
-to the endpoint, start a service, send launch data or establish process custody.
-Production managed launch remains disabled.
+system manager against a retained installation selection. Observing that policy
+does not connect or start a service. A separate checked connection operation may
+activate the ordinary guardian, but sends no bytes and establishes no process
+custody. Production managed launch remains disabled.
 
 `SocketPolicy::installed` derives the unit, endpoint and ordinary UID/GID from
 the selection. The socket and service template must share the same installed
@@ -22,6 +23,30 @@ and selection. Rechecking repeats the configuration and selection checks;
 another manager connection or a new invocation refuses. Each observation and
 recheck has its own eight-second asynchronous deadline. Returned facts are
 diagnostics and cannot create a launch or retirement capability.
+
+## Endpoint connection
+
+`LoadedSocket::connect_endpoint` rechecks the original observation before
+opening the endpoint. `ProtectedSocket` walks root-owned, non-writable directory
+handles without following symlinks, then holds an `O_PATH | O_NOFOLLOW | O_CLOEXEC`
+handle to the ordinary user's mode-0600 socket. It requires the selected UID/GID
+and one hard link, and compares the retained inode and metadata with a fresh
+protected path lookup before and after connecting. Access time is excluded.
+
+The connection uses nonblocking `SOCK_SEQPACKET` with close-on-exec and enables
+per-message credentials before connecting. Kernel peer credentials must identify
+UID 0, GID 0, PID 1. Backlog refusal is not retried. Loaded policy, original
+manager connection and endpoint are rechecked before returning the descriptor,
+under the operation's eight-second deadline. No request bytes are sent here.
+
+The listener's credentials identify the system manager, not the accepted
+guardian. The qualification client sends its fixed request only after these
+checks, validates the offer's actual message sender, then binds the original
+service. The same authenticated manager connection spans socket observation,
+endpoint connection and service binding. This path is shared by the fixed
+activation, generation, journal and Store/terminal consumers. A later socket
+restart cannot retarget an already connected descriptor; admitted work retains
+the original service observation instead of selecting a new socket invocation.
 
 ## Qualification
 
@@ -47,9 +72,19 @@ restores loaded metadata and reaps the owned observer on failure.
 
 Local result controls reject foreign or malformed invocation evidence, crashes,
 unexpected output and unrelated diagnostics; only the intended refusal counts.
-Native results are pending. Endpoint
-ancestry/inode checks, kernel listener credentials, accepted-guardian binding,
-and composition around the actual connection remain separate open gates.
+Both native Ubuntu control suites passed the observation controls at `425db79`
+([41666325873](https://github.com/shahzadlone/agent-swapper/actions/runs/41666325873));
+the full pipeline is still pending. These results predate the endpoint connection.
+
+Endpoint unit controls use ordinary temporary sockets to check identity, mode,
+hardlinks, symlink leaves, replacement, descriptor flags and refusal of temporary
+unprotected ancestry. The hosted fixture changes only its ordinary-owned socket
+to mode 0660 and requires the connection consumer to refuse before the accepted
+count or worker directory changes. It restores the original inode's mode on
+failure too; ordinary local controls exercise timeout, unexpected success and
+unexpected activation cleanup. Native endpoint and full composition results are
+pending. Additional adversarial path replacement during connection, production
+helper installation and actual launcher composition remain open gates.
 Configuration observations cannot promise stability under later administrator
 changes; admission must recheck at its actual boundaries.
 

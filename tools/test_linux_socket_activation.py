@@ -224,6 +224,39 @@ class ActivationTests(unittest.TestCase):
                 else:
                     effective.assert_not_called()
 
+    def test_endpoint_control_restores_actual_socket_mode_after_failure(self):
+        diagnostic = ('manager observation unavailable or refused: '
+                      'installed socket type, identity, mode or link count differs\n')
+        for failure in ('none', 'timeout', 'unexpected-success', 'connected'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                endpoint = root / 'endpoint'
+                workers = root / 'workers'
+                workers.mkdir()
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                    listener.bind(str(endpoint))
+                    endpoint.chmod(0o600)
+                    original = endpoint.stat()
+                    def observe(*args, **kwargs):
+                        self.assertEqual(stat.S_IMODE(endpoint.stat().st_mode), 0o660)
+                        if failure == 'timeout':
+                            raise subprocess.TimeoutExpired('observer', 15)
+                        return subprocess.CompletedProcess([], 0 if failure == 'unexpected-success' else 125,
+                                                           '', '' if failure == 'unexpected-success' else diagnostic)
+                    counts = [{'NAccepted': '0', 'NConnections': '0'},
+                              {'NAccepted': '1' if failure == 'connected' else '0', 'NConnections': '0'}]
+                    with patch.object(probe, 'endpoint', return_value=endpoint), \
+                         patch.object(probe, 'unit_properties', side_effect=counts), \
+                         patch.object(probe.subprocess, 'run', side_effect=observe):
+                        expected = (self.assertRaises(subprocess.TimeoutExpired) if failure == 'timeout'
+                                    else self.assertRaisesRegex(RuntimeError, 'did not refuse|activated a guardian')
+                                    if failure != 'none' else ExitStack())
+                        with expected:
+                            probe.socket_permissions_control('/owned/observer', 'aswp-activation-123-1', workers, {})
+                    after = endpoint.stat()
+                    self.assertEqual((after.st_dev, after.st_ino, stat.S_IMODE(after.st_mode)),
+                                     (original.st_dev, original.st_ino, 0o600))
+
     def test_owned_fixture_timeout_stops_grandchild_and_keeps_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             pid_path = Path(temporary) / 'child.pid'

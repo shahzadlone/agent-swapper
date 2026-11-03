@@ -38,6 +38,8 @@ pub mod installed_manifest;
 #[cfg(target_os = "linux")]
 pub mod installed_selection;
 #[cfg(target_os = "linux")]
+pub mod installed_socket;
+#[cfg(target_os = "linux")]
 pub mod process_policy;
 #[cfg(target_os = "linux")]
 mod protected_file;

@@ -443,31 +443,35 @@ impl Bound {
         fixture_policy::gate(prefix)?;
         let paths = crate::prerequisites()?;
         let deadline = Instant::now() + Duration::from_secs(12);
-        let (socket, _, offer, policy) = activation::connect(
-            prefix,
-            match mode {
-                Mode::Writer => b"ADMIT\n",
-                Mode::Terminal => b"PTY1\n",
-                Mode::Job => b"PTY2\n",
-                Mode::Exec => b"PTY3\n",
-            },
-        )?;
-        let control = Control(Some(socket));
-        let expected = Expected {
-            unit: offer.unit,
-            user: offer.uid,
-            pid: offer.pid,
-            invocation: Some(offer.invocation),
-            kind: UnitKind::Activated {
-                policy: Box::new(policy),
-            },
-        };
         let runtime = RuntimeGuard::new()?;
-        let (connection, owner, report, binding) = runtime.get()?.block_on(async {
-            tokio::time::timeout_at(
-                tokio::time::Instant::from_std(deadline),
-                crate::admit(paths, Some(expected)),
-            )
+        let (control, (connection, owner, report, binding)) = runtime.get()?.block_on(async {
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                let connected = crate::manager::connect().await?;
+                let (socket, _, offer, policy) = activation::connect(
+                    prefix,
+                    match mode {
+                        Mode::Writer => b"ADMIT\n",
+                        Mode::Terminal => b"PTY1\n",
+                        Mode::Job => b"PTY2\n",
+                        Mode::Exec => b"PTY3\n",
+                    },
+                    &connected.0,
+                    connected.1.as_str(),
+                )
+                .await?;
+                let control = Control(Some(socket));
+                let expected = Expected {
+                    unit: offer.unit,
+                    user: offer.uid,
+                    pid: offer.pid,
+                    invocation: Some(offer.invocation),
+                    kind: UnitKind::Activated {
+                        policy: Box::new(policy),
+                    },
+                };
+                let admitted = crate::admit_connected(paths, Some(expected), connected).await?;
+                Ok::<_, io::Error>((control, admitted))
+            })
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "fixture binding expired"))?
         })?;

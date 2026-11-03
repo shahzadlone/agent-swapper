@@ -18,6 +18,10 @@ pub(crate) struct Packet {
 
 /// Keep the kernel's integer PID representable until policy validates it.
 /// rustix 1.1.6 UCred embeds NonZeroI32 and cannot safely decode PID zero.
+#[allow(
+    dead_code,
+    reason = "fixed guardian binaries and credential tests share this decoder"
+)]
 pub(crate) fn peer(socket: impl AsFd) -> io::Result<ScmCredentials> {
     let credentials =
         nix::sys::socket::getsockopt(&socket, nix::sys::socket::sockopt::PeerCredentials)?;

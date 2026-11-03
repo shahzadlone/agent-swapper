@@ -1,10 +1,13 @@
-//! Loaded socket configuration only. No endpoint connection, launch data or
-//! service-custody authority is produced by this observation.
+//! Loaded socket policy and checked endpoint connection. Connecting sends no
+//! launch data and never grants service-custody or retirement authority.
 use crate::linux::{Manager, UNIT_INTERFACE, get_unit, owner, property, require};
 use agentswapper_linux_runtime::installed_selection::SelectedInstallation;
+use agentswapper_linux_runtime::installed_socket::ProtectedSocket;
+use rustix::net::{self, AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
 use serde::Serialize;
 use std::{
     io,
+    os::fd::OwnedFd,
     path::{Component, Path},
     sync::Arc,
     time::Duration,
@@ -196,9 +199,9 @@ pub struct SocketFact {
     pub invocation: [u8; 16],
 }
 
-/// Retains the selection and original manager/socket invocation. A real socket
-/// connection must separately authenticate endpoint ancestry, inode, listener
-/// credentials and the accepted guardian; this value cannot replace those checks.
+/// Retains the selection and original manager/socket invocation. The endpoint
+/// connection checks ancestry, inode and kernel listener credentials; the
+/// accepted guardian still needs independent message and service authentication.
 pub struct LoadedSocket<'a> {
     policy: SocketPolicy<'a>,
     connection: Arc<()>,
@@ -246,6 +249,44 @@ impl<'a> LoadedSocket<'a> {
     }
     pub fn fact(&self) -> SocketFact {
         self.fact.clone()
+    }
+    /// Connect only after rechecking this original loaded policy. The kernel
+    /// listener must be root PID 1, and protected pathname/inode evidence must
+    /// survive the connection. Enables per-message credentials before connect.
+    ///
+    /// This may activate the ordinary guardian, but sends no bytes. The caller
+    /// must authenticate that guardian's actual message credentials and bind its
+    /// original service before any launch preparation. Listener credentials do
+    /// not authenticate the process that later sends a packet on this socket.
+    pub async fn connect_endpoint(&self, manager: &Manager) -> io::Result<OwnedFd> {
+        bounded(async {
+            self.recheck(manager).await?;
+            let expected = &self.policy.expected;
+            let path = Path::new(&expected.endpoint);
+            let endpoint = ProtectedSocket::open(path, expected.user, expected.group)?;
+            let socket = net::socket_with(
+                AddressFamily::UNIX,
+                SocketType::SEQPACKET,
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                None,
+            )?;
+            net::sockopt::set_socket_passcred(&socket, true)?;
+            endpoint.require_current(path)?;
+            // A nonblocking AF_UNIX backlog refusal remains a refusal; never
+            // retry a partially established admission or send application data.
+            net::connect(&socket, &SocketAddrUnix::new(path)?)?;
+            let peer =
+                nix::sys::socket::getsockopt(&socket, nix::sys::socket::sockopt::PeerCredentials)?;
+            require(
+                peer.pid() == 1 && peer.uid() == 0 && peer.gid() == 0,
+                "activation listener is not the system manager",
+            )?;
+            endpoint.require_current(path)?;
+            self.recheck(manager).await?;
+            endpoint.require_current(path)?;
+            Ok(socket)
+        })
+        .await
     }
     pub async fn recheck(&self, manager: &Manager) -> io::Result<()> {
         bounded(async {

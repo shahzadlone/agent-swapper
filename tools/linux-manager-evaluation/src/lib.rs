@@ -318,7 +318,24 @@ async fn admit(
     Report,
     Option<kernel::Binding>,
 )> {
-    let (connection, owner_before, transport) = manager::connect().await?;
+    admit_connected(paths, expected, manager::connect().await?).await
+}
+
+async fn admit_connected(
+    paths: Vec<PathFact>,
+    expected: Option<Expected>,
+    connected: (
+        Connection,
+        zbus::names::OwnedUniqueName,
+        manager::TransportFact,
+    ),
+) -> io::Result<(
+    Connection,
+    zbus::names::OwnedUniqueName,
+    Report,
+    Option<kernel::Binding>,
+)> {
+    let (connection, owner_before, transport) = connected;
     let result = async {
         let (unit, kernel) = match expected {
             Some(e) => {

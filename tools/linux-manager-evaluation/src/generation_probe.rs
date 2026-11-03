@@ -79,13 +79,14 @@ pub(crate) fn run(mode: &str, prefix: &str, directory: &Path) -> io::Result<()> 
         fs::remove_file(lease_path)?;
     } else {
         crate::prerequisites()?;
-        let (socket, _, offer, policy) = activation::connect(prefix, b"BIND\n")?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         runtime.block_on(async {
             let (manager, sender, _) = agentswapper_linux_manager::connect().await?;
             let result: io::Result<()> = async {
+                let (socket, _, offer, policy) =
+                    activation::connect(prefix, b"BIND\n", &manager, sender.as_str()).await?;
                 let claim = ServiceClaim {
                     unit: &offer.unit,
                     invocation: &offer.invocation,
