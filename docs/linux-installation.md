@@ -126,10 +126,10 @@ Privileged Python roles use isolated startup and explicit sibling-module loading
 | --- | --- |
 | Installation selection, complete digests and real service policy | Full CI through `7df8703`, including both native Ubuntu suites and independent rebuilds: [41304842096](https://github.com/shahzadlone/agent-swapper/actions/runs/41304842096) |
 | Path reopening with unchanged retained inode metadata | Full CI at `7791f02`: [41303860668](https://github.com/shahzadlone/agent-swapper/actions/runs/41303860668) |
-| Selector replacement before final admission, after successful binding, and original image changes | Both native Ubuntu suites passed at `241ded2`: [41306656317](https://github.com/shahzadlone/agent-swapper/actions/runs/41306656317); full pipeline pending at documentation time |
-| Missing/premature admission-transition mutations in ordinary observers | Both mutants built locally; native results pending |
-| Vendor-unit `/lib` versus `/usr/lib` spelling | Both measured at `f54f80a` in [41307090865](https://github.com/shahzadlone/agent-swapper/actions/runs/41307090865); exact generated-unit path controls added and awaiting native results |
-| Single-link admission and link additions after observation | Ordinary runtime tests passed; native controls pending |
+| Selector replacement before final admission, after successful binding, and original image changes | Both native Ubuntu suites passed at `241ded2`: [41306656317](https://github.com/shahzadlone/agent-swapper/actions/runs/41306656317); complete pipeline passed |
+| Missing/premature admission-transition mutations in ordinary observers | Both native mutation jobs and complete CI passed at `f6cce6d`: [41306933304](https://github.com/shahzadlone/agent-swapper/actions/runs/41306933304) |
+| Vendor-unit `/lib` versus `/usr/lib` spelling | Both measured at `f54f80a` in [41307090865](https://github.com/shahzadlone/agent-swapper/actions/runs/41307090865); exact generated-unit paths passed on both images in full CI at `4b31ce9`: [41308172474](https://github.com/shahzadlone/agent-swapper/actions/runs/41308172474) |
+| Single-link admission and link additions after observation | All 65 protected-asset cases and full CI passed at `4b31ce9`: [41308172474](https://github.com/shahzadlone/agent-swapper/actions/runs/41308172474) |
 
 The admission barrier and deliberately mutated observers exist only in test
 builds/disposable source copies. The installed guardian remains unmodified, and

@@ -500,6 +500,13 @@ Clippy, the dependency boundary, and the Python fixture checks pass. This still
 does not enable a production managed launcher, install local services or consume
 real provider accounts.
 
+Qualified integration: source revision `3ae40ee` passed the complete pipeline in
+[41295768975](https://github.com/shahzadlone/agent-swapper/actions/runs/41295768975),
+including native Ubuntu 22.04/24.04 controls, the fifteen installed-asset cases,
+cross-platform checks and independent unsigned package rebuilds. Its reviewed
+binding corrections are integrated without enabling production managed execution.
+Subsequent credential and one-use retirement work requires separate evidence.
+
 ## Ordinary guardian credentials and loaded-policy rechecks
 
 The activation policy now binds the primary GID as well as the UID. The original
@@ -572,16 +579,21 @@ The manager dependency is optional behind `linux-journal-qualification`; default
 application graphs remain isolated. Local manager/doctests, 49 evaluation tests,
 strict evaluation/core-feature Clippy and the dependency boundary pass. Native
 qualification of this consumer is pending.
+Qualified integration: credential-policy revision `cb8ba94`, one-use receipt
+revision `6d183f4`, and consumer revision `49948c8` each passed their complete
+pipelines: [41296222108](https://github.com/shahzadlone/agent-swapper/actions/runs/41296222108),
+[41296385424](https://github.com/shahzadlone/agent-swapper/actions/runs/41296385424),
+and [41296785541](https://github.com/shahzadlone/agent-swapper/actions/runs/41296785541).
 
-The next qualification checkpoint adds the
-[durable scope-retirement consumer](linux-scope-retirement.md). It associates the
-original live binding with the run before preparation, consumes an opaque value,
-and records scope retirement separately from target status. Schema 8 preserves
-unknown exit codes and migrates existing intent conservatively. This API remains
-feature-gated; the production managed launcher is still disabled. See that
-document for migration, substitution, retry controls and remaining limits.
+The [durable scope-retirement consumer](linux-scope-retirement.md) now associates
+the original live binding with one run before preparation, consumes its opaque
+receipt, and records retirement separately from unknown target status. Schema 9
+also enforces unique invocation association and migrates existing intent
+conservatively. The [installation policy](linux-installation.md) retains the
+protected selector, manifest and all five hash-verified artifacts through
+admission. These changes through `9cff2a5` passed full CI and both native Ubuntu
+suites in [41303525675](https://github.com/shahzadlone/agent-swapper/actions/runs/41303525675).
 
-The [installation metadata checkpoint](linux-installation.md) adds a bounded,
-protected manifest with fixed derived paths and compatible identity/version
-checks. Expected artifact hashes remain metadata until separately verified;
-the selector, installer and production launch integration remain unfinished.
+The APIs remain qualification-gated; the normal managed launcher is disabled.
+Installer/bootstrap, helper execution integration and the
+[review follow-up](linux-release-review.md) remain separate gates.

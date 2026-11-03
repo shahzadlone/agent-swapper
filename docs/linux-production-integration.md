@@ -3,9 +3,14 @@
 Status: shared [transport, signal and terminal ownership](linux-runtime.md)
 and fresh process entry are qualified. A fixed [real-Store terminal consumer](linux-store-terminal.md)
 passed native qualification. Shared retained kernel observations, read-only manager transport, installed
-image corroboration and direct-child waiting passed native qualification at
-`7ca3650`. Subsequent shared file-opening and retained-exit changes require their
-own native evidence. Normal Linux execution is
+image corroboration, direct-child waiting, protected configuration retention and
+opaque service binding passed the complete pipeline at `3ae40ee` in
+[41295768975](https://github.com/shahzadlone/agent-swapper/actions/runs/41295768975).
+Guardian credentials, complete loaded-policy rechecks and the one-use retirement
+consumer also passed the full pipeline at `49948c8` in
+[41296785541](https://github.com/shahzadlone/agent-swapper/actions/runs/41296785541).
+Durable scope completion and installation metadata remain on qualification
+branches. Normal Linux execution is
 still the explicit uncontained preview. The fixed qualification crate must not
 be enabled as a production launcher by removing its CI checks.
 

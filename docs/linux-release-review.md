@@ -32,10 +32,10 @@ separately. These changes do not supply restart recovery or target-exit evidence
 
 | Area | Required follow-up |
 | --- | --- |
-| Admission lifetime | Real binding and both deliberate observer mutations passed on Ubuntu 22.04/24.04 at `f6cce6d` (`41306933304`); complete pipeline still tracked separately. |
+| Admission lifetime | Real binding and both deliberate observer mutations passed in complete CI at `f6cce6d` (`41306933304`). |
 | Observation lifetime | Live completion retains the original binding/key and never selects a new generation. Fresh diagnostic witnesses are qualification-only and their receipts fail Store association. Restart recovery remains a separate unimplemented production gate. |
-| systemd path compatibility | Vendor-path difference measured at `f54f80a`. Generated per-user units now use `/etc/systemd/system`; exact-path native controls pending. |
-| Installed inode lifetime | Single-link admission and retained-link mutation controls implemented; native results pending. Installer must preserve independent, unchanged inodes while admitted runs retain them. |
+| systemd path compatibility | Vendor-path difference measured at `f54f80a`. Generated per-user units now use `/etc/systemd/system`; exact-path controls passed on both Ubuntu images in full CI at `4b31ce9` (`41308172474`). |
+| Installed inode lifetime | Installation-only single-link admission and retained-link mutation controls passed in full CI at `4b31ce9` (`41308172474`). Installer must preserve independent, unchanged inodes while admitted runs retain them. |
 | Policy API | Admitted-policy reuse refused; path-derivation contract covered. Lower-level metadata readers cannot construct a selection or launch authority; raw service policies and layout overrides are qualification-only. |
 | Build features | Default dependency-feature checks and negative API doctests pass; candidate builds use the default production graph. |
 
@@ -46,8 +46,7 @@ and removes its unit. The fixture has no activation dependencies and refuses
 manual start. Both hosted measurements passed at `f54f80a`: Ubuntu 22.04
 reported `/lib`, and Ubuntu 24.04 reported `/usr/lib`, with the original inode
 in both cases. Per-user generated units now use the administrator directory
-`/etc/systemd/system`. The follow-up requires exact reporting for that path on
-both runners; runtime fragment equality and protected-path checks remain strict.
+`/etc/systemd/system`. Both runners reported that exact path at `4b31ce9`; runtime fragment equality and protected-path checks remain strict.
 
 Source review suggested that selector admission ends at successful `bind`.
 
@@ -63,9 +62,15 @@ to installation selection, manifest and complete artifact admission. Generic
 read-only image observations retain their existing change detection. Native
 controls exercise the actual installation consumers, plus link additions after
 opening; no system executable or test's image identity was changed to avoid the
-refusal. This correction requires a fresh CI result.
+refusal. All 65 protected-asset controls and the complete pipeline passed at
+`4b31ce9` (`41308172474`), including both native Ubuntu suites and independent
+release rebuilds.
 
 ## Native evidence
+
+- `4b31ce9`: complete installation-path and inode-policy CI passed
+  (`41308172474`), including both native Ubuntu suites and independent rebuilds.
+- `9cff2a5`: complete unique-invocation association CI passed (`41303525675`).
 
 - `4ef99d1`: full import-isolation, pathname and journal-authority pipeline passed
   (`41304050468`), including both native Ubuntu suites and independent rebuilds.
@@ -212,8 +217,7 @@ the faults; both must fail with the specific expected diagnostic, after the
 unmodified controls pass. Two dedicated Ubuntu jobs keep this compilation out
 of the bounded journal/terminal step. Both mutated observers built locally and
 all 50 ordinary Linux harness controls passed. Both mutation jobs and both full
-native manager suites passed at `f6cce6d` (`41306933304`). The complete
-cross-platform packaging/rebuild pipeline is tracked separately.
+native manager suites passed in the complete `f6cce6d` pipeline (`41306933304`).
 
 ## Source-review follow-up at 7df8703
 
@@ -237,7 +241,8 @@ the consumer closes the control connection rather than retrying preparation.
 committed and no new event was written. A receipt is still returned for explicit
 disposal. These semantics do not provide restart recovery or automatic fallback.
 All ten local observer controls and strict workspace qualification Clippy pass.
-The revised native receipt controls await this revision's hosted CI result.
+The revised receipt controls passed in full CI at `b9c3bb6` (`41306625239`)
+and in the combined `f6cce6d` checkpoint (`41306933304`).
 
 The installation reader now captures and retains the namespace-origin candidate
 before reading any installation path. The selected-to-admitted transition keeps
@@ -249,13 +254,16 @@ launch authority. Manager prerequisites likewise establish origin first.
 
 All 319 local Nextest tests passed with retries disabled, together with strict
 workspace qualification Clippy, evaluator Clippy, runtime/manager doctests and
-59 ordinary Linux harness controls. Native integration and the independent
-implementation audit are pending. The hosted ordering probe uses the actual
+59 ordinary Linux harness controls. Complete integration CI passed at `7dcd61f`
+(`41312005358`), including both Ubuntu suites, platform tests and independent
+release rebuilds. The independent implementation audit remains open: the Opus
+implementation review returned a safety-classifier refusal without a usable
+conclusion. The hosted ordering probe uses the actual
 production selection entry point in root and full-map child-user contexts; an
 absent-selector error is not accepted as a namespace refusal. See the
 [origin contract](linux-origin.md) for its compatibility and trust boundaries.
 
-Native namespace integration, loaded socket/endpoint authentication, loaded unit
+Independent namespace review, loaded socket/endpoint authentication, loaded unit
 content, production helper identities after exec, installer/update/removal,
 restart recovery and production launch integration remain separate open gates.
 The journal does not isolate mutually hostile programs running as the same UID,

@@ -80,9 +80,13 @@ observer's initial-user membership. They require the intended result and diagnos
 crashes, setup failures and generic errors are not successful negative tests.
 Only the root parent maps its blocked child; no subordinate-ID files, accounts,
 AppArmor policy or host sysctls are changed. Python starts isolated. Temporary
-mounts disappear with the private namespace. Both native capture suites passed
-at `85c1059` ([41311810820](https://github.com/shahzadlone/agent-swapper/actions/runs/41311810820));
-complete CI, integration and the additional owner control remain pending.
+mounts disappear with the private namespace. The complete candidate pipeline
+passed at `85c1059` ([41311810820](https://github.com/shahzadlone/agent-swapper/actions/runs/41311810820));
+the complete installation-integration pipeline passed at `7dcd61f`
+([41312005358](https://github.com/shahzadlone/agent-swapper/actions/runs/41312005358)).
+The additional namespace-owner control and complete pipeline passed at `1183acc`
+([41312243210](https://github.com/shahzadlone/agent-swapper/actions/runs/41312243210)).
+These include native Ubuntu suites, cross-platform tests and independent rebuilds.
 An additional hosted probe calls the
 actual production `SelectedInstallation::open` in root and full-map child-user
 contexts. Both must refuse at the origin check before reaching the deliberately
@@ -96,8 +100,9 @@ The selected and admitted installation types retain origin across the selector
 transition. Rechecking an active generation verifies its original namespace
 observation before and after artifact checks. Service policy validates the
 selection before reading its unit text. The manager prerequisite check also
-establishes origin before trusting root-owned bus paths. Native integration,
-final-hop race/ownership controls and post-exec helper observations remain gates.
+establishes origin before trusting root-owned bus paths. Additional final-hop
+and ownership controls, independent review and post-exec helper observations
+remain separate gates.
 
 ## Primary contracts checked
 

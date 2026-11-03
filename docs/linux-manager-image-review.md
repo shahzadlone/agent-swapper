@@ -69,8 +69,10 @@ the new FIFO control require this revision's native evidence too. Config handles
 retain the opened root-owned regular file, require mode 0644 and read at
 most 16 KiB without changing the shared file offset. They do not establish
 configuration semantics, an atomic administrative update or production manifest
-provenance. Their eleven-case installed-asset harness has separate pending CI
-evidence; the earlier seven-case pass does not qualify that extension.
+provenance. The retained-file, FIFO and subsequent change-detection controls passed both
+native Linux suites and the complete pipeline at `3ae40ee` in
+[41295768975](https://github.com/shahzadlone/agent-swapper/actions/runs/41295768975).
+The earlier seven-case pass alone did not qualify these extensions.
 
 The isolated retirement-query branch `064d3b9` passed Ubuntu 22.04 but failed
 a background-admission case on Ubuntu 24.04 after the relay disappeared. That

@@ -2,7 +2,8 @@
 
 Status: implemented behind `linux-journal-qualification`. The initial durable
 completion checkpoint (`17f74e3`) passed full CI, including both native Ubuntu
-runners. The association changes below require their own native result. Normal Linux launching remains the
+runners. The association checkpoint `9cff2a5` also passed full CI and both native Ubuntu
+runners (`41303525675`). Normal Linux launching remains the
 explicit uncontained preview; this is not a production managed launcher or a
 provider-isolation qualification.
 
@@ -109,5 +110,5 @@ preserving unknown exit status and its verified backup. Native controls exercise
 wrong-key preparation and then successfully prepare the original service with
 the same lease and key. Wrong-run and reopened-Store refusals return their
 retirement values; the original Store subsequently commits those same values.
-This revision's native results are pending. Additional review findings and
+The association revision passed native CI. Additional review findings and
 production gates are tracked in [the follow-up](linux-release-review.md).
