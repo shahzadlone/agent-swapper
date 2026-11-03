@@ -482,6 +482,30 @@ pub fn run_cli() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args
         .first()
+        .is_some_and(|value| value == "--activation-endpoint-race")
+    {
+        let result = if args.len() == 3 {
+            socket_probe::connection_race(&args[1], &args[2])
+        } else {
+            Err(io::Error::other(
+                "endpoint race requires PREFIX before|after",
+            ))
+        };
+        if let Err(error) = result {
+            eprintln!(
+                "endpoint race refused: {}",
+                error
+                    .to_string()
+                    .escape_debug()
+                    .take(2000)
+                    .collect::<String>()
+            );
+            std::process::exit(125);
+        }
+        return;
+    }
+    if args
+        .first()
         .is_some_and(|value| value == "--activation-socket-probe")
     {
         let result = if args.len() == 2 || (args.len() == 3 && args[2] == "hold") {

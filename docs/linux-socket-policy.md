@@ -74,7 +74,7 @@ Local result controls reject foreign or malformed invocation evidence, crashes,
 unexpected output and unrelated diagnostics; only the intended refusal counts.
 Both native Ubuntu control suites passed the observation controls at `425db79`
 ([41666325873](https://github.com/shahzadlone/agent-swapper/actions/runs/41666325873));
-the full pipeline is still pending. These results predate the endpoint connection.
+that complete pipeline also passed. These results predate the endpoint connection.
 
 Endpoint unit controls use ordinary temporary sockets to check identity, mode,
 hardlinks, symlink leaves, replacement, descriptor flags and refusal of temporary
@@ -85,6 +85,16 @@ failure too; ordinary local controls exercise timeout, unexpected success and
 unexpected activation cleanup. Native endpoint and full composition results are
 pending. Additional adversarial path replacement during connection, production
 helper installation and actual launcher composition remain open gates.
+
+The connection-race control pauses after pinning the endpoint or after checking
+the kernel listener. The ordinary socket owner changes mode to 0660, then releases
+the observer. Both phases must refuse the specific retained-inode change before
+sending any bytes. The controller checks the accepted count (zero new connections
+before connect, exactly one after), restores the original inode's mode, and
+requires no worker artifacts and retirement of any activated guardian. These
+barriers are absent from default builds and cannot skip production checks.
+This control covers permission changes, not replacement of the pathname.
+Its native CI result remains pending.
 Configuration observations cannot promise stability under later administrator
 changes; admission must recheck at its actual boundaries.
 

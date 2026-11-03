@@ -741,6 +741,51 @@ def socket_permissions_control(observer, prefix, directory, environment):
           'accepted count unchanged; original inode and mode restored', flush=True)
 
 
+def endpoint_race_result(returncode, stdout, stderr):
+    require(returncode == 125 and not stdout and stderr ==
+            b'endpoint race refused: installed socket changed during connection\n',
+            'endpoint race missed its intended refusal: ' + stderr.decode(errors='replace')[-2000:])
+
+
+def socket_connection_races(observer, prefix, directory, environment):
+    path = endpoint(prefix)
+    for phase in ('before', 'after'):
+        original = path.lstat()
+        require(stat.S_ISSOCK(original.st_mode) and original.st_uid == os.getuid()
+                and original.st_gid == os.getgid() and stat.S_IMODE(original.st_mode) == 0o600,
+                'endpoint race requires its original ordinary-owned socket')
+        before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+        require(before['NConnections'] == '0' and re.fullmatch(r'[0-9]{1,20}', before['NAccepted']),
+                'endpoint race requires an idle activation socket')
+        with subprocess.Popen([observer, '--activation-endpoint-race', prefix, phase], env=environment,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+            try:
+                ready, _, _ = select.select([child.stdout], [], [], 8)
+                require(bool(ready) and child.stdout.readline(128) == b'socket: held\n',
+                        'endpoint observer did not reach its connection checkpoint')
+                os.chmod(path, 0o660, follow_symlinks=False)
+                stdout, stderr = child.communicate(b'R', timeout=10)
+                endpoint_race_result(child.returncode, stdout, stderr)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate(timeout=5)
+                current = path.lstat()
+                require((current.st_dev, current.st_ino) == (original.st_dev, original.st_ino),
+                        'endpoint race will not restore a different inode')
+                os.chmod(path, 0o600, follow_symlinks=False)
+        wait_for(lambda: unit_properties(prefix + '.socket', ('NConnections',))['NConnections'] == '0', seconds=5)
+        after = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
+        require(int(after['NAccepted']) == int(before['NAccepted']) + int(phase == 'after')
+                and after['NConnections'] == '0' and not any(directory.iterdir())
+                and stat.S_IMODE(path.lstat().st_mode) == 0o600,
+                'endpoint race activated unexpected work or did not restore its socket')
+        wait_for(lambda: not any(p.name.startswith(prefix + '@')
+                                for p in Path('/sys/fs/cgroup/system.slice').iterdir()), seconds=5)
+        print(f'::notice title=Linux endpoint race::{phase} connect: retained socket change refused; '
+              'original mode restored; no request or worker; owned activation retired', flush=True)
+
+
 def suite():
     prefix = fixture_prefix()
     require(os.geteuid() != 0, 'activation suite requires an ordinary runner')
@@ -763,6 +808,7 @@ def suite():
             subprocess.run(admin_args + ['install'] + identity_args, env=environment, check=True, timeout=50)
             socket_controls(observer, prefix, directory, admin_args, identity_args, environment)
             socket_permissions_control(observer, prefix, directory, environment)
+            socket_connection_races(observer, prefix, directory, environment)
             meta = endpoint(prefix).lstat()
             require(stat.S_ISSOCK(meta.st_mode) and meta.st_uid == os.getuid() and meta.st_mode & 0o777 == 0o600,
                     'activation socket ownership or mode differs')

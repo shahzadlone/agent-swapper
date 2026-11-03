@@ -1,4 +1,4 @@
-//! Read-only loaded-socket evidence. Never connects to the activation endpoint.
+//! Loaded-socket observations and fixed connection-race controls. No launch data.
 use crate::{fixture_policy, manager};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use std::{
@@ -70,4 +70,57 @@ pub(crate) fn run(prefix: &str, hold: bool) -> io::Result<()> {
         serde_json::to_string(&fact).map_err(io::Error::other)?
     );
     Ok(())
+}
+
+pub(crate) fn connection_race(prefix: &str, phase: &str) -> io::Result<()> {
+    fixture_policy::gate(prefix)?;
+    crate::require(
+        matches!(phase, "before" | "after"),
+        "invalid endpoint race phase",
+    )?;
+    let selection = fixture_policy::selected_installation(prefix)?;
+    let endpoint = format!("/run/{prefix}.sock");
+    let policy = manager::SocketPolicy::for_qualification(&selection, Path::new(&endpoint))?;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(12), async {
+                let (connection, sender, _) = manager::connect().await?;
+                let observed =
+                    manager::LoadedSocket::observe(&connection, sender.as_str(), policy).await?;
+                let result = observed
+                    .connect_endpoint_with_checkpoints_for_qualification(
+                        &connection,
+                        || {
+                            if phase == "before" {
+                                checkpoint()
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        || {
+                            if phase == "after" {
+                                checkpoint()
+                            } else {
+                                Ok(())
+                            }
+                        },
+                    )
+                    .await;
+                // Close without sending even a handshake, whether the control
+                // refused correctly or a regression unexpectedly returned a socket.
+            let result = result.map(drop);
+                let _ = connection.close().await;
+                result?;
+                Err::<(), _>(io::Error::other("changed endpoint was accepted"))
+            })
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "endpoint control deadline exceeded",
+                )
+            })?
+        })
 }

@@ -224,6 +224,15 @@ class ActivationTests(unittest.TestCase):
                 else:
                     effective.assert_not_called()
 
+    def test_endpoint_race_requires_its_specific_retained_inode_refusal(self):
+        diagnostic = b'endpoint race refused: installed socket changed during connection\n'
+        probe.endpoint_race_result(125, b'', diagnostic)
+        for code, output, error in [(0, b'', diagnostic), (-9, b'', diagnostic), (125, b'extra', diagnostic),
+                                    (125, b'', b'endpoint race refused: unrelated failure\n'),
+                                    (125, b'', diagnostic + b'extra')]:
+            with self.subTest(code=code, output=output, error=error), self.assertRaisesRegex(RuntimeError, 'intended refusal'):
+                probe.endpoint_race_result(code, output, error)
+
     def test_endpoint_control_restores_actual_socket_mode_after_failure(self):
         diagnostic = ('manager observation unavailable or refused: '
                       'installed socket type, identity, mode or link count differs\n')
