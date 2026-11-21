@@ -21,8 +21,9 @@ mod linux {
     }
 
     /// The one manager-assigned argument: the systemd unit name that started
-    /// this service instance. Its stem carries the installation identity.
-    pub(crate) fn parse_unit(unit: &str) -> io::Result<(u32, u32, String)> {
+    /// this service instance. Its stem carries the installation user; the
+    /// group is the service's own primary group, fixed by the unit.
+    pub(crate) fn parse_unit(unit: &str) -> io::Result<(u32, String)> {
         let invalid = || io::Error::other("guardian invocation is not its installed unit");
         let stem = unit
             .strip_suffix(".service")
@@ -52,7 +53,7 @@ mod linux {
                     valid_user && valid_generation && valid_instance,
                     "guardian unit identity is outside the installed layout",
                 )?;
-                Ok((user, group, generation.to_owned()))
+                Ok((user, generation.to_owned()))
             }
             _ => Err(invalid()),
         }
@@ -62,7 +63,8 @@ mod linux {
     /// then refuse: the production service protocol is a separate gate.
     pub fn entry(args: &[String]) -> io::Result<()> {
         require(args.len() == 2, "guardian expects its unit name argument")?;
-        let (user, group, generation) = parse_unit(&args[1])?;
+        let (user, generation) = parse_unit(&args[1])?;
+        let group = rustix::process::getgid().as_raw();
         let manifest = InstalledManifest::open(user, group, &generation)?;
         let (path, expected) = manifest.guardian();
         require(
@@ -110,7 +112,7 @@ mod tests {
     fn unit_names_carry_exactly_the_installed_identity() {
         assert_eq!(
             parse_unit(&unit("17-1000")).ok(),
-            Some((1000, 1000, GENERATION.to_owned()))
+            Some((1000, GENERATION.to_owned()))
         );
         for bad in [
             "other.service",
