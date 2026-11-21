@@ -8,6 +8,9 @@ use std::{
 };
 
 fn checkpoint() -> io::Result<()> {
+    // The checkpoint poll is deliberately longer than the callers' outer
+    // twelve-second deadline: a stalled controller kills this probe first with
+    // a distinguishable deadline refusal instead of a silent release timeout.
     println!("socket: held");
     io::stdout().flush()?;
     let input = io::stdin();

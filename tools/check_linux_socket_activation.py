@@ -813,9 +813,26 @@ def stop_endpoint_replacement(helper):
             helper.communicate(timeout=5)
 
 
+def remove_stranded_replacement(moved):
+    """Refuse or remove a replacement name stranded by an interrupted helper."""
+    try:
+        moved.lstat()
+    except FileNotFoundError:
+        return
+    subprocess.run(['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', '-c',
+                    'import os,sys\nos.unlink(sys.argv[1])\n', str(moved)],
+                   check=True, timeout=10)
+    try:
+        moved.lstat()
+    except FileNotFoundError:
+        return
+    raise RuntimeError('endpoint race could not remove its stranded replacement name')
+
+
 def socket_connection_races(observer, prefix, directory, environment):
     path = endpoint(prefix)
     moved = path.with_name(path.name + '.retained')
+    remove_stranded_replacement(moved)
     for phase in ('pinned', 'replaced', 'validated', 'connected'):
         original = path.lstat()
         require(stat.S_ISSOCK(original.st_mode) and original.st_uid == os.getuid()
@@ -844,6 +861,12 @@ def socket_connection_races(observer, prefix, directory, environment):
                     child.communicate(timeout=5)
                 if replacement is not None:
                     stop_endpoint_replacement(replacement)
+                    try:
+                        moved.lstat()
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise RuntimeError('endpoint replacement helper left its renamed inode behind')
                 current = path.lstat()
                 require((current.st_dev, current.st_ino) == (original.st_dev, original.st_ino),
                         'endpoint race will not restore a different inode')

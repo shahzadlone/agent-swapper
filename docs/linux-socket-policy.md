@@ -35,9 +35,19 @@ protected path lookup before and after connecting. Access time is excluded.
 
 The connection uses nonblocking `SOCK_SEQPACKET` with close-on-exec and enables
 per-message credentials before connecting. Kernel peer credentials must identify
-UID 0, GID 0, PID 1. Backlog refusal is not retried. Loaded policy, original
-manager connection and endpoint are rechecked before returning the descriptor,
-under the operation's eight-second deadline. No request bytes are sent here.
+UID 0, GID 0, PID 1; `SO_PEERCRED` names peers in the connecting process's PID
+namespace view, so this requirement assumes the initial namespace where PID 1 is
+the system manager, which the admission identity and fixture controls pin. This
+check is load bearing for the unguardable instant between pathname validation
+and `connect`: AF_UNIX has no connect-by-descriptor, so the connect always
+resolves the current pathname, and only the peer credentials distinguish the
+real manager from a same-metadata impostor. Backlog refusal is not retried.
+Loaded policy, original manager connection and endpoint are rechecked before
+returning the descriptor, under the operation's eight-second deadline. No
+request bytes are sent here. Byte-freedom is a code-structure invariant of the
+checked connection path: it never writes to the socket, and the fixtures close
+any returned descriptor without a handshake, so a regression that adds a write
+inside the connection path is a review defect, not a fixture-passing change.
 
 The listener's credentials identify the system manager, not the accepted
 guardian. The qualification client sends its fixed request only after these

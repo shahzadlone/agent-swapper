@@ -53,6 +53,10 @@ impl ProtectedSocket {
     }
     /// Check the original handle, then reopen through protected ancestry and
     /// require the exact same inode and metadata. Access time is irrelevant.
+    /// The comparison proves the pathname named the retained inode at some
+    /// instant during this call; it cannot pin the mapping after returning.
+    /// Callers must repeat it around every use of the pathname, such as the
+    /// checked endpoint connect.
     pub fn require_current(&self, path: &Path) -> io::Result<()> {
         self.require_unchanged()?;
         let current = Self::open(path, self.user, self.group)?;
