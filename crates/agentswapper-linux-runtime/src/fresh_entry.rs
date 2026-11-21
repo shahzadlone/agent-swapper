@@ -168,7 +168,7 @@ fn bootstrap(gate: impl AsFd) -> io::Result<OwnedFd> {
 }
 
 /// Receive one bounded data record with no transferred capabilities.
-fn receive_data<'a>(socket: impl AsFd, buffer: &'a mut [u8; 32]) -> io::Result<&'a [u8]> {
+fn receive_data(socket: impl AsFd, buffer: &mut [u8; 32]) -> io::Result<&[u8]> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
     let mut ancillary = RecvAncillaryBuffer::new(&mut space);
     let received = rustix::net::recvmsg(
@@ -197,10 +197,7 @@ fn receive_data<'a>(socket: impl AsFd, buffer: &'a mut [u8; 32]) -> io::Result<&
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use std::{
-        io::{Read, Write},
-        os::unix::net::UnixStream,
-    };
+    use std::{io::Write, os::unix::net::UnixStream};
 
     fn queue_bootstrap(
         sender: &OwnedFd,
@@ -263,9 +260,10 @@ mod tests {
         let entry = FreshEntry::prepare()?;
         // /dev/null is not executable: exec fails after stdio changes.
         let mut command = Command::new("/dev/null");
-        let error = entry
-            .exec(&mut command)
-            .expect_err("a non-executable command cannot start");
+        let error = match entry.exec(&mut command) {
+            Ok(()) => return Err(io::Error::other("a non-executable command cannot start")),
+            Err(error) => error,
+        };
         assert_ne!(error.kind(), io::ErrorKind::Other);
         assert_eq!(
             TerminalIdentity::of(io::stdin())?,
