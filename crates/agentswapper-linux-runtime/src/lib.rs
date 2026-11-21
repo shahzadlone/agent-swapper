@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(target_os = "linux")]
+pub mod activation_packet;
+#[cfg(target_os = "linux")]
 pub mod admission_transport;
 #[cfg(target_os = "linux")]
 pub mod fresh_entry;
