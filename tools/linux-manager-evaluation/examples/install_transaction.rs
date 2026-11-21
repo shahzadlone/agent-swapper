@@ -139,13 +139,19 @@ fn main() -> process::ExitCode {
             process::ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!(
-                "install transaction refused: {}",
-                error
-                    .to_string()
-                    .escape_debug()
-                    .take(2000)
-                    .collect::<String>()
+            let diagnostic: String = error
+                .to_string()
+                .escape_debug()
+                .take(2000)
+                .collect::<String>();
+            eprintln!("install transaction refused: {diagnostic}");
+            // Surface the bounded refusal where every reader can see it.
+            println!(
+                "::error title=install transaction::{}",
+                diagnostic
+                    .replace('%', "%25")
+                    .replace('\r', "%0D")
+                    .replace('\n', "%0A")
             );
             process::ExitCode::from(125)
         }
