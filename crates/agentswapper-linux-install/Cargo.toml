@@ -1,0 +1,23 @@
+[package]
+name = "agentswapper-linux-install"
+description = "Root installation executor for AgentSwapper Linux managed execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+qualification = ["agentswapper-linux-runtime/qualification"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+agentswapper-linux-manager = { path = "../agentswapper-linux-manager", version = "=0.1.0-dev" }
+agentswapper-linux-runtime = { path = "../agentswapper-linux-runtime", version = "=0.1.0-dev" }
+serde_json.workspace = true
+wait-timeout = "0.2"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

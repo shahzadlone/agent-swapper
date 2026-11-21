@@ -53,7 +53,7 @@ def check():
     if {'aswp-linux-manager-evaluation', 'agentswapper-core', 'agentswapper-cli', 'rusqlite', 'age', 'unix-ancillary', 'fuxix'} & present:
         raise RuntimeError('Read-only manager transport acquired application or fixture dependencies')
     for package in ('agentswapper-core', 'agentswapper-cli', 'agentswapper-linux-runtime', 'agentswapper-linux-manager',
-                    'agentswapper-linux-origin'):
+                    'agentswapper-linux-origin', 'agentswapper-linux-install'):
         result = subprocess.run(['cargo', '+1.98.0', 'tree', '--locked', '-p', package,
                                  '--edges', 'normal,build', '--prefix', 'none', '--format', '{p} features=[{f}]'],
                                 cwd=root, capture_output=True, text=True, check=True, timeout=60)

@@ -357,6 +357,8 @@ jobs:
           sudo -n "$PWD/tools/linux-manager-evaluation/target/debug/examples/install_transaction" \
             "$root_dir" 00112233445566778899aabbccddeeff 112233445566778899aabbccddeeff00 2233445566778899aabbccddeeff0011
           sudo -n rm -rf -- "$root_dir"
+      - name: Qualify installer transaction controls
+        run: cargo +1.98.0 test --locked -p agentswapper-linux-install --features qualification
       - name: Evaluate fixed-user socket activation
         timeout-minutes: 6
         env:

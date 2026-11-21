@@ -112,6 +112,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentswapper-linux-install"
+version = "0.1.0-dev"
+dependencies = [
+ "agentswapper-linux-manager",
+ "agentswapper-linux-runtime",
+ "serde_json",
+ "tempfile",
+ "wait-timeout",
+]
+
+[[package]]
 name = "agentswapper-linux-manager"
 version = "0.1.0-dev"
 dependencies = [
