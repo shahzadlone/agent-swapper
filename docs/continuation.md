@@ -186,3 +186,23 @@ remain in [production integration](linux-production-integration.md).
 Next implementation work: the three production helper images and entry
 points, the CLI/doctor surface for install/verify/removal, launch-plan/Store
 composition, and authenticated restart recovery.
+
+# Session continuation: 2026-11-21 (third)
+
+- `ca3baff` ported the activation packet discipline to the runtime crate
+  (`activation_packet`): one kernel credential per packet, exactly one
+  descriptor only for terminal responses, every refused capability closed, a
+  single ECONNRESET retry that preserves the original deadline, and the
+  4096-byte record bound, using the existing rustix ancillary graph. Full
+  pipeline passed.
+- `4c029f0` added the shared authenticated exit vocabulary (`target_exit`):
+  the pinned journal serialization shape and a Linux wait-status decoder that
+  refuses stopped/continued targets, validates the real-time signal range
+  and preserves core-dump information. Full pipeline passed.
+- The installer crate (`agentswapper-linux-install`) and its hosted lifecycle
+  remain qualified at `c9218d6` (see the second continuation note).
+
+Next implementation work: the three production helper entry points built on
+the now-shared runtime pieces (activation packets, target exit, fresh entry,
+launch envelope, admission transport), then the CLI/doctor surface, the
+launch-plan/Store composition and authenticated restart recovery.
