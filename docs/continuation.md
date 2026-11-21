@@ -71,3 +71,62 @@ to defer requesting disposable test profiles until all provider-free work is
 finished. Do not ask for credentials or run real-provider qualification now.
 Continue using conventional commits, Apache-2.0 and the existing AgentSwapper
 name/`aswp` command. Preserve the accepted README artwork and theme.
+
+# Resume session: 2026-11-20
+
+Resumed autonomously after the 2026-11-03 shutdown. Progress since `a61b90f`,
+all on `main` with CI evidence where noted:
+
+- `9eb75d4` fixed the `80df3ed` rustfmt regression that failed run
+  [41670414526](https://github.com/shahzadlone/agent-swapper/actions/runs/41670414526);
+  the complete pipeline passed at `9eb75d4`
+  ([44856598355](https://github.com/shahzadlone/agent-swapper/actions/runs/44856598355)).
+  The earlier failing steps were diagnosed locally: workspace format was the
+  only real regression; the transport-baseline refusal on the developer
+  machine is the inherited `CAP_WAKE_ALARM` bit, not a code defect.
+- `16c4180` added the four deterministic endpoint race phases (`pinned`,
+  `replaced`, `validated`, `connected`) with a third qualification barrier
+  between pathname validation and connect, plus pathname-replacement
+  coverage. The first replacement helper renamed the retained inode aside,
+  which bumps its ctime and refused on the retained-fd stamp before the
+  pathname comparison could run (native failure in run 44857838695).
+- `56ae933` replaced that helper with a root bind-mounted live impostor
+  socket with identical metadata; the retained inode and its metadata stay
+  untouched. All four phases passed natively on both Ubuntu images in
+  [44858871208](https://github.com/shahzadlone/agent-swapper/actions/runs/44858871208),
+  recorded in [socket policy](linux-socket-policy.md).
+- `f785e68` landed the socket-race audit follow-up: stranded-impostor
+  cleanup, instantaneous-mapping and deadline-ordering comments, and the
+  structural byte-freedom and initial-namespace peer-credential notes.
+- `211f252` added the producer-side installation transaction
+  (`agentswapper-linux-runtime::install_plan`): fixed layout parity with the
+  installed readers, deterministic unit texts matching the loaded socket
+  policy, manifest/selector serialization, atomic same-directory staging with
+  single-link verification, selector replacement and full rollback. Passed
+  full CI at `211f252`. Executing the plan with privilege and
+  install/upgrade/removal tests remain open gates.
+- `97d572b` moved the manager snapshot validation into the runtime crate
+  (`manager_snapshot`) without the uuid dependency; core keeps a
+  compatibility re-export. Passed full CI at `97d572b`.
+- `2160779`/`9581ac4` added the production fresh-entry bootstrap
+  (`agentswapper_linux_runtime::fresh_entry`): queued original stdin with
+  in-band terminal identity over a private sequenced-packet socket, exec
+  thread teardown, failed-exec restoration, and peer/identity/rights
+  refusals. Qualification of the composed entry remains open.
+
+Independent audits this session: the Linux origin crate (audit-sol,
+APPROVE-WITH-NOTES, no code defects; local CAP_WAKE_ALARM notes recorded) and
+the 6bde1d1/80df3ed socket hardening (general-purpose; medium findings
+closed by the new phases). The required independent review of exec-held
+journal ordering, queued exits and the surviving owner is in progress;
+its findings must be addressed before any production launcher promotion.
+
+A pre-existing flake was observed twice in
+`admission_transport::tests::socket_reset_is_not_attributed_to_a_queued_record`
+(clean EOF observed instead of the reset refusal); not reproduced in
+isolation and not yet diagnosed. Watch CI.
+
+Next implementation work: address the journal-composition review findings,
+then the installer executor with install/upgrade/removal tests, then
+production helper entry composition. Do not enable production managed launch
+from any of this; gates live in [production integration](linux-production-integration.md).
