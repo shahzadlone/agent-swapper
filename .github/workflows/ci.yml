@@ -368,8 +368,8 @@ jobs:
           admin="$PWD/target/debug/examples/install_admin"
           verify="$PWD/target/debug/examples/install_verify"
           uid=$(id -u); gid=$(id -g)
-          gen_a=33445566778899aabbccddeeff00112233
-          gen_b=445566778899aabbccddeeff0011223344
+          gen_a=33445566778899aabbccddeeff001122
+          gen_b=445566778899aabbccddeeff00112233
           cleanup() { sudo -n "$admin" deactivate "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" deactivate "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n rm -rf -- "/run/agentswapper/$uid" "/etc/agentswapper" "/usr/libexec/agentswapper" "/etc/systemd/system/agentswapper-$uid-$gen_a.socket" "/etc/systemd/system/agentswapper-$uid-$gen_a@.service" "/etc/systemd/system/agentswapper-$uid-$gen_b.socket" "/etc/systemd/system/agentswapper-$uid-$gen_b@.service"; sudo -n systemctl daemon-reload; }
           trap cleanup EXIT
           sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$eval" "$eval" "$eval"
