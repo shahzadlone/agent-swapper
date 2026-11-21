@@ -100,7 +100,12 @@ only the selector. It must keep old generations while admitted runs retain them,
 and must not hardlink-deduplicate, chmod, chown, touch or rewrite active assets.
 Root can revoke availability by changing these files; this is not an immutability
 or revocation protocol. Safe installation, update, rollback, removal and restart
-recovery still require their own implementation and evidence.
+recovery still require their own implementation and evidence. The producer-side
+transaction logic now exists in the runtime crate (`install_plan`): it derives
+the fixed layout, generates the deterministic unit texts and manifest, and
+stages files with same-directory atomic renames and full rollback while refusing
+to overwrite any existing generation file. Executing the plan with privilege,
+service control, and install/upgrade/removal tests remain open gates.
 
 The admitted installation retains the same thread-bound origin even after the
 selector is released. Artifact revalidation checks origin before and after file
