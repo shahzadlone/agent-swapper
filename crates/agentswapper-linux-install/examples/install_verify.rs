@@ -1,5 +1,6 @@
 //! Ordinary-caller verification entry. Prints the observed socket fact as
 //! JSON diagnostics; it never connects to the endpoint or starts a guardian.
+#![cfg(target_os = "linux")]
 use agentswapper_linux_install::executor;
 use std::{io, process};
 

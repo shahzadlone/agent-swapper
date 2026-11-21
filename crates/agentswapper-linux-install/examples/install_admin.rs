@@ -1,6 +1,7 @@
 //! Fixed administrator entry for one disposable installation lifecycle.
 //! Arguments are validated identity and generation values plus image paths;
 //! no other caller data reaches a command or a manifest.
+#![cfg(target_os = "linux")]
 use agentswapper_linux_install::{control::Systemd, executor};
 use std::{path::PathBuf, process};
 
