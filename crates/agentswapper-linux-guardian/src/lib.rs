@@ -35,7 +35,6 @@ mod linux {
         match identity {
             (Some("agentswapper"), Some(user), Some(generation), None) => {
                 let user: u32 = user.parse().map_err(|_| invalid())?;
-                let group: u32 = user;
                 let valid_user = user != 0 && user <= i32::MAX as u32;
                 let valid_generation = generation.len() == 32
                     && generation
