@@ -353,7 +353,7 @@ jobs:
         timeout-minutes: 2
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example install_transaction
-          root_dir=$(sudo -n mktemp -d /run/aswp-install-tx-XXXXXXXX)
+          root_dir=$(sudo -n mktemp -d /var/lib/aswp-install-tx-XXXXXXXX)
           sudo -n "$PWD/tools/linux-manager-evaluation/target/debug/examples/install_transaction" \
             "$root_dir" 00112233445566778899aabbccddeeff 112233445566778899aabbccddeeff00 2233445566778899aabbccddeeff0011
           sudo -n rm -rf -- "$root_dir"
