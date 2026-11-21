@@ -8,12 +8,23 @@ fn main() -> process::ExitCode {
     {
         use agentswapper_linux_install::{control::Systemd, executor};
         use std::path::PathBuf;
+
+        fn parse(user: &str, group: &str) -> std::io::Result<(u32, u32)> {
+            let user: u32 = user
+                .parse()
+                .map_err(|_| std::io::Error::other("invalid user"))?;
+            let group: u32 = group
+                .parse()
+                .map_err(|_| std::io::Error::other("invalid group"))?;
+            Ok((user, group))
+        }
+
         let args: Vec<String> = std::env::args().skip(1).collect();
         let result = match args.as_slice() {
             [verb, user, group, generation, images @ ..]
                 if images.len() == 3 && verb == "install" =>
             {
-                parse(user, group, generation)
+                parse(user, group)
                     .and_then(|(user, group)| {
                         let images: [PathBuf; 3] = images
                             .iter()
@@ -32,7 +43,7 @@ fn main() -> process::ExitCode {
                     .map(|layout| format!("installed {}", layout.unit_stem()))
             }
             [verb, user, group, generation] if verb == "remove" || verb == "deactivate" => {
-                parse(user, group, generation)
+                parse(user, group)
                     .and_then(|(user, group)| {
                         if verb == "remove" {
                             executor::remove(&Systemd, user, group, generation)
@@ -73,14 +84,4 @@ fn main() -> process::ExitCode {
     {
         process::ExitCode::SUCCESS
     }
-}
-
-fn parse(user: &str, group: &str, _generation: &str) -> std::io::Result<(u32, u32)> {
-    let user: u32 = user
-        .parse()
-        .map_err(|_| std::io::Error::other("invalid user"))?;
-    let group: u32 = group
-        .parse()
-        .map_err(|_| std::io::Error::other("invalid group"))?;
-    Ok((user, group))
 }
