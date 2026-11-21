@@ -179,7 +179,10 @@ impl Layout {
              MaxConnections=4\n\
              TriggerLimitIntervalSec=30s\n\
              TriggerLimitBurst=56\n\
-             RemoveOnStop=yes\n",
+             RemoveOnStop=yes\n\
+             \n\
+             [Install]\n\
+             WantedBy=sockets.target\n",
             self.user,
             self.generation,
             self.endpoint().display(),
@@ -553,7 +556,10 @@ mod tests {
                  MaxConnections=4\n\
                  TriggerLimitIntervalSec=30s\n\
                  TriggerLimitBurst=56\n\
-                 RemoveOnStop=yes\n"
+                 RemoveOnStop=yes\n\
+                 \n\
+                 [Install]\n\
+                 WantedBy=sockets.target\n"
             )
         );
         let template = layout.service_template_text();

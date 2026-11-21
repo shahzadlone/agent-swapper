@@ -273,7 +273,7 @@ pub fn receive_number_until(
     })
 }
 
-fn with_deadline<T>(
+pub(crate) fn with_deadline<T>(
     socket: impl AsFd,
     deadline: Instant,
     mut operation: impl FnMut() -> io::Result<T>,

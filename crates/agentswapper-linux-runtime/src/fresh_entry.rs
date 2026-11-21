@@ -105,6 +105,12 @@ impl FreshEntry {
     /// input. Exec tears down every other thread; a failed exec restores the
     /// retained original input and never starts an owner.
     pub fn exec(mut self, command: &mut Command) -> io::Result<()> {
+        for (key, _) in command.get_envs() {
+            require(
+                key.to_str().is_some_and(|name| !name.starts_with("LD_")),
+                "fresh entry refuses loader environment overrides",
+            )?;
+        }
         let receiver = self
             .receiver
             .take()
@@ -115,10 +121,15 @@ impl FreshEntry {
         let (hold, release) = std::sync::mpsc::channel::<()>();
         let worker = std::thread::spawn(move || release.recv());
         let result = (|| {
-            let error = command.exec();
             // exec can fail after its stdio changes. Restore the retained
-            // original input before returning the failure.
-            dup2_stdin(&self.original)?;
+            // original input before returning the failure, and report a lost
+            // restoration without discarding the exec error itself.
+            let error = command.exec();
+            if let Err(restore) = dup2_stdin(&self.original) {
+                return Err(io::Error::other(format!(
+                    "fresh entry exec failed: {error}; restoring original input: {restore}"
+                )));
+            }
             Err(error)
         })();
         drop(hold);
@@ -144,6 +155,10 @@ pub fn assume() -> io::Result<()> {
 /// changing the process standard input. The peer must be this very process:
 /// the socketpair was created before exec and the process identity survives it.
 fn bootstrap(gate: impl AsFd) -> io::Result<OwnedFd> {
+    require(
+        std::env::var_os("ASWP_ENTRY_UNTRUSTED_CANARY").is_none(),
+        "unexpected helper environment",
+    )?;
     let peer = socket_peercred(&gate)?;
     require(
         peer.pid == rustix::process::getpid()
@@ -152,7 +167,8 @@ fn bootstrap(gate: impl AsFd) -> io::Result<OwnedFd> {
         "bootstrap did not originate in this process",
     )?;
     let mut bytes = [0_u8; 32];
-    let packet = receive_data(&gate, &mut bytes)?;
+    let count = transport::with_deadline(&gate, deadline(), || receive_data(&gate, &mut bytes))?;
+    let packet = &bytes[..count];
     require(
         packet.len() == BOOTSTRAP.len() + 24 && packet.starts_with(BOOTSTRAP),
         "bootstrap identity packet is invalid",
@@ -164,11 +180,43 @@ fn bootstrap(gate: impl AsFd) -> io::Result<OwnedFd> {
         TerminalIdentity::of(&input)? == identity,
         "bootstrap input is not the retained terminal",
     )?;
+    // Every queued record is now consumed; a trailing record, even one
+    // carrying capabilities, refuses the bootstrap outright.
+    require(
+        no_pending_record(&gate)?,
+        "unexpected trailing bootstrap record",
+    )?;
     Ok(input)
 }
 
+/// True when the socket holds no further readable record or capability.
+fn no_pending_record(socket: impl AsFd) -> io::Result<bool> {
+    let mut bytes = [0_u8; 1];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+    let received = match rustix::net::recvmsg(
+        &socket,
+        &mut [IoSliceMut::new(&mut bytes)],
+        &mut ancillary,
+        RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+    ) {
+        Err(rustix::io::Errno::AGAIN) => return Ok(true),
+        Err(rustix::io::Errno::CONNRESET) => return Ok(true),
+        Err(error) => return Err(error.into()),
+        Ok(received) => received,
+    };
+    let mut unexpected = false;
+    for message in ancillary.drain() {
+        unexpected = true;
+        if let RecvAncillaryMessage::ScmRights(rights) = message {
+            drop(rights.collect::<Vec<OwnedFd>>());
+        }
+    }
+    Ok(!unexpected && received.bytes == 0)
+}
+
 /// Receive one bounded data record with no transferred capabilities.
-fn receive_data(socket: impl AsFd, buffer: &mut [u8; 32]) -> io::Result<&[u8]> {
+fn receive_data(socket: impl AsFd, buffer: &mut [u8; 32]) -> io::Result<usize> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
     let mut ancillary = RecvAncillaryBuffer::new(&mut space);
     let received = rustix::net::recvmsg(
@@ -191,7 +239,7 @@ fn receive_data(socket: impl AsFd, buffer: &mut [u8; 32]) -> io::Result<&[u8]> {
                 .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC),
         "unexpected bootstrap record",
     )?;
-    Ok(&buffer[..received.bytes])
+    Ok(received.bytes)
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -285,5 +333,114 @@ mod tests {
             TerminalIdentity::from_bytes(&identity.bytes()),
             Some(identity)
         );
+    }
+
+    #[test]
+    #[ignore = "composition role; spawned by fresh_entry_self_exec_composition"]
+    fn fresh_entry_owner_role() -> io::Result<()> {
+        if std::env::var_os("ASWP_FRESH_ENTRY_ROLE").as_deref()
+            != Some(std::ffi::OsStr::new("owner"))
+        {
+            return Err(io::Error::other(
+                "owner role requires its bootstrap environment",
+            ));
+        }
+        let result = assume();
+        if std::env::var_os("ASWP_ENTRY_UNTRUSTED_CANARY").is_some() {
+            // The fresh image must refuse untrusted helper environment.
+            require(
+                result.is_err(),
+                "fresh owner accepted untrusted helper environment",
+            )?;
+            println!("FRESH-CANARY-REFUSED");
+            return Ok(());
+        }
+        let () = result?;
+        let expected = std::env::var("ASWP_FRESH_ENTRY_MARKER")
+            .map_err(|_| io::Error::other("owner role lacks its marker"))?;
+        let mut marker = [0_u8; 8];
+        let count = rustix::io::read(io::stdin(), &mut marker)?;
+        require(
+            count == expected.len() && &marker[..count] == expected.as_bytes(),
+            "fresh owner did not receive the retained input",
+        )?;
+        let pid: u32 = std::env::var("ASWP_FRESH_ENTRY_PID")
+            .map_err(|_| io::Error::other("owner role lacks its expected process"))?
+            .parse()
+            .map_err(|_| io::Error::other("invalid expected process identity"))?;
+        let group: i32 = std::env::var("ASWP_FRESH_ENTRY_GROUP")
+            .map_err(|_| io::Error::other("owner role lacks its expected group"))?
+            .parse()
+            .map_err(|_| io::Error::other("invalid expected group identity"))?;
+        require(
+            std::process::id() == pid && rustix::process::getpgrp().as_raw_pid() == group,
+            "fresh owner lost its original shell job identity",
+        )?;
+        println!("FRESH-OK");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "composition role; spawned by fresh_entry_self_exec_composition"]
+    fn fresh_entry_child_role() -> io::Result<()> {
+        if std::env::var_os("ASWP_FRESH_ENTRY_ROLE").as_deref()
+            != Some(std::ffi::OsStr::new("child"))
+        {
+            return Err(io::Error::other(
+                "child role requires its bootstrap environment",
+            ));
+        }
+        let entry = FreshEntry::prepare()?;
+        let mut command = Command::new(std::env::current_exe()?);
+        command.args([
+            "--exact",
+            "fresh_entry::tests::fresh_entry_owner_role",
+            "--ignored",
+            "--test-threads=1",
+            "--nocapture",
+        ]);
+        command.env("ASWP_FRESH_ENTRY_ROLE", "owner");
+        command.env("ASWP_FRESH_ENTRY_MARKER", "MARKER12");
+        command.env("ASWP_FRESH_ENTRY_PID", std::process::id().to_string());
+        command.env(
+            "ASWP_FRESH_ENTRY_GROUP",
+            rustix::process::getpgrp().as_raw_pid().to_string(),
+        );
+        entry.exec(&mut command)?;
+        Err(io::Error::other("fresh entry exec returned unexpectedly"))
+    }
+
+    #[test]
+    fn fresh_entry_self_exec_composition() -> io::Result<()> {
+        let mut child = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "fresh_entry::tests::fresh_entry_child_role",
+                "--ignored",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("ASWP_FRESH_ENTRY_ROLE", "child")
+            .spawn()?;
+        {
+            let Some(mut stdin) = child.stdin.take() else {
+                return Err(io::Error::other("child role lacks a piped input"));
+            };
+            stdin.write_all(b"MARKER12")?;
+        }
+        let output = child.wait_with_output()?;
+        require(
+            output.status.success(),
+            "fresh entry composition child failed",
+        )?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        require(
+            text.contains("FRESH-OK"),
+            "fresh owner did not report success",
+        )?;
+        Ok(())
     }
 }

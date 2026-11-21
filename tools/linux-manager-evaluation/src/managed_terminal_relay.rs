@@ -45,6 +45,25 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
 
 /// Qualification journal boundary. Implementations may confirm durable intent
 /// and spawn observation, but cannot manufacture production custody receipts.
+///
+/// Mandatory semantics every implementation and production adapter must
+/// satisfy, and which the relay composes on:
+/// - `open` must create or attach the durable lease before any preparation
+///   step runs; a preparation must never precede a durably owned lease.
+/// - `bind_scope` must durably associate the original service key before the
+///   caller can request a GO, and must refuse a second binding.
+/// - `confirm_intent` must commit the durable run intent synchronously while
+///   the exec is held, before the caller releases it; its `Ok(())` is the
+///   only release authority the relay receives from this seam.
+/// - `observe_spawn` must durably record the spawn observation before the
+///   caller acknowledges the prepared launch; an uncertain write is an
+///   error, never a silent success.
+/// - `release_lease` drops local lease custody only; it never completes a
+///   run, clears durable intent, or manufactures retirement evidence.
+/// - `audit_retired` accepts only an original opaque retirement value and
+///   must reject copies, substitutions and duplicates.
+/// A production adapter needs an independent review of these properties
+/// before any launcher enablement; fixture success alone does not qualify it.
 pub trait AdmissionJournal: Sized {
     fn open(directory: &Path) -> io::Result<Self>;
     fn lease(&self) -> io::Result<BorrowedFd<'_>>;
@@ -753,6 +772,11 @@ fn run<J: AdmissionJournal>(
     }
     match target_exit {
         Some(TargetExit::Code { code }) => Ok(code),
+        // Fixture convention: a native signal termination propagates as the
+        // shell convention 128 + signal, indistinguishable from an explicit
+        // exit code. The structured authenticated status is retained through
+        // cleanup; production must decide whether to reproduce native signal
+        // termination instead of this encoding.
         Some(TargetExit::Signal { signal, .. }) => Ok(128 + signal),
         None => {
             marker(
