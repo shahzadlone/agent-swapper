@@ -110,6 +110,19 @@ properties the socket policy validates (`Listen` `SequentialPacket` at the
 derived endpoint, numeric `SocketUser`/`SocketGroup`, `SocketMode` 0600,
 default `DirectoryMode` 0755, `RemoveOnStop` yes). Executing the plan with
 privilege, service control, and install/upgrade/removal tests remain open gates.
+The `agentswapper-linux-install` executor now performs that privileged part:
+root-side install stages a generation from three image files, ensures
+protected endpoint ancestry, activates it, reloads the manager and enables
+the derived socket unit through bounded argument-validated systemctl control;
+removal refuses the active selection and prunes exactly the generation's
+files; verification runs as the ordinary caller through the namespace origin,
+the installed readers and one authenticated manager observation. The hosted
+lifecycle (root install, ordinary verification, selector upgrade, inactive
+removal, active-removal refusal, deselect and removal) passed on both Ubuntu
+images at `c9218d6`
+([44930204914](https://github.com/shahzadlone/agent-swapper/actions/runs/44930204914)).
+The executor performs no launch and grants no execution permission; the three
+production helper images and the CLI/doctor surface remain open gates.
 
 The admitted installation retains the same thread-bound origin even after the
 selector is released. Artifact revalidation checks origin before and after file

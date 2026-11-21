@@ -161,3 +161,28 @@ Next implementation work: the three production helper images and their
 entry points, the installer executor and CLI/doctor surface, launch-plan/
 Store composition, and authenticated restart recovery. All enablement gates
 remain in [production integration](linux-production-integration.md).
+
+# Session continuation: 2026-11-21 (second)
+
+- `e0970d6`..`c9218d6` added the `agentswapper-linux-install` executor crate
+  and qualified it end to end on hosted systemd in
+  [44930204914](https://github.com/shahzadlone/agent-swapper/actions/runs/44930204914):
+  bounded argument-validated systemctl control, root install of real
+  generations at the fixed paths, ordinary-caller verification through the
+  namespace origin and authenticated manager transport, selector upgrade
+  observed by the reader, inactive removal, active-removal refusal, and
+  deselect-plus-removal restoring an unselected host. The executor performs
+  no launch. `deactivate` is the administrator's way out of the active-removal
+  refusal. The dependency boundary check now pins the install crate's default
+  graph.
+- CI lessons encoded in the workflow: installer scratch roots need protected
+  root-owned ancestry (not /tmp) and an executable non-nosuid filesystem (not
+  /run); generations are exactly 32 hex characters; the installer entry
+  examples keep unconditional `main` functions so non-Linux clippy stays
+  green; refusals surface as step annotations because anonymous CI log
+  access is gone (annotations via the checks API are the only readable
+  channel).
+
+Next implementation work: the three production helper images and entry
+points, the CLI/doctor surface for install/verify/removal, launch-plan/Store
+composition, and authenticated restart recovery.
