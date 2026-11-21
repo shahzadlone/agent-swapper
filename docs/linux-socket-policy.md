@@ -92,9 +92,10 @@ unprotected ancestry. The hosted fixture changes only its ordinary-owned socket
 to mode 0660 and requires the connection consumer to refuse before the accepted
 count or worker directory changes. It restores the original inode's mode on
 failure too; ordinary local controls exercise timeout, unexpected success and
-unexpected activation cleanup. Native endpoint and full composition results are
-pending. Production helper installation and actual launcher composition remain
-open gates.
+unexpected activation cleanup. Native endpoint results passed on both hosted
+Ubuntu images at `56ae933` ([44858871208](https://github.com/shahzadlone/agent-swapper/actions/runs/44858871208));
+full composition results are still pending. Production helper installation and
+actual launcher composition remain open gates.
 
 The connection-race control pauses after pinning the endpoint, after validating
 the retained inode against the endpoint pathname, and after checking the kernel
@@ -112,7 +113,8 @@ and retirement of any activated guardian. These barriers are absent from default
 builds and cannot skip production checks. The replacement controls need
 administrator-level pathname mutation because conforming ancestry is root-owned;
 they model a misbehaving privileged context, not an ordinary attacker. Native
-CI results remain pending.
+Ubuntu 22.04 and 24.04 suites passed all four controls at `56ae933` in
+[44858871208](https://github.com/shahzadlone/agent-swapper/actions/runs/44858871208).
 Configuration observations cannot promise stability under later administrator
 changes; admission must recheck at its actual boundaries.
 
