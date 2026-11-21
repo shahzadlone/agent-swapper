@@ -364,17 +364,24 @@ jobs:
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           cargo +1.98.0 build --locked -p agentswapper-linux-install --examples
+          cargo +1.98.0 build --locked -p agentswapper-linux-guardian
           eval="$PWD/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation"
           admin="$PWD/target/debug/examples/install_admin"
           verify="$PWD/target/debug/examples/install_verify"
+          guardian="$PWD/target/debug/agentswapper-linux-guardian"
           uid=$(id -u); gid=$(id -g)
           gen_a=33445566778899aabbccddeeff001122
           gen_b=445566778899aabbccddeeff00112233
           cleanup() { sudo -n "$admin" deactivate "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" deactivate "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n rm -rf -- "/run/agentswapper/$uid" "/etc/agentswapper" "/usr/libexec/agentswapper" "/etc/systemd/system/agentswapper-$uid-$gen_a.socket" "/etc/systemd/system/agentswapper-$uid-$gen_a@.service" "/etc/systemd/system/agentswapper-$uid-$gen_b.socket" "/etc/systemd/system/agentswapper-$uid-$gen_b@.service"; sudo -n systemctl daemon-reload; }
           trap cleanup EXIT
-          sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$eval" "$eval" "$eval"
+          sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$eval" "$eval" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_a.sock"
-          sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$eval" "$eval" "$eval"
+          # The installed guardian image must bind to its own running bytes
+          # and then refuse at the not-yet-enabled service protocol gate.
+          guardian_out=$("$guardian" "agentswapper-$uid-$gen_a@lifecycle.service" 2>&1; echo "x$?")
+          printf '%s\n' "$guardian_out" | grep -F "production guardian service protocol is not enabled"
+          printf '%s\n' "$guardian_out" | grep -qF "x125"
+          sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$eval" "$eval" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"
           sudo -n "$admin" remove "$uid" "$gid" "$gen_a"
           if sudo -n "$admin" remove "$uid" "$gid" "$gen_b"; then
