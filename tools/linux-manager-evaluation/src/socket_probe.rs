@@ -110,7 +110,7 @@ pub(crate) fn connection_race(prefix: &str, phase: &str) -> io::Result<()> {
                     .await;
                 // Close without sending even a handshake, whether the control
                 // refused correctly or a regression unexpectedly returned a socket.
-            let result = result.map(drop);
+                let result = result.map(drop);
                 let _ = connection.close().await;
                 result?;
                 Err::<(), _>(io::Error::other("changed endpoint was accepted"))
