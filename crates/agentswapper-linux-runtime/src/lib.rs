@@ -23,6 +23,8 @@ pub mod terminal;
 #[cfg(target_os = "linux")]
 pub mod scope_observation;
 #[cfg(target_os = "linux")]
+pub mod self_image;
+#[cfg(target_os = "linux")]
 pub mod target_exit;
 
 #[cfg(target_os = "linux")]

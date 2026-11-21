@@ -204,7 +204,7 @@ impl Layout {
              Restart=no\n\
              User={}\n\
              Group={}\n\
-             ExecStart={}\n\
+             ExecStart={} %n\n\
              StandardInput=socket\n\
              StandardOutput=socket\n\
              StandardError=journal\n\
@@ -565,7 +565,7 @@ mod tests {
         let template = layout.service_template_text();
         assert!(template.contains("User=1000\nGroup=1001\n"));
         assert!(template.contains(
-            "ExecStart=/usr/libexec/agentswapper/1000/00112233445566778899aabbccddeeff/guardian\n"
+            "ExecStart=/usr/libexec/agentswapper/1000/00112233445566778899aabbccddeeff/guardian %n\n"
         ));
         assert!(
             template
