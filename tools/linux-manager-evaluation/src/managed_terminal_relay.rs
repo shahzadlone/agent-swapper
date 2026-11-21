@@ -62,6 +62,7 @@ fn marker(directory: &Path, name: &str, value: &str) -> io::Result<()> {
 ///   run, clears durable intent, or manufactures retirement evidence.
 /// - `audit_retired` accepts only an original opaque retirement value and
 ///   must reject copies, substitutions and duplicates.
+///
 /// A production adapter needs an independent review of these properties
 /// before any launcher enablement; fixture success alone does not qualify it.
 pub trait AdmissionJournal: Sized {
