@@ -83,6 +83,8 @@ fn run(root: &Path, first: &str, second: &str, third: &str) -> io::Result<()> {
     )?;
 
     // Rollback: a staged but unactivated generation leaves nothing behind.
+    // Earlier generations' directories stay; only this transaction's files
+    // and its own new directories are removed.
     let discarded = Layout::for_qualification(root, user, group, third)?;
     let staged = discarded.stage(&assets(3))?;
     staged.rollback()?;
@@ -91,8 +93,12 @@ fn run(root: &Path, first: &str, second: &str, third: &str) -> io::Result<()> {
         "rolled-back staging left its guardian image behind",
     )?;
     require(
-        std::fs::symlink_metadata(root.join("usr/libexec/agentswapper")).is_err(),
-        "rolled-back staging left its directories behind",
+        std::fs::symlink_metadata(discarded.image("guardian").parent()).is_err(),
+        "rolled-back staging left its generation directory behind",
+    )?;
+    require(
+        std::fs::symlink_metadata(discarded.manifest()).is_err(),
+        "rolled-back staging left its manifest behind",
     )?;
 
     // Removal: deleting a generation's files leaves a dangling selector that
