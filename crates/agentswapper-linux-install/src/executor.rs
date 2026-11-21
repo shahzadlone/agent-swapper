@@ -87,6 +87,26 @@ pub fn remove(control: &impl Control, user: u32, group: u32, generation: &str) -
     remove_staged(&layout, control)
 }
 
+/// Deselect one generation: stop its socket unit and remove the selector,
+/// keeping every staged file. This is the administrator's way out of the
+/// active-generation removal refusal.
+pub fn deactivate(
+    control: &impl Control,
+    user: u32,
+    group: u32,
+    generation: &str,
+) -> io::Result<()> {
+    let layout = Layout::fixed(user, group, generation)?;
+    control.disable_now(&socket_unit(&layout))?;
+    control.reload()?;
+    match fs::symlink_metadata(layout.selector()) {
+        Ok(meta) => require(meta.is_file(), "the selector is not a regular file")?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    fs::remove_file(layout.selector())
+}
+
 fn refuse_active(layout: &Layout) -> io::Result<()> {
     let selector = layout.selector();
     let bytes = match fs::read(&selector) {

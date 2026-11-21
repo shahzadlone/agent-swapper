@@ -14,6 +14,7 @@ qualification = ["agentswapper-linux-runtime/qualification"]
 agentswapper-linux-manager = { path = "../agentswapper-linux-manager", version = "=0.1.0-dev" }
 agentswapper-linux-runtime = { path = "../agentswapper-linux-runtime", version = "=0.1.0-dev" }
 serde_json.workspace = true
+tokio = { version = "=1.54.1", default-features = false, features = ["rt", "time"] }
 wait-timeout = "0.2"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

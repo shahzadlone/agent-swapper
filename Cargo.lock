@@ -119,6 +119,7 @@ dependencies = [
  "agentswapper-linux-runtime",
  "serde_json",
  "tempfile",
+ "tokio",
  "wait-timeout",
 ]
 
