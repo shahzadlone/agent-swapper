@@ -39,6 +39,9 @@ pub mod installed_manifest;
 pub mod installed_selection;
 
 #[cfg(target_os = "linux")]
+pub mod manager_snapshot;
+
+#[cfg(target_os = "linux")]
 pub mod install_plan;
 #[cfg(target_os = "linux")]
 pub mod installed_socket;
