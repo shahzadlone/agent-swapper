@@ -1,9 +1,14 @@
 # Fresh managed CLI entry: integration candidate
 
-Status: proposed topology, not implemented. Runtime component qualification does
-not establish this composition. Start with explicit non-TUI `aswp run`; preserve
-the existing dashboard launch path until its return and stop behavior has an
-independent qualified design.
+Status: proposed topology, not implemented. The self-exec bootstrap mechanism
+now exists as a production-shape module in the shared runtime crate
+(`agentswapper_linux_runtime::fresh_entry`): it queues the original standard
+input with its in-band terminal identity on a private sequenced-packet socket,
+tears down held threads at exec, restores the original input on failed exec,
+and refuses foreign peers, identity mismatches and unexpected capabilities.
+That mechanism qualification does not establish this composition. Start with
+explicit non-TUI `aswp run`; preserve the existing dashboard launch path until
+its return and stop behavior has an independent qualified design.
 
 ## Preserve the shell's original job
 
