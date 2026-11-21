@@ -380,7 +380,10 @@ jobs:
           # and then refuse at the not-yet-enabled service protocol gate.
           guardian_out="$RUNNER_TEMP/aswp-guardian-control.out"
           guardian_code=0
-          "$guardian" "agentswapper-$uid-$gen_a@lifecycle.service" >"$guardian_out" 2>&1 || guardian_code=$?
+          # Run the INSTALLED image, not the build output: the entry must
+          # re-derive its own facts from the bytes that are actually running.
+          installed_guardian="/usr/libexec/agentswapper/$uid/$gen_a/guardian"
+          "$installed_guardian" "agentswapper-$uid-$gen_a@lifecycle.service" >"$guardian_out" 2>&1 || guardian_code=$?
           cat "$guardian_out"
           if [ "$guardian_code" != 125 ]; then
             echo "::error title=guardian control::unexpected guardian exit $guardian_code"
