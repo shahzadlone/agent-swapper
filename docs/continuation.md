@@ -130,3 +130,34 @@ Next implementation work: address the journal-composition review findings,
 then the installer executor with install/upgrade/removal tests, then
 production helper entry composition. Do not enable production managed launch
 from any of this; gates live in [production integration](linux-production-integration.md).
+
+# Session continuation: 2026-11-21
+
+- `38f4bbe` closed every finding from the two independent reviews of this
+  session: install_plan post-rename rollback tracking, atomic non-replace
+  links, created-directory fsync, the sockets.target install section and the
+  never-rollback committed-selector rule; fresh_entry loader-environment
+  refusal, untrusted-canary refusal, trailing-record refusal, bounded
+  identity receive and unmasked exec-error reporting; plus the
+  AdmissionJournal durability contract and the 128+signal fixture note.
+- The journal-composition independent review (audit-sol) returned
+  APPROVE-WITH-NOTES: exec-held ordering, queued-exit attribution, surviving
+  owner authority and retirement-value acceptance all pass; the notes are
+  addressed. This satisfies the required independent source review for the
+  fixture composition; a production adapter still needs its own review.
+- `9bb91d7`..`dfdf831` added the disposable install/upgrade/removal
+  transaction exercise and qualified it natively on both Ubuntu images in
+  [44909060150](https://github.com/shahzadlone/agent-swapper/actions/runs/44909060150):
+  staging cross-validated through the installed readers at the derived fixed
+  paths, overwrite refusal, atomic selector upgrade with old-generation
+  retention, full rollback, dangling-selector refusal after removal and
+  fresh-inode re-installation. Two CI-step environment lessons: the scratch
+  root needs protected root-owned ancestry (not /tmp) and an executable,
+  non-nosuid filesystem (not /run); refusals now surface as step annotations.
+- The composition test for fresh entry exercises prepare → exec → assume
+  with PID/group preservation, marker input delivery and canary refusal.
+
+Next implementation work: the three production helper images and their
+entry points, the installer executor and CLI/doctor surface, launch-plan/
+Store composition, and authenticated restart recovery. All enablement gates
+remain in [production integration](linux-production-integration.md).
