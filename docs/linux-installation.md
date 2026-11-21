@@ -104,8 +104,12 @@ recovery still require their own implementation and evidence. The producer-side
 transaction logic now exists in the runtime crate (`install_plan`): it derives
 the fixed layout, generates the deterministic unit texts and manifest, and
 stages files with same-directory atomic renames and full rollback while refusing
-to overwrite any existing generation file. Executing the plan with privilege,
-service control, and install/upgrade/removal tests remain open gates.
+to overwrite any existing generation file. The generated socket-unit text was
+verified against a real systemd user manager: it reports exactly the loaded
+properties the socket policy validates (`Listen` `SequentialPacket` at the
+derived endpoint, numeric `SocketUser`/`SocketGroup`, `SocketMode` 0600,
+default `DirectoryMode` 0755, `RemoveOnStop` yes). Executing the plan with
+privilege, service control, and install/upgrade/removal tests remain open gates.
 
 The admitted installation retains the same thread-bound origin even after the
 selector is released. Artifact revalidation checks origin before and after file
