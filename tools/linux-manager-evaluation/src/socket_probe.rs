@@ -75,7 +75,7 @@ pub(crate) fn run(prefix: &str, hold: bool) -> io::Result<()> {
 pub(crate) fn connection_race(prefix: &str, phase: &str) -> io::Result<()> {
     fixture_policy::gate(prefix)?;
     crate::require(
-        matches!(phase, "before" | "after"),
+        matches!(phase, "pinned" | "replaced" | "validated" | "connected"),
         "invalid endpoint race phase",
     )?;
     let selection = fixture_policy::selected_installation(prefix)?;
@@ -93,14 +93,21 @@ pub(crate) fn connection_race(prefix: &str, phase: &str) -> io::Result<()> {
                     .connect_endpoint_with_checkpoints_for_qualification(
                         &connection,
                         || {
-                            if phase == "before" {
+                            if phase == "pinned" || phase == "replaced" {
                                 checkpoint()
                             } else {
                                 Ok(())
                             }
                         },
                         || {
-                            if phase == "after" {
+                            if phase == "validated" {
+                                checkpoint()
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        || {
+                            if phase == "connected" {
                                 checkpoint()
                             } else {
                                 Ok(())

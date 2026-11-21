@@ -741,15 +741,82 @@ def socket_permissions_control(observer, prefix, directory, environment):
           'accepted count unchanged; original inode and mode restored', flush=True)
 
 
-def endpoint_race_result(returncode, stdout, stderr):
+RACE_DIAGNOSTICS = {
+    'pinned': b'installed socket changed during connection',
+    'replaced': b'socket path no longer names the retained endpoint',
+    'validated': b'activation listener is not the system manager',
+    'connected': b'installed socket changed during connection',
+}
+RACE_CONNECTIONS = {'pinned': 0, 'replaced': 0, 'validated': 0, 'connected': 1}
+
+
+def endpoint_race_result(returncode, stdout, stderr, diagnostic):
     require(returncode == 125 and not stdout and stderr ==
-            b'endpoint race refused: installed socket changed during connection\n',
+            b'endpoint race refused: ' + diagnostic + b'\n',
             'endpoint race missed its intended refusal: ' + stderr.decode(errors='replace')[-2000:])
+
+
+REPLACEMENT_SCRIPT = (
+    'import os,socket,sys\n'
+    'path,moved,uid,gid=sys.argv[1],sys.argv[2],int(sys.argv[3]),int(sys.argv[4])\n'
+    'os.rename(path,moved)\n'
+    'listener=socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET)\n'
+    'listener.bind(path)\n'
+    'listener.listen(4)\n'
+    'os.chown(path,uid,gid)\n'
+    'os.chmod(path,0o600)\n'
+    'print("replaced",flush=True)\n'
+    'sys.stdin.buffer.read(1)\n'
+    'listener.close()\n'
+    'os.unlink(path)\n'
+    'os.rename(moved,path)\n'
+    'print("restored",flush=True)\n'
+)
+
+
+def replace_endpoint_with_listener(path, moved, identity, environment):
+    """Hold a live ordinary-owned impostor socket on the endpoint pathname.
+
+    The retained inode stays alive and unchanged under its renamed name while
+    the impostor owns the path with identical metadata. Restoring is explicit:
+    the caller must stop the helper before any inode assertion.
+    """
+    helper = subprocess.Popen(
+        ['sudo', '-n', '--preserve-env=' + PRESERVE, '/usr/bin/python3', '-I', '-B', '-S', '-c',
+         REPLACEMENT_SCRIPT, str(path), str(moved), str(identity[0]), str(identity[1])],
+        env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        ready, _, _ = select.select([helper.stdout], [], [], 8)
+        require(bool(ready) and helper.stdout.readline(16) == b'replaced\n',
+                'endpoint replacement helper did not take the pathname')
+    except BaseException:
+        stop_endpoint_replacement(helper)
+        raise
+    return helper
+
+
+def stop_endpoint_replacement(helper):
+    """Release the impostor listener and require the retained inode back."""
+    try:
+        helper.stdin.write(b'R')
+        helper.stdin.flush()
+        ready, _, _ = select.select([helper.stdout], [], [], 8)
+        require(bool(ready) and helper.stdout.readline(16) == b'restored\n',
+                'endpoint replacement helper did not restore the pathname')
+        stderr = helper.communicate(timeout=8)[1]
+        require(helper.returncode == 0 and not stderr,
+                'endpoint replacement helper failed to exit cleanly: '
+                + stderr.decode(errors='replace')[-500:])
+    finally:
+        if helper.poll() is None:
+            helper.kill()
+            helper.communicate(timeout=5)
 
 
 def socket_connection_races(observer, prefix, directory, environment):
     path = endpoint(prefix)
-    for phase in ('before', 'after'):
+    moved = path.with_name(path.name + '.retained')
+    for phase in ('pinned', 'replaced', 'validated', 'connected'):
         original = path.lstat()
         require(stat.S_ISSOCK(original.st_mode) and original.st_uid == os.getuid()
                 and original.st_gid == os.getgid() and stat.S_IMODE(original.st_mode) == 0o600,
@@ -757,33 +824,40 @@ def socket_connection_races(observer, prefix, directory, environment):
         before = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
         require(before['NConnections'] == '0' and re.fullmatch(r'[0-9]{1,20}', before['NAccepted']),
                 'endpoint race requires an idle activation socket')
+        replacement = None
         with subprocess.Popen([observer, '--activation-endpoint-race', prefix, phase], env=environment,
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
             try:
                 ready, _, _ = select.select([child.stdout], [], [], 8)
                 require(bool(ready) and child.stdout.readline(128) == b'socket: held\n',
                         'endpoint observer did not reach its connection checkpoint')
-                os.chmod(path, 0o660, follow_symlinks=False)
+                if phase in ('replaced', 'validated'):
+                    replacement = replace_endpoint_with_listener(
+                        path, moved, (os.getuid(), os.getgid()), environment)
+                else:
+                    os.chmod(path, 0o660, follow_symlinks=False)
                 stdout, stderr = child.communicate(b'R', timeout=10)
-                endpoint_race_result(child.returncode, stdout, stderr)
+                endpoint_race_result(child.returncode, stdout, stderr, RACE_DIAGNOSTICS[phase])
             finally:
                 if child.poll() is None:
                     child.kill()
                     child.communicate(timeout=5)
+                if replacement is not None:
+                    stop_endpoint_replacement(replacement)
                 current = path.lstat()
                 require((current.st_dev, current.st_ino) == (original.st_dev, original.st_ino),
                         'endpoint race will not restore a different inode')
                 os.chmod(path, 0o600, follow_symlinks=False)
         wait_for(lambda: unit_properties(prefix + '.socket', ('NConnections',))['NConnections'] == '0', seconds=5)
         after = unit_properties(prefix + '.socket', ('NAccepted', 'NConnections'))
-        require(int(after['NAccepted']) == int(before['NAccepted']) + int(phase == 'after')
+        require(int(after['NAccepted']) == int(before['NAccepted']) + RACE_CONNECTIONS[phase]
                 and after['NConnections'] == '0' and not any(directory.iterdir())
                 and stat.S_IMODE(path.lstat().st_mode) == 0o600,
                 'endpoint race activated unexpected work or did not restore its socket')
         wait_for(lambda: not any(p.name.startswith(prefix + '@')
                                 for p in Path('/sys/fs/cgroup/system.slice').iterdir()), seconds=5)
-        print(f'::notice title=Linux endpoint race::{phase} connect: retained socket change refused; '
-              'original mode restored; no request or worker; owned activation retired', flush=True)
+        print(f'::notice title=Linux endpoint race::{phase} connect: endpoint change refused before any '
+              'request; original inode and mode restored; no worker; owned activation retired', flush=True)
 
 
 def suite():

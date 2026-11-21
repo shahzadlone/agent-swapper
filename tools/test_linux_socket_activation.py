@@ -225,13 +225,28 @@ class ActivationTests(unittest.TestCase):
                     effective.assert_not_called()
 
     def test_endpoint_race_requires_its_specific_retained_inode_refusal(self):
-        diagnostic = b'endpoint race refused: installed socket changed during connection\n'
-        probe.endpoint_race_result(125, b'', diagnostic)
-        for code, output, error in [(0, b'', diagnostic), (-9, b'', diagnostic), (125, b'extra', diagnostic),
-                                    (125, b'', b'endpoint race refused: unrelated failure\n'),
-                                    (125, b'', diagnostic + b'extra')]:
-            with self.subTest(code=code, output=output, error=error), self.assertRaisesRegex(RuntimeError, 'intended refusal'):
-                probe.endpoint_race_result(code, output, error)
+        for phase, diagnostic in probe.RACE_DIAGNOSTICS.items():
+            expected = b'endpoint race refused: ' + diagnostic + b'\n'
+            probe.endpoint_race_result(125, b'', expected, diagnostic)
+            for code, output, error in [(0, b'', expected), (-9, b'', expected), (125, b'extra', expected),
+                                        (125, b'', b'endpoint race refused: unrelated failure\n'),
+                                        (125, b'', expected + b'extra')]:
+                with self.subTest(phase=phase, code=code, output=output, error=error), \
+                        self.assertRaisesRegex(RuntimeError, 'intended refusal'):
+                    probe.endpoint_race_result(code, output, error, diagnostic)
+
+    def test_endpoint_race_plan_covers_both_connection_boundaries(self):
+        self.assertEqual(set(probe.RACE_DIAGNOSTICS), set(probe.RACE_CONNECTIONS))
+        self.assertEqual(set(probe.RACE_DIAGNOSTICS), {'pinned', 'replaced', 'validated', 'connected'})
+        self.assertEqual(probe.RACE_CONNECTIONS,
+                         {'pinned': 0, 'replaced': 0, 'validated': 0, 'connected': 1})
+        self.assertEqual(probe.RACE_DIAGNOSTICS['pinned'], b'installed socket changed during connection')
+        self.assertEqual(probe.RACE_DIAGNOSTICS['replaced'],
+                         b'socket path no longer names the retained endpoint')
+        self.assertEqual(probe.RACE_DIAGNOSTICS['validated'],
+                         b'activation listener is not the system manager')
+        self.assertEqual(probe.RACE_DIAGNOSTICS['connected'],
+                         b'installed socket changed during connection')
 
     def test_endpoint_control_restores_actual_socket_mode_after_failure(self):
         diagnostic = ('manager observation unavailable or refused: '

@@ -83,18 +83,25 @@ to mode 0660 and requires the connection consumer to refuse before the accepted
 count or worker directory changes. It restores the original inode's mode on
 failure too; ordinary local controls exercise timeout, unexpected success and
 unexpected activation cleanup. Native endpoint and full composition results are
-pending. Additional adversarial path replacement during connection, production
-helper installation and actual launcher composition remain open gates.
+pending. Production helper installation and actual launcher composition remain
+open gates.
 
-The connection-race control pauses after pinning the endpoint or after checking
-the kernel listener. The ordinary socket owner changes mode to 0660, then releases
-the observer. Both phases must refuse the specific retained-inode change before
-sending any bytes. The controller checks the accepted count (zero new connections
-before connect, exactly one after), restores the original inode's mode, and
-requires no worker artifacts and retirement of any activated guardian. These
-barriers are absent from default builds and cannot skip production checks.
-This control covers permission changes, not replacement of the pathname.
-Its native CI result remains pending.
+The connection-race control pauses after pinning the endpoint, after validating
+the retained inode against the endpoint pathname, and after checking the kernel
+listener. The pinned and connected controls change the owned socket's mode to
+0660; both must refuse the retained-inode change before sending any bytes. The
+replaced and validated controls rename the retained inode aside unchanged and
+hold a live ordinary listener with identical metadata on the endpoint pathname.
+Replacing before validation must refuse the renamed pathname before connecting;
+replacing after validation must connect to the impostor and refuse its kernel
+peer credentials, leaving the retained listener's accepted count unchanged. The
+controller checks the accepted count (zero new connections except exactly one in
+the connected control), restores the original inode and mode, and requires no
+worker artifacts and retirement of any activated guardian. These barriers are
+absent from default builds and cannot skip production checks. The replacement
+controls need administrator-level pathname mutation because conforming ancestry
+is root-owned; they model a misbehaving privileged context, not an ordinary
+attacker. Native CI results remain pending.
 Configuration observations cannot promise stability under later administrator
 changes; admission must recheck at its actual boundaries.
 

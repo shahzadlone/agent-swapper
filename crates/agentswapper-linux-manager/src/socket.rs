@@ -204,7 +204,7 @@ pub struct SocketFact {
 /// accepted guardian still needs independent message and service authentication.
 #[cfg_attr(
     not(feature = "qualification"),
-    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_manager::{LoadedSocket, Manager};\nasync fn checkpoint(socket: &LoadedSocket<'_>, manager: &Manager) {\n    let _ = socket.connect_endpoint_with_checkpoints_for_qualification(manager, || Ok(()), || Ok(())).await;\n}\n```"
+    doc = "\n```compile_fail,E0599\nuse agentswapper_linux_manager::{LoadedSocket, Manager};\nasync fn checkpoint(socket: &LoadedSocket<'_>, manager: &Manager) {\n    let _ = socket.connect_endpoint_with_checkpoints_for_qualification(manager, || Ok(()), || Ok(()), || Ok(())).await;\n}\n```"
 )]
 pub struct LoadedSocket<'a> {
     policy: SocketPolicy<'a>,
@@ -263,24 +263,30 @@ impl<'a> LoadedSocket<'a> {
     /// original service before any launch preparation. Listener credentials do
     /// not authenticate the process that later sends a packet on this socket.
     pub async fn connect_endpoint(&self, manager: &Manager) -> io::Result<OwnedFd> {
-        self.connect_checked(manager, || Ok(()), || Ok(())).await
+        self.connect_checked(manager, || Ok(()), || Ok(()), || Ok(()))
+            .await
     }
-    /// Fixed hosted barriers after pinning the endpoint and after authenticating
-    /// the connection. These do not skip any production check or send any bytes.
+    /// Fixed hosted barriers after pinning the endpoint, after validating the
+    /// retained inode against the endpoint path, and after authenticating the
+    /// kernel listener. These do not skip any production check or send any
+    /// bytes.
     #[cfg(feature = "qualification")]
     pub async fn connect_endpoint_with_checkpoints_for_qualification(
         &self,
         manager: &Manager,
-        before: impl FnOnce() -> io::Result<()>,
-        after: impl FnOnce() -> io::Result<()>,
+        pinned: impl FnOnce() -> io::Result<()>,
+        validated: impl FnOnce() -> io::Result<()>,
+        connected: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<OwnedFd> {
-        self.connect_checked(manager, before, after).await
+        self.connect_checked(manager, pinned, validated, connected)
+            .await
     }
     async fn connect_checked(
         &self,
         manager: &Manager,
-        before: impl FnOnce() -> io::Result<()>,
-        after: impl FnOnce() -> io::Result<()>,
+        pinned: impl FnOnce() -> io::Result<()>,
+        validated: impl FnOnce() -> io::Result<()>,
+        connected: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<OwnedFd> {
         bounded(async {
             self.recheck(manager).await?;
@@ -294,8 +300,12 @@ impl<'a> LoadedSocket<'a> {
                 None,
             )?;
             net::sockopt::set_socket_passcred(&socket, true)?;
-            before()?;
+            pinned()?;
             endpoint.require_current(path)?;
+            // The pathname can still be replaced after validation, so the
+            // kernel peer credentials below remain load bearing: a connect by
+            // path always targets whatever currently names the endpoint.
+            validated()?;
             // A nonblocking AF_UNIX backlog refusal remains a refusal; never
             // retry a partially established admission or send application data.
             net::connect(&socket, &SocketAddrUnix::new(path)?)?;
@@ -305,7 +315,7 @@ impl<'a> LoadedSocket<'a> {
                 peer.pid() == 1 && peer.uid() == 0 && peer.gid() == 0,
                 "activation listener is not the system manager",
             )?;
-            after()?;
+            connected()?;
             endpoint.require_current(path)?;
             self.recheck(manager).await?;
             endpoint.require_current(path)?;

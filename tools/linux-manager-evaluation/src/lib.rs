@@ -488,7 +488,7 @@ pub fn run_cli() {
             socket_probe::connection_race(&args[1], &args[2])
         } else {
             Err(io::Error::other(
-                "endpoint race requires PREFIX before|after",
+                "endpoint race requires PREFIX pinned|replaced|validated|connected",
             ))
         };
         if let Err(error) = result {
