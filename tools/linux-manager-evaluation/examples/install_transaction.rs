@@ -92,8 +92,13 @@ fn run(root: &Path, first: &str, second: &str, third: &str) -> io::Result<()> {
         std::fs::symlink_metadata(discarded.image("guardian")).is_err(),
         "rolled-back staging left its guardian image behind",
     )?;
+    let generation_directory = discarded
+        .image("guardian")
+        .parent()
+        .ok_or_else(|| io::Error::other("image path lacks a parent"))?
+        .to_path_buf();
     require(
-        std::fs::symlink_metadata(discarded.image("guardian").parent()).is_err(),
+        std::fs::symlink_metadata(&generation_directory).is_err(),
         "rolled-back staging left its generation directory behind",
     )?;
     require(
