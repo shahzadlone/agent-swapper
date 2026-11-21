@@ -757,33 +757,40 @@ def endpoint_race_result(returncode, stdout, stderr, diagnostic):
 
 
 REPLACEMENT_SCRIPT = (
-    'import os,socket,sys\n'
-    'path,moved,uid,gid=sys.argv[1],sys.argv[2],int(sys.argv[3]),int(sys.argv[4])\n'
-    'os.rename(path,moved)\n'
+    'import ctypes,os,socket,sys\n'
+    'path,impostor,uid,gid=sys.argv[1],sys.argv[2],int(sys.argv[3]),int(sys.argv[4])\n'
+    'libc=ctypes.CDLL(None,use_errno=True)\n'
+    'def fail(text):\n'
+    '    print(text,file=sys.stderr,flush=True)\n'
+    '    raise SystemExit(1)\n'
     'listener=socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET)\n'
-    'listener.bind(path)\n'
+    'listener.bind(impostor)\n'
     'listener.listen(4)\n'
-    'os.chown(path,uid,gid)\n'
-    'os.chmod(path,0o600)\n'
+    'os.chown(impostor,uid,gid)\n'
+    'os.chmod(impostor,0o600)\n'
+    'if libc.mount(impostor.encode(),path.encode(),None,4096,None)!=0:\n'
+    '    fail("impostor mount failed: "+os.strerror(ctypes.get_errno()))\n'
     'print("replaced",flush=True)\n'
     'sys.stdin.buffer.read(1)\n'
     'listener.close()\n'
-    'os.unlink(path)\n'
-    'os.rename(moved,path)\n'
+    'if libc.umount(path.encode())!=0:\n'
+    '    fail("impostor unmount failed: "+os.strerror(ctypes.get_errno()))\n'
+    'os.unlink(impostor)\n'
     'print("restored",flush=True)\n'
 )
 
 
-def replace_endpoint_with_listener(path, moved, identity, environment):
-    """Hold a live ordinary-owned impostor socket on the endpoint pathname.
+def replace_endpoint_with_listener(path, impostor, identity, environment):
+    """Hold a live ordinary-owned impostor socket over the endpoint pathname.
 
-    The retained inode stays alive and unchanged under its renamed name while
-    the impostor owns the path with identical metadata. Restoring is explicit:
-    the caller must stop the helper before any inode assertion.
+    A root bind mount covers the pathname, so the retained inode and every
+    byte of its metadata stay untouched while the impostor owns the resolved
+    path with identical metadata. Restoring is explicit: the caller must stop
+    the helper before any inode assertion.
     """
     helper = subprocess.Popen(
         ['sudo', '-n', '--preserve-env=' + PRESERVE, '/usr/bin/python3', '-I', '-B', '-S', '-c',
-         REPLACEMENT_SCRIPT, str(path), str(moved), str(identity[0]), str(identity[1])],
+         REPLACEMENT_SCRIPT, str(path), str(impostor), str(identity[0]), str(identity[1])],
         env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         ready, _, _ = select.select([helper.stdout], [], [], 8)
@@ -813,26 +820,30 @@ def stop_endpoint_replacement(helper):
             helper.communicate(timeout=5)
 
 
-def remove_stranded_replacement(moved):
-    """Refuse or remove a replacement name stranded by an interrupted helper."""
+def remove_stranded_replacement(path, impostor):
+    """Detach a stranded impostor mount and name left by an interrupted helper."""
+    script = (
+        'import ctypes,os,sys\n'
+        'libc=ctypes.CDLL(None,use_errno=True)\n'
+        'libc.umount(sys.argv[1].encode())\n'
+        'try:\n'
+        '    os.unlink(sys.argv[2])\n'
+        'except FileNotFoundError:\n'
+        '    pass\n'
+    )
+    subprocess.run(['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', '-c', script,
+                    str(path), str(impostor)], check=True, timeout=10)
     try:
-        moved.lstat()
+        impostor.lstat()
     except FileNotFoundError:
         return
-    subprocess.run(['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', '-c',
-                    'import os,sys\nos.unlink(sys.argv[1])\n', str(moved)],
-                   check=True, timeout=10)
-    try:
-        moved.lstat()
-    except FileNotFoundError:
-        return
-    raise RuntimeError('endpoint race could not remove its stranded replacement name')
+    raise RuntimeError('endpoint race could not remove its stranded impostor name')
 
 
 def socket_connection_races(observer, prefix, directory, environment):
     path = endpoint(prefix)
-    moved = path.with_name(path.name + '.retained')
-    remove_stranded_replacement(moved)
+    impostor = path.with_name(path.name + '.impostor')
+    remove_stranded_replacement(path, impostor)
     for phase in ('pinned', 'replaced', 'validated', 'connected'):
         original = path.lstat()
         require(stat.S_ISSOCK(original.st_mode) and original.st_uid == os.getuid()
@@ -850,7 +861,7 @@ def socket_connection_races(observer, prefix, directory, environment):
                         'endpoint observer did not reach its connection checkpoint')
                 if phase in ('replaced', 'validated'):
                     replacement = replace_endpoint_with_listener(
-                        path, moved, (os.getuid(), os.getgid()), environment)
+                        path, impostor, (os.getuid(), os.getgid()), environment)
                 else:
                     os.chmod(path, 0o660, follow_symlinks=False)
                 stdout, stderr = child.communicate(b'R', timeout=10)
@@ -862,11 +873,11 @@ def socket_connection_races(observer, prefix, directory, environment):
                 if replacement is not None:
                     stop_endpoint_replacement(replacement)
                     try:
-                        moved.lstat()
+                        impostor.lstat()
                     except FileNotFoundError:
                         pass
                     else:
-                        raise RuntimeError('endpoint replacement helper left its renamed inode behind')
+                        raise RuntimeError('endpoint replacement helper left its impostor name behind')
                 current = path.lstat()
                 require((current.st_dev, current.st_ino) == (original.st_dev, original.st_ino),
                         'endpoint race will not restore a different inode')

@@ -100,18 +100,19 @@ The connection-race control pauses after pinning the endpoint, after validating
 the retained inode against the endpoint pathname, and after checking the kernel
 listener. The pinned and connected controls change the owned socket's mode to
 0660; both must refuse the retained-inode change before sending any bytes. The
-replaced and validated controls rename the retained inode aside unchanged and
-hold a live ordinary listener with identical metadata on the endpoint pathname.
-Replacing before validation must refuse the renamed pathname before connecting;
-replacing after validation must connect to the impostor and refuse its kernel
-peer credentials, leaving the retained listener's accepted count unchanged. The
-controller checks the accepted count (zero new connections except exactly one in
-the connected control), restores the original inode and mode, and requires no
-worker artifacts and retirement of any activated guardian. These barriers are
-absent from default builds and cannot skip production checks. The replacement
-controls need administrator-level pathname mutation because conforming ancestry
-is root-owned; they model a misbehaving privileged context, not an ordinary
-attacker. Native CI results remain pending.
+replaced and validated controls cover the endpoint pathname with a bind-mounted
+live ordinary impostor socket with identical metadata, leaving the retained
+inode and every byte of its metadata untouched. Replacing before validation
+must refuse the covered pathname before connecting; replacing after validation
+must connect to the impostor and refuse its kernel peer credentials, leaving
+the retained listener's accepted count unchanged. The controller checks the
+accepted count (zero new connections except exactly one in the connected
+control), restores the original inode and mode, and requires no worker artifacts
+and retirement of any activated guardian. These barriers are absent from default
+builds and cannot skip production checks. The replacement controls need
+administrator-level pathname mutation because conforming ancestry is root-owned;
+they model a misbehaving privileged context, not an ordinary attacker. Native
+CI results remain pending.
 Configuration observations cannot promise stability under later administrator
 changes; admission must recheck at its actual boundaries.
 
