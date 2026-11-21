@@ -374,7 +374,7 @@ jobs:
           gen_b=445566778899aabbccddeeff00112233
           cleanup() { sudo -n "$admin" deactivate "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" deactivate "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n rm -rf -- "/run/agentswapper/$uid" "/etc/agentswapper" "/usr/libexec/agentswapper" "/etc/systemd/system/agentswapper-$uid-$gen_a.socket" "/etc/systemd/system/agentswapper-$uid-$gen_a@.service" "/etc/systemd/system/agentswapper-$uid-$gen_b.socket" "/etc/systemd/system/agentswapper-$uid-$gen_b@.service"; sudo -n systemctl daemon-reload; }
           trap cleanup EXIT
-          sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$eval" "$eval" "$guardian"
+          sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$guardian" "$eval" "$eval"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_a.sock"
           # The installed guardian image must bind to its own running bytes
           # and then refuse at the not-yet-enabled service protocol gate.
@@ -390,7 +390,7 @@ jobs:
             echo '::error title=guardian control::unexpected guardian refusal'
             exit 1
           }
-          sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$eval" "$eval" "$guardian"
+          sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$eval" "$eval"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"
           sudo -n "$admin" remove "$uid" "$gid" "$gen_a"
           if sudo -n "$admin" remove "$uid" "$gid" "$gen_b"; then
