@@ -389,9 +389,18 @@ mod tests {
         let (sender, receiver) = pair()?;
         send(&receiver, b"unread response", &[])?;
         drop(sender);
-        let error = eof(&receiver)
-            .err()
-            .ok_or_else(|| io::Error::other("reset accepted as EOF"))?;
+        // The close and its reset delivery propagate asynchronously; a single
+        // read can observe a not-yet-closed peer. Wait boundedly for the reset.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let error = loop {
+            match eof(&receiver) {
+                Err(error) => break error,
+                Ok(_) if Instant::now() >= deadline => {
+                    return Err(io::Error::other("reset accepted as EOF"));
+                }
+                Ok(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        };
         assert!(!is_record_refusal(&error));
         Ok(())
     }
