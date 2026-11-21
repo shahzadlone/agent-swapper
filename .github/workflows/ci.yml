@@ -378,9 +378,18 @@ jobs:
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_a.sock"
           # The installed guardian image must bind to its own running bytes
           # and then refuse at the not-yet-enabled service protocol gate.
-          guardian_out=$("$guardian" "agentswapper-$uid-$gen_a@lifecycle.service" 2>&1; echo "x$?")
-          printf '%s\n' "$guardian_out" | grep -F "production guardian service protocol is not enabled"
-          printf '%s\n' "$guardian_out" | grep -qF "x125"
+          guardian_out="$RUNNER_TEMP/aswp-guardian-control.out"
+          guardian_code=0
+          "$guardian" "agentswapper-$uid-$gen_a@lifecycle.service" >"$guardian_out" 2>&1 || guardian_code=$?
+          cat "$guardian_out"
+          if [ "$guardian_code" != 125 ]; then
+            echo "::error title=guardian control::unexpected guardian exit $guardian_code"
+            exit 1
+          fi
+          grep -q "production guardian service protocol is not enabled" "$guardian_out" || {
+            echo '::error title=guardian control::unexpected guardian refusal'
+            exit 1
+          }
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$eval" "$eval" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"
           sudo -n "$admin" remove "$uid" "$gid" "$gen_a"
