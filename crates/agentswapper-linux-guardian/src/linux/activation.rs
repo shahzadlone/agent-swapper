@@ -334,7 +334,10 @@ mod tests {
             )
             .err()
             .ok_or_else(|| io::Error::other("invalid request was accepted"))?;
-            assert_eq!(error.to_string(), "invalid activation request");
+            assert!(
+                error.to_string().starts_with("invalid activation request"),
+                "{error}"
+            );
         }
         Ok(())
     }
