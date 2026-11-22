@@ -418,6 +418,17 @@ jobs:
             echo '::error title=activation control::activated instance did not retire'
             exit 1
           }
+          # Production launch: the ordinary client launches a fixed disposable
+          # target through the installed guardian; the held exec releases on
+          # the client's exec release and the authenticated exit report names
+          # the target's real status. No provider command is ever accepted.
+          "$bind" "$uid" launch /bin/true || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
+          wait_for_instance_gone || {
+            echo '::error title=launch control::activated instance did not retire'
+            exit 1
+          }
+          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation and held-exec launch completed; no provider command'
+
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$eval" "$eval"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"
           sudo -n "$admin" remove "$uid" "$gid" "$gen_a"
@@ -431,16 +442,6 @@ jobs:
             echo '::error title=installation lifecycle::verification succeeded without a selection'
             exit 1
           fi
-          # Production launch: the ordinary client launches a fixed disposable
-          # target through the installed guardian; the held exec releases on
-          # the client's exec release and the authenticated exit report names
-          # the target's real status. No provider command is ever accepted.
-          "$bind" "$uid" launch /bin/true || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
-          wait_for_instance_gone || {
-            echo '::error title=launch control::activated instance did not retire'
-            exit 1
-          }
-          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation and held-exec launch completed; no provider command'
       - name: Evaluate fixed-user socket activation
         timeout-minutes: 6
         env:
