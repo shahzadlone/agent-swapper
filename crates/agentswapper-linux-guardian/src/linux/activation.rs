@@ -127,6 +127,7 @@ pub fn serve(
         valid_invocation(invocation),
         "invalid activation invocation",
     )?;
+    eprintln!("guardian: peer ok pid={} uid={}", peer.pid, peer.uid);
     let request = read_request(channel)?;
     let started = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
     let offer = Offer {
