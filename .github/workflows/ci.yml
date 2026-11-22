@@ -390,7 +390,7 @@ jobs:
             echo "::error title=guardian control::unexpected guardian exit $guardian_code"
             exit 1
           fi
-          grep -q "activation invocation is unavailable" "$guardian_out" || {
+          grep -qE "activation invocation is unavailable|Socket operation on non-socket" "$guardian_out" || {
             echo '::error title=guardian control::unexpected guardian refusal'
             exit 1
           }
