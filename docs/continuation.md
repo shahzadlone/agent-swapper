@@ -323,3 +323,41 @@ Next implementation work, in order:
    and the PTY master backhaul), resize/raw mode/stop-bg-fg behavior per
    the qualified relay fixture.
 4. The session-helper role and the CLI/doctor surface.
+
+# Session continuation: 2026-11-22
+
+- `1e759bd` + fixes through `6d81de8` delivered the **held-exec launch
+  end to end on hosted systemd**: the ordinary client sends `ASWPRUN1`, the
+  zeroizing launch envelope, its run-nonce launch gate; the systemd-activated
+  guardian spawns the installed exec-shim image under its tracer, transfers
+  the PTY slave, nonce and envelope, holds the exec at the kernel trap,
+  confirms the exec event to the client, releases on the exact-child exec
+  release, waits the direct child and reports the authenticated exit. The
+  lifecycle also covers the bind-mode offer round trip and instance
+  retirement. The full pipeline passed at `22e2662`
+  ([45041455234](https://github.com/shahzadlone/agent-swapper/actions/runs/45041455234)).
+- CI debugging lessons now encoded in the workflow and harness: the service
+  template keeps StandardOutput off the activation socket (a stdout write
+  polluted the protocol and died with EPIPE); the systemd-supplied stdin is
+  nonblocking and must be set blocking for the timeout-driven reads; the
+  client's offer receive needs the nonblocking credential-enabled socket
+  while the launch-control frames need blocking credential-disabled; the
+  client owns and sends the run nonce (the earlier client code awaited a
+  gate it should have sent); the exec-shim image must be the guardian
+  binary (role dispatch lives there); the lifecycle's launch control must
+  run while the generation is still installed and selected; journal dumps
+  surface as step annotations because anonymous log access is gone.
+- `22e2662` scoped RUSTSEC-2026-0592 (url 2.5.8 blob-origin, through the
+  pinned cargo-about 0.9.3 build tool) out of the build-tools deny policy
+  with written justification; the runtime graph does not depend on url.
+
+Next implementation work:
+1. The durable run intent: the launch client commits the Store association
+   (schema 9) BEFORE sending the launch gate and exec release; uncertain
+   sends stay unresolved; the qualification journal tests are the reference.
+2. The terminal relay composition on the client side (outer terminal +
+   PTY master backhaul), resize/raw/stop-bg-fg per the qualified relay
+   fixture.
+3. The session-helper role and the CLI/doctor surface (install/verify/
+   launch subcommands beyond the disposable examples).
+4. Authenticated restart recovery.
