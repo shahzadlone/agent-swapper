@@ -199,8 +199,8 @@ mod linux {
                 .send_to_until(&endpoint.socket, deadline)
                 .map_err(|error| io::Error::other(format!("envelope transfer failed: {error}")))?;
             let run_nonce = nonce()?;
-            launch_protocol::receive_launch_gate_open(&endpoint.socket, deadline)
-                .map_err(|error| io::Error::other(format!("launch gate missing: {error}")))?;
+            // The client owns the run nonce and sends the launch gate; the
+            // guardian forwards it to the held shim.
             net::send(
                 &endpoint.socket,
                 &launch_protocol::launch_gate_packet(&run_nonce),
