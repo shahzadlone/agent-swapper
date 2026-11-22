@@ -15,6 +15,8 @@ pub mod admission_transport;
 pub mod fresh_entry;
 #[cfg(target_os = "linux")]
 pub mod launch_envelope;
+#[cfg(target_os = "linux")]
+pub mod launch_protocol;
 
 #[cfg(target_os = "linux")]
 pub mod signals;
