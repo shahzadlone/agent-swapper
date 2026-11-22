@@ -206,3 +206,28 @@ Next implementation work: the three production helper entry points built on
 the now-shared runtime pieces (activation packets, target exit, fresh entry,
 launch envelope, admission transport), then the CLI/doctor surface, the
 launch-plan/Store composition and authenticated restart recovery.
+
+# Session continuation: 2026-11-21 (fourth)
+
+- `ca01d4f` added helper self-observation (`self_image`): after exec, a
+  helper re-derives its own digest, ownership, mode, link count, mount
+  policy and file capabilities from `/proc/self/exe`.
+- The guardian entry crate binds the running bytes to the installed
+  manifest: it parses its manager-assigned unit name (`%n`) into the
+  installed user, opens the manifest with the service's own fixed group,
+  requires the digest, single root-owned 0755 image, mount and capability
+  policy, and the fixed service identity, then refuses at the not-yet-enabled
+  production service protocol gate. The installed template passes `%n`.
+- `82d9196`..`7b68a8c` extended the hosted lifecycle with that control:
+  the INSTALLED guardian image runs, binds to its own bytes and refuses at
+  the gate. The complete pipeline passed at `7b68a8c`
+  ([44963920154](https://github.com/shahzadlone/agent-swapper/actions/runs/44963920154)).
+  CI lessons: `install` takes images in guardian/session-helper/exec-shim
+  order; the control must exec the installed image, not the build output;
+  the guardian group comes from the service identity, not the unit stem.
+
+Next implementation work: the guardian's production service protocol
+(authenticated activation request, offer, launch envelope, held exec,
+terminal relay, authenticated exit and retirement) built on the qualified
+runtime pieces, then the session-helper and exec-shim entries, the
+CLI/doctor surface, and authenticated restart recovery.
