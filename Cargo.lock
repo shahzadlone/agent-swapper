@@ -116,6 +116,7 @@ name = "agentswapper-linux-guardian"
 version = "0.1.0-dev"
 dependencies = [
  "agentswapper-linux-runtime",
+ "nix",
  "rustix",
  "serde_json",
 ]

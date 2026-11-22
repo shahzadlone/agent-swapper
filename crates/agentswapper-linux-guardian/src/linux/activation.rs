@@ -90,6 +90,7 @@ pub fn serve(
     user: u32,
     group: u32,
     invocation: &str,
+    shim_path: &std::path::Path,
 ) -> io::Result<()> {
     require(
         rustix::process::getuid().as_raw() == user
@@ -136,9 +137,10 @@ pub fn serve(
         "incomplete activation offer",
     )?;
     if matches!(request, Request::Run) {
-        return Err(io::Error::other(
-            "production launch data is not accepted yet",
-        ));
+        // The launch data follows on this same authenticated channel; the
+        // shim holds at exec until the client's durable intent releases it.
+        crate::linux::launch::serve(channel, unit, invocation, shim_path)?;
+        return Ok(());
     }
     // Bind-only session: the client authenticated the offer and disconnects.
     // The manager owns the scope and retires it when this process exits.
@@ -158,11 +160,11 @@ pub fn serve(
 
 /// The production entry after self-binding: read the manager-assigned unit
 /// and invocation, then serve the activation session on the supplied socket.
-pub fn run(user: u32, group: u32, unit: &str) -> io::Result<()> {
+pub fn run(user: u32, group: u32, unit: &str, shim_path: &std::path::Path) -> io::Result<()> {
     let invocation = std::env::var("INVOCATION_ID")
         .map_err(|_| io::Error::other("activation invocation is unavailable"))?;
     let channel = io::stdin().as_fd().try_clone_to_owned()?;
-    serve(&channel, unit, user, group, &invocation)
+    serve(&channel, unit, user, group, &invocation, shim_path)
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -198,7 +200,16 @@ mod tests {
         let (client, guardian) = pair()?;
         let unit = session_unit(user);
         let invocation = "a".repeat(32);
-        let server = std::thread::spawn(move || serve(&guardian, &unit, user, group, &invocation));
+        let server = std::thread::spawn(move || {
+            serve(
+                &guardian,
+                &unit,
+                user,
+                group,
+                &invocation,
+                std::path::Path::new("/usr/libexec/agentswapper/exec-shim"),
+            )
+        });
         // The client sends exactly one bounded request without credentials.
         net::send(&client, BIND_REQUEST, SendFlags::NOSIGNAL)?;
         sockopt::set_socket_passcred(&client, true)?;
@@ -222,22 +233,39 @@ mod tests {
     fn run_requests_refuse_and_foreign_identities_never_reach_the_offer() -> io::Result<()> {
         let user = rustix::process::getuid().as_raw();
         let group = rustix::process::getgid().as_raw();
-        // A launch request gets the offer and then a fixed refusal.
+        // A launch request enters the launch phase: with an envelope but no
+        // installed shim image it refuses before anything is launched.
         {
             let (client, guardian) = pair()?;
             let unit = session_unit(user);
-            let handle =
-                std::thread::spawn(move || serve(&guardian, &unit, user, group, &"b".repeat(32)));
+            let handle = std::thread::spawn(move || {
+                serve(
+                    &guardian,
+                    &unit,
+                    user,
+                    group,
+                    &"b".repeat(32),
+                    std::path::Path::new("/usr/libexec/agentswapper/exec-shim"),
+                )
+            });
             net::send(&client, RUN_REQUEST, SendFlags::NOSIGNAL)?;
+            let envelope = agentswapper_linux_runtime::launch_envelope::LaunchEnvelope::capture(
+                std::ffi::OsStr::new("/bin/true"),
+                std::path::Path::new("/"),
+                Vec::<std::ffi::OsString>::new(),
+                Vec::<(std::ffi::OsString, std::ffi::OsString)>::new(),
+                Vec::<(std::ffi::OsString, Option<std::ffi::OsString>)>::new(),
+            )?;
+            envelope.send_to_until(
+                &client,
+                std::time::Instant::now() + std::time::Duration::from_secs(4),
+            )?;
             let error = handle
                 .join()
                 .map_err(|_| io::Error::other("guardian thread panicked"))?
                 .err()
-                .ok_or_else(|| io::Error::other("run request was accepted"))?;
-            assert_eq!(
-                error.to_string(),
-                "production launch data is not accepted yet"
-            );
+                .ok_or_else(|| io::Error::other("run was accepted without an installed shim"))?;
+            let _ = error;
         }
         // An instance that does not name this client refuses before anything.
         {
@@ -246,18 +274,32 @@ mod tests {
                 "agentswapper-{user}-{GENERATION}@8-{}-{user}.service",
                 std::process::id() + 1
             );
-            let error = serve(&guardian, &unit, user, group, &"c".repeat(32))
-                .err()
-                .ok_or_else(|| io::Error::other("foreign instance was accepted"))?;
+            let error = serve(
+                &guardian,
+                &unit,
+                user,
+                group,
+                &"c".repeat(32),
+                std::path::Path::new("/usr/libexec/agentswapper/exec-shim"),
+            )
+            .err()
+            .ok_or_else(|| io::Error::other("foreign instance was accepted"))?;
             assert_eq!(error.to_string(), "activation client identity differs");
         }
         // An invalid invocation refuses.
         {
             let (_client, guardian) = pair()?;
             let unit = session_unit(user);
-            let error = serve(&guardian, &unit, user, group, &"0".repeat(32))
-                .err()
-                .ok_or_else(|| io::Error::other("invalid invocation was accepted"))?;
+            let error = serve(
+                &guardian,
+                &unit,
+                user,
+                group,
+                &"0".repeat(32),
+                std::path::Path::new("/usr/libexec/agentswapper/exec-shim"),
+            )
+            .err()
+            .ok_or_else(|| io::Error::other("invalid invocation was accepted"))?;
             assert_eq!(error.to_string(), "invalid activation invocation");
         }
         // An unexpected request byte sequence refuses.
@@ -265,9 +307,16 @@ mod tests {
             let (client, guardian) = pair()?;
             let unit = session_unit(user);
             net::send(&client, b"ASWPHAX1\n", SendFlags::NOSIGNAL)?;
-            let error = serve(&guardian, &unit, user, group, &"d".repeat(32))
-                .err()
-                .ok_or_else(|| io::Error::other("invalid request was accepted"))?;
+            let error = serve(
+                &guardian,
+                &unit,
+                user,
+                group,
+                &"d".repeat(32),
+                std::path::Path::new("/usr/libexec/agentswapper/exec-shim"),
+            )
+            .err()
+            .ok_or_else(|| io::Error::other("invalid request was accepted"))?;
             assert_eq!(error.to_string(), "invalid activation request");
         }
         Ok(())

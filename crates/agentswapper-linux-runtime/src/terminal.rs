@@ -35,6 +35,75 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 ///     Ok(())
 /// }
 /// ```
+/// Create an owned inner PTY pair. The master is nonblocking and
+/// close-on-exec; the slave is validated as a real character TTY. This
+/// never touches the caller's own terminal.
+pub fn pair() -> io::Result<(OwnedFd, OwnedFd)> {
+    let master = rustix::pty::openpt(
+        rustix::pty::OpenptFlags::RDWR
+            | rustix::pty::OpenptFlags::NOCTTY
+            | rustix::pty::OpenptFlags::CLOEXEC,
+    )?;
+    rustix::pty::grantpt(&master)?;
+    rustix::pty::unlockpt(&master)?;
+    let slave = rustix::pty::ioctl_tiocgptpeer(
+        &master,
+        rustix::pty::OpenptFlags::RDWR
+            | rustix::pty::OpenptFlags::NOCTTY
+            | rustix::pty::OpenptFlags::CLOEXEC,
+    )?;
+    rustix::fs::fcntl_setfl(
+        &master,
+        rustix::fs::fcntl_getfl(&master)? | rustix::fs::OFlags::NONBLOCK,
+    )?;
+    rustix::termios::tcsetwinsize(
+        &master,
+        rustix::termios::Winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )?;
+    validate_master(&master)?;
+    validate_slave(&slave)?;
+    Ok((master, slave))
+}
+
+/// The descriptor is a nonblocking close-on-exec PTY master.
+pub fn validate_master(master: impl AsFd) -> io::Result<()> {
+    let stat = rustix::fs::fstat(&master)?;
+    require(
+        rustix::fs::FileType::from_raw_mode(stat.st_mode).is_char_device()
+            && rustix::fs::fcntl_getfl(&master)?.contains(rustix::fs::OFlags::NONBLOCK)
+            && rustix::io::fcntl_getfd(&master)?.contains(rustix::io::FdFlags::CLOEXEC),
+        "terminal capability is not a nonblocking close-on-exec character device",
+    )?;
+    // TIOCGPTPEER succeeds only on a PTY master. NOCTTY prevents acquisition
+    // of a controlling terminal while independently validating the capability.
+    let slave = rustix::pty::ioctl_tiocgptpeer(
+        &master,
+        rustix::pty::OpenptFlags::RDWR
+            | rustix::pty::OpenptFlags::NOCTTY
+            | rustix::pty::OpenptFlags::CLOEXEC,
+    )?;
+    require(
+        rustix::termios::isatty(&slave),
+        "terminal peer is not a TTY",
+    )
+}
+
+/// The descriptor is a real character TTY slave.
+pub fn validate_slave(slave: impl AsFd) -> io::Result<()> {
+    let stat = rustix::fs::fstat(&slave)?;
+    require(
+        rustix::fs::FileType::from_raw_mode(stat.st_mode).is_char_device()
+            && rustix::termios::isatty(&slave),
+        "terminal slave is not a character TTY",
+    )?;
+    Ok(())
+}
+
 pub struct Terminal<'signals> {
     fd: OwnedFd,
     saved: termios::Termios,

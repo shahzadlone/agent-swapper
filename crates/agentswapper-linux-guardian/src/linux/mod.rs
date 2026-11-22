@@ -1,7 +1,9 @@
 use agentswapper_linux_runtime::{installed_manifest::InstalledManifest, self_image::SelfImage};
-use std::io;
+use std::{io, os::fd::AsFd};
 
 pub(crate) mod activation;
+pub(crate) mod launch;
+pub(crate) mod shim;
 
 fn require(ok: bool, message: &str) -> io::Result<()> {
     if ok {
@@ -54,6 +56,10 @@ pub(crate) fn parse_unit(unit: &str) -> io::Result<(u32, String)> {
 /// Launch data is refused inside the session; the production launch protocol
 /// remains a separately qualified gate.
 pub fn entry(args: &[String]) -> io::Result<()> {
+    if args.len() == 3 && args[1] == "exec-shim" {
+        let control = std::io::stdin().as_fd().try_clone_to_owned()?;
+        return shim::run(&control, &args[2]);
+    }
     require(args.len() == 2, "guardian expects its unit name argument")?;
     let (user, generation) = parse_unit(&args[1])?;
     let group = rustix::process::getgid().as_raw();
@@ -80,5 +86,6 @@ pub fn entry(args: &[String]) -> io::Result<()> {
         rustix::process::getuid().as_raw() == user && rustix::process::getgid().as_raw() == group,
         "the guardian service runs outside its installed identity",
     )?;
-    activation::run(user, group, &args[1])
+    let (shim_path, _) = manifest.exec_shim();
+    activation::run(user, group, &args[1], &shim_path)
 }

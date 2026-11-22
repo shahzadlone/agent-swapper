@@ -184,6 +184,53 @@ fn receive_exact(
     })
 }
 
+/// Receive the client's launch gate and return its nonce. Used by the side
+/// that does not choose the nonce (the guardian forwards it to the shim).
+pub fn receive_launch_gate_open(channel: impl AsFd, deadline: Instant) -> io::Result<[u8; 16]> {
+    channel_preconditions(&channel)?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "launch control expired"))?;
+    let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
+    net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
+    let result = (|| -> io::Result<[u8; 16]> {
+        if withdrawn(&channel, deadline)? {
+            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
+        }
+        let mut bytes = [0_u8; LAUNCH_GATE.len() + 16];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut []);
+        let packet = net::recvmsg(
+            &channel,
+            &mut [IoSliceMut::new(&mut bytes)],
+            &mut ancillary,
+            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+        )?;
+        require(
+            packet.bytes == bytes.len()
+                && !packet
+                    .flags
+                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                && bytes.starts_with(LAUNCH_GATE)
+                && Instant::now() < deadline,
+            "invalid launch gate record",
+        )?;
+        bytes[LAUNCH_GATE.len()..]
+            .try_into()
+            .map_err(|_| io::Error::other("invalid launch gate nonce"))
+    })();
+    let restored =
+        net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, previous)
+            .map_err(io::Error::from);
+    restore(result, restored).map_err(|error| {
+        if is_withdrawal(&error) {
+            error
+        } else {
+            io::Error::other(format!("invalid launch gate record: {error}"))
+        }
+    })
+}
+
 /// Receive the client's launch gate for this nonce.
 pub fn receive_launch_gate(
     channel: impl AsFd,
