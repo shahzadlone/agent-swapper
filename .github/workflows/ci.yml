@@ -425,7 +425,16 @@ jobs:
             echo '::error title=installation lifecycle::verification succeeded without a selection'
             exit 1
           fi
-          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect and removal completed; no launch or connection'
+          # Production launch: the ordinary client launches a fixed disposable
+          # target through the installed guardian; the held exec releases on
+          # the client's exec release and the authenticated exit report names
+          # the target's real status. No provider command is ever accepted.
+          "$bind" launch "$uid" /bin/true
+          wait_for_instance_gone || {
+            echo '::error title=launch control::activated instance did not retire'
+            exit 1
+          }
+          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation and held-exec launch completed; no provider command'
       - name: Evaluate fixed-user socket activation
         timeout-minutes: 6
         env:

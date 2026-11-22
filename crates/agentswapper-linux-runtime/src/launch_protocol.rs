@@ -231,6 +231,64 @@ pub fn receive_launch_gate_open(channel: impl AsFd, deadline: Instant) -> io::Re
     })
 }
 
+/// Receive the guardian's exec confirmation and return the run nonce and
+/// the original child identity. Used by the side that learns the child from
+/// the frame (the client's pidfd binding follows in the Store slice).
+pub fn receive_exec_event_open(
+    channel: impl AsFd,
+    deadline: Instant,
+) -> io::Result<([u8; 16], u32)> {
+    channel_preconditions(&channel)?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "launch control expired"))?;
+    let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
+    net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
+    let result = (|| -> io::Result<([u8; 16], u32)> {
+        if withdrawn(&channel, deadline)? {
+            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
+        }
+        let mut bytes = [0_u8; EXEC_EVENT.len() + 16 + 8];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut []);
+        let packet = net::recvmsg(
+            &channel,
+            &mut [IoSliceMut::new(&mut bytes)],
+            &mut ancillary,
+            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+        )?;
+        require(
+            packet.bytes == bytes.len()
+                && !packet
+                    .flags
+                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                && bytes.starts_with(EXEC_EVENT)
+                && Instant::now() < deadline,
+            "invalid exec event record",
+        )?;
+        let nonce: [u8; 16] = bytes[EXEC_EVENT.len()..EXEC_EVENT.len() + 16]
+            .try_into()
+            .map_err(|_| io::Error::other("invalid exec event nonce"))?;
+        let child = u32::try_from(u64::from_be_bytes(
+            bytes[EXEC_EVENT.len() + 16..]
+                .try_into()
+                .map_err(|_| io::Error::other("invalid exec event child"))?,
+        ))
+        .map_err(|_| io::Error::other("invalid exec event child"))?;
+        Ok((nonce, child))
+    })();
+    let restored =
+        net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, previous)
+            .map_err(io::Error::from);
+    restore(result, restored).map_err(|error| {
+        if is_withdrawal(&error) {
+            error
+        } else {
+            io::Error::other(format!("invalid exec event record: {error}"))
+        }
+    })
+}
+
 /// Receive the client's launch gate for this nonce.
 pub fn receive_launch_gate(
     channel: impl AsFd,
