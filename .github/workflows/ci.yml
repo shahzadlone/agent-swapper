@@ -399,7 +399,8 @@ jobs:
           # against the kernel sender, binds the original service, and
           # disconnects cleanly; the activated instance then retires.
           dump_journal() {
-            sudo -n journalctl -q --since "4 minutes ago" --no-pager 2>/dev/null | grep -aE "agentswapper|panicked|guardian" | tail -12 | while IFS= read -r line; do
+            sudo -n journalctl -q -u 'agentswapper-*' --no-pager 2>/dev/null | tail -20
+            sudo -n journalctl -q -u 'agentswapper-*' --no-pager 2>/dev/null | grep -aE "panicked|refused" | tail -5 | while IFS= read -r line; do
               printf '::error title=guardian journal::%s\n' "$(printf '%s' "$line" | tr '\r\n' '  ' | head -c 280)"
             done
           }
