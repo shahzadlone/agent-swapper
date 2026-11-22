@@ -66,13 +66,22 @@ fn read_request(channel: &OwnedFd) -> io::Result<Request> {
         RecvFlags::CMSG_CLOEXEC,
     )?;
     let packet = &bytes[..received.bytes];
+    let truncated = received
+        .flags
+        .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC);
+    let hex: String = packet.iter().map(|byte| format!("{byte:02x}")).collect();
     require(
-        !received
-            .flags
-            .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-            && Instant::now() < deadline
-            && matches!(packet, BIND_REQUEST | RUN_REQUEST),
-        "invalid activation request",
+        !truncated && Instant::now() < deadline && matches!(packet, BIND_REQUEST | RUN_REQUEST),
+        format!(
+            "invalid activation request ({} bytes{}: {hex})",
+            packet.len(),
+            if truncated {
+                ", truncated controls"
+            } else {
+                ""
+            }
+        )
+        .as_str(),
     )?;
     Ok(if packet == BIND_REQUEST {
         Request::Bind
