@@ -231,3 +231,34 @@ Next implementation work: the guardian's production service protocol
 terminal relay, authenticated exit and retirement) built on the qualified
 runtime pieces, then the session-helper and exec-shim entries, the
 CLI/doctor surface, and authenticated restart recovery.
+
+# Session continuation: 2026-11-21 (fifth)
+
+- `1e62fb8` implemented the guardian's production activation service and the
+  shared offer vocabulary: the systemd-activated guardian verifies the fixed
+  ordinary identity, the initial namespace, the kernel message sender and
+  systemd's connection-instance naming (`<counter>-<peer pid>-<peer uid>`),
+  reads exactly one bounded production request (`ASWPBIND1`/`ASWPRUN1`),
+  sends the bounded offer, and refuses launch data ("production launch data
+  is not accepted yet") until the launch protocol is separately qualified;
+  bind sessions end at a kernel-confirmed clean disconnect.
+- The ordinary activation client (`activation_client`) observes the loaded
+  socket policy, connects the protected endpoint, sends the bind request,
+  validates the offer against the kernel sender, binds the original service
+  and claims its one-use key.
+- `8631b35`/`e8231ed` qualified the complete production activation round trip
+  on hosted systemd: the installed guardian image runs as the real service
+  instance, the client's authenticated connection activates it, the offer is
+  validated, the service binding claims its key, and the activated instance
+  retires after the clean disconnect. Full pipeline passed at `e8231ed`
+  ([44974572857](https://github.com/shahzadlone/agent-swapper/actions/runs/44974572857)).
+  CI lessons: the direct-run guardian control now proves self-binding and
+  rejects at the invocation/phase boundary (its stdin is not a socket under
+  bash); the `install` image order is guardian/session-helper/exec-shim.
+
+Next implementation work: the launch protocol itself — launch envelope
+transfer over the authenticated connection, the exec shim's held exec, the
+durable intent and GO discipline from the journal client, the terminal relay
+composition, authenticated target exit and scope retirement. The fixture
+machinery (journal_client, managed_terminal_relay, activated_terminal) is
+the qualified reference for every step.
