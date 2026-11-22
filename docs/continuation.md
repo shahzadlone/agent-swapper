@@ -262,3 +262,32 @@ durable intent and GO discipline from the journal client, the terminal relay
 composition, authenticated target exit and scope retirement. The fixture
 machinery (journal_client, managed_terminal_relay, activated_terminal) is
 the qualified reference for every step.
+
+# Session continuation: 2026-11-21 (sixth)
+
+- `8106e0e`/`4310b66` framed the production launch protocol in the runtime
+  crate: the launch gate, exec release, exec confirmation and authenticated
+  target-exit report frames — exact-length versioned sequenced-packet
+  records with no transferred capability, bound to the run nonce and the
+  original child identity, with the withdrawal peek that distinguishes a
+  clean client disconnect from any queued record. Full pipeline passed at
+  `4310b66`
+  ([44977531483](https://github.com/shahzadlone/agent-swapper/actions/runs/44977531483)).
+
+Next implementation work, in order:
+1. The guardian's launch phase over the authenticated connection: accept
+   `ASWPRUN1`, receive the zeroizing launch envelope, create the inner PTY,
+   spawn the installed exec-shim image with a private control socket,
+   transfer the slave descriptor, nonce and envelope, hold the exec
+   (ptrace TRACEME + stop, as the qualified fixture shim does), confirm the
+   exec event to the client, release on the client's exec-release frame,
+   wait the direct child, and report the authenticated `TargetExit`.
+2. The exec-shim role in the guardian binary (role dispatch by argv), with
+   its own self-image binding against the manifest's exec-shim digest.
+3. The client side: send the envelope, commit the durable run intent in the
+   Store (schema 9 `begin_run_with_scope` + association), then send the
+   launch gate and exec release only after the intent is durable, consume
+   the exit report with the retained original-scope retirement observation.
+4. The session-helper role, the terminal relay composition
+   (`managed_terminal_relay` is the qualified reference), and the CLI/doctor
+   surface.
