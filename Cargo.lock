@@ -117,6 +117,7 @@ version = "0.1.0-dev"
 dependencies = [
  "agentswapper-linux-runtime",
  "rustix",
+ "serde_json",
 ]
 
 [[package]]
@@ -125,6 +126,7 @@ version = "0.1.0-dev"
 dependencies = [
  "agentswapper-linux-manager",
  "agentswapper-linux-runtime",
+ "rustix",
  "serde_json",
  "tempfile",
  "tokio",
