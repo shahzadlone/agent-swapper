@@ -206,7 +206,7 @@ impl Layout {
              Group={}\n\
              ExecStart={} %n\n\
              StandardInput=socket\n\
-             StandardOutput=socket\n\
+             StandardOutput=journal\n\
              StandardError=journal\n\
              Slice=system.slice\n\
              Delegate=no\n\
