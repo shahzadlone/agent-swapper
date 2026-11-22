@@ -368,6 +368,7 @@ jobs:
           eval="$PWD/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation"
           admin="$PWD/target/debug/examples/install_admin"
           verify="$PWD/target/debug/examples/install_verify"
+          bind="$PWD/target/debug/examples/activation_client"
           guardian="$PWD/target/debug/agentswapper-linux-guardian"
           uid=$(id -u); gid=$(id -g)
           gen_a=33445566778899aabbccddeeff001122
@@ -389,8 +390,26 @@ jobs:
             echo "::error title=guardian control::unexpected guardian exit $guardian_code"
             exit 1
           fi
-          grep -q "production guardian service protocol is not enabled" "$guardian_out" || {
+          grep -q "activation invocation is unavailable" "$guardian_out" || {
             echo '::error title=guardian control::unexpected guardian refusal'
+            exit 1
+          }
+          # Production activation: the ordinary client authenticates the
+          # endpoint, sends the bind request, validates the guardian's offer
+          # against the kernel sender, binds the original service, and
+          # disconnects cleanly; the activated instance then retires.
+          "$bind" "$uid"
+          wait_for_instance_gone() {
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if ! ls /sys/fs/cgroup/system.slice/agentswapper-$uid-$gen_a@*.service >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 1
+            done
+            return 1
+          }
+          wait_for_instance_gone || {
+            echo '::error title=activation control::activated instance did not retire'
             exit 1
           }
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$eval" "$eval"
