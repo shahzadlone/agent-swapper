@@ -108,6 +108,11 @@ pub fn serve(
             && instance_names_client(unit, peer.pid as u32, user),
         "activation client identity differs",
     )?;
+    // systemd supplies the accepted connection socket nonblocking; the
+    // request read relies on the receive timeout, which only applies to a
+    // blocking socket.
+    let blocking = rustix::fs::fcntl_getfl(channel)? - rustix::fs::OFlags::NONBLOCK;
+    rustix::fs::fcntl_setfl(channel, blocking)?;
     require(
         valid_invocation(invocation),
         "invalid activation invocation",
