@@ -183,6 +183,9 @@ mod linux {
             let blocking =
                 rustix::fs::fcntl_getfl(&endpoint.socket)? - rustix::fs::OFlags::NONBLOCK;
             rustix::fs::fcntl_setfl(&endpoint.socket, blocking)?;
+            // The launch-control frames also refuse any credential control
+            // data; only the offer needed the credential-enabled socket.
+            rustix::net::sockopt::set_socket_passcred(&endpoint.socket, false)?;
             // The launch envelope travels only over this authenticated
             // channel; the target environment applies at its final exec.
             let envelope = LaunchEnvelope::capture(
