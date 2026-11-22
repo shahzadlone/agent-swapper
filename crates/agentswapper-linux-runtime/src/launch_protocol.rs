@@ -4,7 +4,7 @@
 //! withdrawal, never evidence that any frame arrived. None of these frames
 //! alone grants a launch: the durable run intent and the original service
 //! binding gate them on the client side.
-use rustix::net::{self, RecvAncillaryBuffer, RecvFlags, ReturnFlags, sockopt};
+use rustix::net::{self, RecvAncillaryBuffer, RecvFlags, ReturnFlags};
 use std::{
     io::{self, IoSliceMut},
     os::fd::AsFd,
@@ -264,6 +264,7 @@ pub fn receive_exit_report(
                     .flags
                     .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
                 && bytes.starts_with(EXIT_REPORT)
+                && &bytes[EXIT_REPORT.len()..EXIT_REPORT.len() + 16] == nonce
                 && Instant::now() < deadline,
             "invalid target exit report record",
         )?;
