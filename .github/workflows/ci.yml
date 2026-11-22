@@ -429,7 +429,7 @@ jobs:
           # target through the installed guardian; the held exec releases on
           # the client's exec release and the authenticated exit report names
           # the target's real status. No provider command is ever accepted.
-          "$bind" launch "$uid" /bin/true
+          "$bind" "$uid" launch /bin/true
           wait_for_instance_gone || {
             echo '::error title=launch control::activated instance did not retire'
             exit 1
