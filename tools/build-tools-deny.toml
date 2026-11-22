@@ -6,4 +6,5 @@ ignore = [
   { id = "RUSTSEC-2026-0391", reason = "Pinned tools use a fresh zstd read decoder for the embedded SPDX cache; they do not reuse with_context streams." },
   { id = "RUSTSEC-2026-0398", reason = "The pinned tool graph does not enable or use zstd's seekable API." },
   { id = "RUSTSEC-2026-0403", reason = "The pinned tool reads its embedded SPDX cache with zstd::stream::read::Decoder; the advisory excludes this API." },
+  { id = "RUSTSEC-2026-0592", reason = "The pinned attribution tool runs at build time on local crate metadata; it never calls Url::origin on untrusted input, and the url crate is not in AgentSwapper's runtime graph." },
 ]
