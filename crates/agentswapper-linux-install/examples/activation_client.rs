@@ -12,7 +12,9 @@ mod linux {
     use agentswapper_linux_manager::{
         BoundService, LoadedSocket, ServiceClaim, ServicePolicy, SocketPolicy,
     };
-    use agentswapper_linux_runtime::activation_offer::{Offer, RUN_REQUEST, connection_unit};
+    use agentswapper_linux_runtime::activation_offer::{
+        BIND_REQUEST, Offer, RUN_REQUEST, connection_unit,
+    };
     use agentswapper_linux_runtime::activation_packet;
     use agentswapper_linux_runtime::installed_selection::SelectedInstallation;
     use agentswapper_linux_runtime::launch_envelope::LaunchEnvelope;
@@ -99,6 +101,14 @@ mod linux {
             .map_err(io::Error::other)?;
         runtime.block_on(async {
             let endpoint = connect_endpoint(&selection).await?;
+            require(
+                net::send(
+                    &endpoint.socket,
+                    BIND_REQUEST,
+                    SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
+                )? == BIND_REQUEST.len(),
+                "incomplete activation request",
+            )?;
             let (bytes, sender) = activation_packet::receive(
                 &endpoint.socket,
                 Instant::now() + Duration::from_secs(4),
