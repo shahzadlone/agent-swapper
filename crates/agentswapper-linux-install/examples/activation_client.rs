@@ -115,11 +115,13 @@ mod linux {
             )?;
             let offer: Offer = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
             offer.client_validate(user, group, std::process::id(), sender)?;
-            bind_original(&endpoint.manager, &endpoint.owner, &offer, selection).await?;
+            // Bind-only mode: the authenticated offer and the clean
+            // disconnect are the evidence; the original service binding
+            // belongs to the launch flow.
             let closed = endpoint.manager.close().await.map_err(io::Error::other);
             drop(endpoint.socket);
             closed?;
-            Ok(format!("activation offer bound {}", offer.unit))
+            Ok(format!("activation offer validated {}", offer.unit))
         })
     }
 
@@ -163,7 +165,9 @@ mod linux {
                 ));
             }
             let selection = selection;
-            bind_original(&endpoint.manager, &endpoint.owner, &offer, selection).await?;
+            bind_original(&endpoint.manager, &endpoint.owner, &offer, selection)
+                .await
+                .map_err(|error| io::Error::other(format!("service binding failed: {error}")))?;
             // The launch envelope travels only over this authenticated
             // channel; the target environment applies at its final exec.
             let envelope = LaunchEnvelope::capture(
