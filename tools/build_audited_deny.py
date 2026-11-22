@@ -22,7 +22,16 @@ def digest(data):
 def verify_installed(binary=None):
     if digest((ROOT / "tools/cargo-deny-tool.lock").read_bytes()) != LOCK_SHA:
         raise ValueError("reviewed cargo-deny lockfile changed")
-    binary = Path(binary or shutil.which("cargo-deny") or "")
+    if binary is None:
+        # The installed checker lives in the cargo home bin directory; which()
+        # alone can miss it when the step environment differs from the
+        # installing one.
+        home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+        binary = home / "bin" / ("cargo-deny.exe" if os.name == "nt" else "cargo-deny")
+        if not binary.is_file() or binary.is_symlink():
+            binary = Path.home() / ".cargo" / "bin" / ("cargo-deny.exe" if os.name == "nt" else "cargo-deny")
+        if not binary.is_file() or binary.is_symlink():
+            binary = Path(shutil.which("cargo-deny") or "")
     if not binary.is_file() or binary.is_symlink():
         raise ValueError("audited cargo-deny binary is missing")
     marker = binary.parent / "cargo-deny-attestation.json"
