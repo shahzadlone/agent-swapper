@@ -399,7 +399,7 @@ jobs:
           # against the kernel sender, binds the original service, and
           # disconnects cleanly; the activated instance then retires.
           dump_journal() {
-            sudo -n journalctl -q --since "4 minutes ago" --no-pager 2>/dev/null | grep -a "guardian refused" | tail -20
+            sudo -n journalctl -q --since "4 minutes ago" --no-pager 2>/dev/null | grep -a agentswapper | tail -40
           }
           "$bind" "$uid" bind || { dump_journal; echo '::error title=activation control::bind control failed'; exit 1; }
           wait_for_instance_gone() {
