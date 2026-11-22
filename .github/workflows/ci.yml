@@ -398,7 +398,7 @@ jobs:
           # endpoint, sends the bind request, validates the guardian's offer
           # against the kernel sender, binds the original service, and
           # disconnects cleanly; the activated instance then retires.
-          "$bind" "$uid"
+          "$bind" bind "$uid"
           wait_for_instance_gone() {
             for _ in 1 2 3 4 5 6 7 8 9 10; do
               if ! ls /sys/fs/cgroup/system.slice/agentswapper-$uid-$gen_a@*.service >/dev/null 2>&1; then
