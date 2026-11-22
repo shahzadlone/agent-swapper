@@ -424,7 +424,7 @@ jobs:
           # the target's real status. No provider command is ever accepted.
           launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
           chmod 700 "$launch_journal"
-          "$bind" "$uid" "$launch_journal" launch /bin/true || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
+          "$bind" "$uid" launch "$launch_journal" /bin/true || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
           wait_for_instance_gone || {
             echo '::error title=launch control::activated instance did not retire'
             exit 1
