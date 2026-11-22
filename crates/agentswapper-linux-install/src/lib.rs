@@ -7,6 +7,10 @@
 #![forbid(unsafe_code)]
 
 #[cfg(target_os = "linux")]
+pub mod client;
+#[cfg(target_os = "linux")]
 pub mod control;
 #[cfg(target_os = "linux")]
 pub mod executor;
+#[cfg(target_os = "linux")]
+pub mod launch_client;

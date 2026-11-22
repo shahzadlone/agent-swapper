@@ -422,11 +422,24 @@ jobs:
           # target through the installed guardian; the held exec releases on
           # the client's exec release and the authenticated exit report names
           # the target's real status. No provider command is ever accepted.
-          "$bind" "$uid" launch /bin/true || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
+          launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
+          chmod 700 "$launch_journal"
+          "$bind" "$uid" "$launch_journal" launch /bin/true || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
           wait_for_instance_gone || {
             echo '::error title=launch control::activated instance did not retire'
             exit 1
           }
+          # The durable journal must carry the intent, the spawn observation
+          # and the authenticated exit for the one run, with nothing else.
+          journal_records=$(ls "$launch_journal" | grep -c -E '^(intent|spawn|exit)-')
+          require_records() {
+            if [ "$journal_records" != "3" ]; then
+              echo "::error title=launch control::expected three journal records, found $journal_records"
+              ls -la "$launch_journal"
+              exit 1
+            fi
+          }
+          require_records
           echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation and held-exec launch completed; no provider command'
 
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$eval" "$guardian"
