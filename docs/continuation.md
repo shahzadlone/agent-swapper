@@ -291,3 +291,35 @@ Next implementation work, in order:
 4. The session-helper role, the terminal relay composition
    (`managed_terminal_relay` is the qualified reference), and the CLI/doctor
    surface.
+
+# Session continuation: 2026-11-21 (seventh)
+
+- `8106e0e`/`4310b66` framed the launch protocol (gate, exec release, exec
+  event, authenticated exit report) and passed the full pipeline.
+- `1e759bd` implemented the guardian's launch phase and the exec-shim role
+  and passed the full pipeline
+  ([44980532646](https://github.com/shahzadlone/agent-swapper/actions/runs/44980532646)):
+  the client's launch envelope travels only over the authenticated channel;
+  the guardian creates the owned inner PTY, spawns the installed exec-shim
+  image with a private control socket and a clean environment, transfers the
+  terminal slave, nonce and envelope, holds the exec at the kernel's exec
+  trap under its tracer (the shim's own TRACEME stop happens before any
+  launch data is read), confirms the exec event to the client, releases on
+  the exact-child exec release, waits the direct child, and reports the
+  authenticated target exit. The shim role binds its own running bytes to
+  the manifest's exec-shim digest and acquires the target session without
+  inheriting a controlling terminal.
+
+Next implementation work, in order:
+1. Extend the activation client (`activation_client`) with the launch flow:
+   send `ASWPRUN1`, the envelope, the launch gate nonce, wait the exec
+   event, send the exec release, consume the exit report. Hosted CI target:
+   a fixed disposable program (never a provider command).
+2. The durable run intent: the client commits the Store association
+   (schema 9 `begin_run_with_scope`) before sending the launch gate and the
+   exec release; uncertain sends stay unresolved; a foreign key never
+   authorizes. The qualification journal tests are the reference.
+3. The terminal relay composition on the client side (the outer terminal
+   and the PTY master backhaul), resize/raw mode/stop-bg-fg behavior per
+   the qualified relay fixture.
+4. The session-helper role and the CLI/doctor surface.
