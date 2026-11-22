@@ -164,6 +164,13 @@ pub fn launch(
         bind_original(&endpoint.manager, &endpoint.owner, &offer, selection)
             .await
             .map_err(|error| io::Error::other(format!("service binding failed: {error}")))?;
+        // The launch-control frames need the receive timeout, which only
+        // applies to a blocking channel, and they refuse any credential
+        // control data; the offer above needed the nonblocking
+        // credential-enabled socket the connect produced.
+        let blocking = rustix::fs::fcntl_getfl(&endpoint.socket)? - rustix::fs::OFlags::NONBLOCK;
+        rustix::fs::fcntl_setfl(&endpoint.socket, blocking)?;
+        rustix::net::sockopt::set_socket_passcred(&endpoint.socket, false)?;
         // The launch envelope travels only over this authenticated channel.
         let envelope = LaunchEnvelope::capture(
             program,
