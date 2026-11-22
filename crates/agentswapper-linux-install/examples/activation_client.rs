@@ -54,6 +54,11 @@ mod linux {
             let observed = LoadedSocket::observe(&manager, owner.as_str(), policy).await?;
             observed.connect_endpoint(&manager).await?
         };
+        // The guardian's offer carries kernel message credentials; they are
+        // delivered only when this end enables SO_PASSCRED first. The
+        // packet receive path also requires the nonblocking socket that the
+        // connect produced.
+        rustix::net::sockopt::set_socket_passcred(&socket, true)?;
         Ok(Endpoint {
             manager,
             owner: owner.as_str().to_owned(),
