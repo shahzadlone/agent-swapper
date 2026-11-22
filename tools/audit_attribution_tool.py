@@ -80,7 +80,10 @@ def verify_crate(name):
 
 def main():
     from build_audited_deny import verify_installed
-    verify_installed()
+    # Resolve the installed checker directly instead of trusting PATH lookup:
+    # the audited binary always lives in the cargo home bin directory.
+    binary = CARGO_ROOT / "bin" / ("cargo-deny.exe" if os.name == "nt" else "cargo-deny")
+    verify_installed(binary)
     # cargo info fetches the crate without running its build scripts.
     run(["cargo", "info", "cargo-about@0.9.3"])
     about = verify_crate("cargo-about-0.9.3")
