@@ -361,3 +361,29 @@ Next implementation work:
 3. The session-helper role and the CLI/doctor surface (install/verify/
    launch subcommands beyond the disposable examples).
 4. Authenticated restart recovery.
+
+# Session continuation: 2026-11-22 (second)
+
+- `b22ec05`..`d2a773d` moved the launch client into the install crate's
+  library (`client`) with the durable journal seam (`launch_client::Journal`
+  + a local fsync'd `FileJournal`): the run intent is committed before the
+  launch gate, the durable spawn observation before the held-exec release,
+  and the authenticated exit is audited before the connection closes. The
+  hosted launch control requires exactly the three journal records for the
+  one run. The full pipeline passed at `d2a773d`
+  ([45071347909](https://github.com/shahzadlone/agent-swapper/actions/runs/45071347909)).
+  The library move initially dropped the channel-policy switches (blocking +
+  credential-disabled) required by the launch frames; restored and covered
+  by the hosted control.
+- The journal callbacks are the mandatory-semantics seam a production Store
+  adapter must implement; core's live linux-scope path stays
+  qualification-gated until its own review (the docs' promotion gate).
+
+Next implementation work:
+1. The production Store adapter behind the `Journal` seam, with the
+   independent review the seam's contract demands, and the CLI wiring
+   (`aswp` subcommands) for install/verify/bind/launch.
+2. The terminal relay composition on the client side (outer terminal +
+   PTY master backhaul), resize/raw/stop-bg-fg per the qualified relay
+   fixture.
+3. The session-helper role and authenticated restart recovery.
