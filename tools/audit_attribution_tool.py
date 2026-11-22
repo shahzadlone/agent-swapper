@@ -95,4 +95,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        import traceback
+        detail = traceback.format_exc()[-1500:].replace("%", "%25").replace("\r", " ").replace("\n", " ")
+        print(f"::error title=tool audit::{detail}", flush=True)
+        raise
