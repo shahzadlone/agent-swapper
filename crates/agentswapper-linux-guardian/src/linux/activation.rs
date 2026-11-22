@@ -83,6 +83,7 @@ fn read_request(channel: &OwnedFd) -> io::Result<Request> {
         )
         .as_str(),
     )?;
+    eprintln!("guardian: request {} bytes", packet.len());
     Ok(if packet == BIND_REQUEST {
         Request::Bind
     } else {
@@ -150,6 +151,7 @@ pub fn serve(
         net::send(channel, &bytes, SendFlags::NOSIGNAL)? == bytes.len(),
         "incomplete activation offer",
     )?;
+    eprintln!("guardian: offer sent {} bytes", bytes.len());
     if matches!(request, Request::Run) {
         // The launch data follows on this same authenticated channel; the
         // shim holds at exec until the client's durable intent releases it.
