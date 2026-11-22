@@ -153,11 +153,6 @@ mod linux {
             let endpoint = connect_endpoint(&selection)
                 .await
                 .map_err(|error| io::Error::other(format!("endpoint connect failed: {error}")))?;
-            // The channel must become blocking for the launch-control frames;
-            // only the connect itself needed nonblocking behavior.
-            let blocking =
-                rustix::fs::fcntl_getfl(&endpoint.socket)? - rustix::fs::OFlags::NONBLOCK;
-            rustix::fs::fcntl_setfl(&endpoint.socket, blocking)?;
             require(
                 net::send(
                     &endpoint.socket,
