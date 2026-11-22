@@ -131,8 +131,18 @@ mod linux {
         args: Vec<std::ffi::OsString>,
     ) -> io::Result<String> {
         let group = rustix::process::getgid().as_raw();
-        let selection = SelectedInstallation::open()
-            .map_err(|error| io::Error::other(format!("selection open failed: {error}")))?;
+        let selector = format!("/etc/agentswapper/installations/{user}/active.json");
+        let selector_state = match std::fs::symlink_metadata(&selector) {
+            Ok(meta) => format!(
+                "present mode={:o} links={}",
+                meta.mode() & 0o7777,
+                meta.nlink()
+            ),
+            Err(error) => format!("missing: {error}"),
+        };
+        let selection = SelectedInstallation::open().map_err(|error| {
+            io::Error::other(format!("selection open failed ({selector_state}): {error}"))
+        })?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
