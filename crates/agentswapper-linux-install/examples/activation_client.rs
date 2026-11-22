@@ -138,7 +138,9 @@ mod linux {
             .map_err(io::Error::other)?;
         runtime.block_on(async {
             let deadline = Instant::now() + Duration::from_secs(60);
-            let endpoint = connect_endpoint(&selection).await?;
+            let endpoint = connect_endpoint(&selection)
+                .await
+                .map_err(|error| io::Error::other(format!("endpoint connect failed: {error}")))?;
             // The channel must become blocking for the launch-control frames;
             // only the connect itself needed nonblocking behavior.
             let blocking =
@@ -177,16 +179,20 @@ mod linux {
                 Vec::<(std::ffi::OsString, std::ffi::OsString)>::new(),
                 Vec::<(std::ffi::OsString, Option<std::ffi::OsString>)>::new(),
             )?;
-            envelope.send_to_until(&endpoint.socket, deadline)?;
+            envelope
+                .send_to_until(&endpoint.socket, deadline)
+                .map_err(|error| io::Error::other(format!("envelope transfer failed: {error}")))?;
             let run_nonce = nonce()?;
-            launch_protocol::receive_launch_gate_open(&endpoint.socket, deadline)?;
+            launch_protocol::receive_launch_gate_open(&endpoint.socket, deadline)
+                .map_err(|error| io::Error::other(format!("launch gate missing: {error}")))?;
             net::send(
                 &endpoint.socket,
                 &launch_protocol::launch_gate_packet(&run_nonce),
                 SendFlags::NOSIGNAL,
             )?;
             let (event_nonce, child) =
-                launch_protocol::receive_exec_event_open(&endpoint.socket, deadline)?;
+                launch_protocol::receive_exec_event_open(&endpoint.socket, deadline)
+                    .map_err(|error| io::Error::other(format!("exec event missing: {error}")))?;
             require(
                 event_nonce == run_nonce,
                 "the exec event carried a foreign nonce",
