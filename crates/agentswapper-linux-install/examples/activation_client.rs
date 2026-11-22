@@ -23,6 +23,7 @@ mod linux {
     use std::{
         io,
         io::Read,
+        os::unix::fs::MetadataExt,
         time::{Duration, Instant},
     };
 
