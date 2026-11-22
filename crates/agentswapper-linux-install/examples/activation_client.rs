@@ -131,7 +131,8 @@ mod linux {
         args: Vec<std::ffi::OsString>,
     ) -> io::Result<String> {
         let group = rustix::process::getgid().as_raw();
-        let selection = SelectedInstallation::open()?;
+        let selection = SelectedInstallation::open()
+            .map_err(|error| io::Error::other(format!("selection open failed: {error}")))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
