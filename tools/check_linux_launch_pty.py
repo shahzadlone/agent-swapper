@@ -23,14 +23,19 @@ def require(ok, message):
 def main():
     args = sys.argv[1:]
     require(
-        len(args) >= 5 and args[0] == "--client",
-        "expects --client CLIENT USER JOURNAL -- TARGET [ARGS...]",
+        len(args) >= 4 and args[0] == "--client",
+        "expects --client CLIENT [ARGS...] --target TARGET [ARGS...]",
     )
-    client = args[1]
-    user = args[2]
-    journal = args[3]
-    require(args[4] == "--", "expected -- before the target")
-    target = args[5:]
+    separator = args.index("--target")
+    command = [args[1], *args[2:separator]]
+    target = args[separator + 1:]
+    require(bool(command) and bool(target), "both the client command and the target are required")
+    client = command[0]
+    user = next(
+        (argument for argument in command[1:] if argument.isdigit()),
+        None,
+    )
+    require(user is not None, "the client command must carry the numeric user id")
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
@@ -43,7 +48,7 @@ def main():
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
     process = subprocess.Popen(
-        [client, user, "launch", journal, *target],
+        [*command, *target],
         stdin=slave,
         stdout=slave,
         stderr=slave,
