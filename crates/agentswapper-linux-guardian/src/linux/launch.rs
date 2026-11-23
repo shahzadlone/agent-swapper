@@ -181,7 +181,11 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     )?;
     launch_protocol::receive_exec_release(channel, &nonce, child_id, deadline)?;
     eprintln!("guardian: exec released child={child_id}");
-    ptrace::cont(pid, None)
+    // Detach rather than continue: the released target runs untraced, so its
+    // own children's signals (a shell's SIGCHLD from forking a command) are
+    // delivered normally instead of arriving as tracer stops. The guardian
+    // remains the parent and still waits the direct child's exit.
+    ptrace::detach(pid, None)
         .map_err(|error| io::Error::other(format!("release failed: {error}")))?;
     // The client owns the master for the target's lifetime: terminal bytes
     // flow between the client's outer terminal and the master while this
