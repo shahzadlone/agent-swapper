@@ -78,7 +78,21 @@ def main():
             "unexpected launch outcome",
         )
         code = process.wait(timeout=20)
-        require(code == 0, f"the launch client did not succeed: {code}")
+        # Drain whatever the client wrote last (its diagnostics land on the
+        # pty and may arrive after the exit).
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.3)
+            if not ready:
+                break
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            seen += chunk
+        require(code == 0, f"the launch client did not succeed: {code}; saw {seen[-800:]!r}")
         print("interactive launch pty: input, resize backhaul and output verified")
     finally:
         if process.poll() is None:
