@@ -438,7 +438,18 @@ jobs:
           # The durable journal must carry the intent, the spawn observation
           # and the authenticated exit for the one run, with nothing else.
           journal_records=$(ls "$launch_journal" | grep -c -E '^(intent|spawn|exit)-')
-          require_records() {
+          require_records
+          # Interactive qualification on a real pty: the client's outer
+          # terminal becomes a tty, a resize is applied mid-flight, and the
+          # target must see both the forwarded size and the input through
+          # the full production channel.
+          pty_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-pty-XXXXXXXX")
+          chmod 700 "$pty_journal"
+          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$bind" "$uid" "$pty_journal" -- \
+            /bin/sh -c 'sleep 1; stty size; read line; echo got:$line' || {
+            echo '::error title=launch pty control::interactive launch failed'
+            exit 1
+          }() {
             if [ "$journal_records" != "3" ]; then
               echo "::error title=launch control::expected three journal records, found $journal_records"
               ls -la "$launch_journal"
@@ -446,6 +457,17 @@ jobs:
             fi
           }
           require_records
+          # Interactive qualification on a real pty: the client's outer
+          # terminal becomes a tty, a resize is applied mid-flight, and the
+          # target must see both the forwarded size and the input through
+          # the full production channel.
+          pty_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-pty-XXXXXXXX")
+          chmod 700 "$pty_journal"
+          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$bind" "$uid" "$pty_journal" -- \
+            /bin/sh -c 'sleep 1; stty size; read line; echo got:$line' || {
+            echo '::error title=launch pty control::interactive launch failed'
+            exit 1
+          }
           echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation and held-exec launch completed; no provider command'
 
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$eval" "$guardian"
