@@ -496,3 +496,31 @@ Next implementation work:
 3. Shell stop/bg/fg through the relay (the qualified fixture's job-control
    evidence adapts to the production channel).
 4. Authenticated restart recovery.
+
+## Store adapter readiness (independent review, 2026-11-22)
+
+The demanded independent review of the `Journal` seam completed with the
+verdict: wireable after bounded FIX-FIRST items (all implemented in
+`13c4e23`), with one standing design gap. Key findings, all with file:line
+references in the review:
+- `confirm_intent` must carry the one-use `ServiceKey` by value (it is
+  non-cloneable and doctest-enforced); the adapter moves it into
+  `bind_linux_scope` — implemented.
+- `finish_run(RunCompletion::ChildExited)` is unimplementable for
+  LinuxCgroup-scoped runs (the RunFinished projection requires local_scope
+  IS NULL for exited, and LinuxScopeRetired sets outcome=local_scope_empty);
+  the adapter must use retirement-commit semantics instead.
+- The client must keep its retained `BoundService`, close the activation
+  socket first, observe the original scope's retirement on the still-open
+  manager connection, and only then authorize the retirement commit —
+  implemented in the closure order.
+- The adapter owns the profile lease lifecycle (register/lease/release);
+  the unresolved intent blocks profile reuse by design; lease-fd transfer
+  to the guardian belongs to the fresh-entry/session-helper composition.
+- STANDING GAP: schema 9 records scope emptiness but has no durable record
+  of a scoped run's authenticated target exit (today it lives only in the
+  FileJournal text and client memory). The Store adapter design must add an
+  event/outcome for scoped-run exits before item 5 is complete.
+- No rollback of a partially begun run: atomic event+projection commits and
+  the append-only journal mean the unresolved intent is the durable state
+  that blocks reuse until the separately qualified restart recovery.
