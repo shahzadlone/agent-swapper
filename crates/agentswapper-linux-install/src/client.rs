@@ -17,8 +17,7 @@ use agentswapper_linux_runtime::launch_envelope::LaunchEnvelope;
 use agentswapper_linux_runtime::launch_protocol;
 use rustix::net::{self, SendFlags};
 use std::{
-    io,
-    io::Read,
+    io::{self, Read, Write},
     time::{Duration, Instant},
 };
 
@@ -28,6 +27,70 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
     } else {
         Err(io::Error::other(message))
     }
+}
+
+/// Relay terminal bytes between the backhauled master and this process's
+/// outer terminal until the master ends. Raw modes, resize and job-control
+/// handoff stay with the separately qualified relay composition; this
+/// bounded path preserves byte order and final output only.
+fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
+    use std::os::fd::AsFd;
+    let input = io::stdin().as_fd().try_clone_to_owned()?;
+    let master_feed = master.as_fd().try_clone_to_owned()?;
+    let writer = std::thread::spawn(move || -> io::Result<()> {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = rustix::io::read(&input, &mut buffer)?;
+            if count == 0 {
+                // Outer input ended: stop feeding the target without
+                // shutting down its terminal.
+                return Ok(());
+            }
+            rustix::io::write(&master_feed, &buffer[..count])?;
+        }
+    });
+    let mut output = io::stdout();
+    let mut buffer = [0_u8; 4096];
+    let mut timed_out = false;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|value| !value.is_zero());
+        let Some(remaining) = remaining else {
+            timed_out = true;
+            break;
+        };
+        let timeout = rustix::event::Timespec::try_from(remaining).map_err(io::Error::other)?;
+        let mut ready = [rustix::event::PollFd::new(
+            master,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut ready, Some(&timeout)) {
+            Err(rustix::io::Errno::INTR) => continue,
+            value => value?,
+        };
+        let count = match rustix::io::read(master, &mut buffer) {
+            Err(rustix::io::Errno::AGAIN) => continue,
+            Err(rustix::io::Errno::INTR) => continue,
+            value => value?,
+        };
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count])?;
+        output.flush()?;
+    }
+    // The stdin feeder ends on its own; a join failure is an outer error.
+    let fed = writer
+        .join()
+        .map_err(|_| io::Error::other("terminal feeder panicked"))?;
+    if timed_out {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "terminal relay deadline expired",
+        ));
+    }
+    fed
 }
 
 fn nonce() -> io::Result<[u8; 16]> {
@@ -210,6 +273,14 @@ pub fn launch(
             &launch_protocol::exec_release_packet(&run_nonce, child),
             SendFlags::NOSIGNAL,
         )?;
+        // The terminal master backhaul: the client owns the master for the
+        // target's lifetime and relays its bytes until the target ends.
+        let master = agentswapper_linux_runtime::admission_transport::receive_until(
+            &endpoint.socket,
+            deadline,
+        )
+        .map_err(|error| io::Error::other(format!("terminal master missing: {error}")))?;
+        relay(&master, deadline)?;
         let exit = launch_protocol::receive_exit_report(&endpoint.socket, &run_nonce, deadline)
             .map_err(|error| io::Error::other(format!("exit report missing: {error}")))?;
         journal

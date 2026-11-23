@@ -132,7 +132,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     // The client's launch data travels only over the authenticated
     // connection, never in helper argv or the helper environment.
     let envelope = LaunchEnvelope::receive_from_until(channel, deadline)?;
-    let (_master, slave) = terminal::pair()?;
+    let (master, slave) = terminal::pair()?;
     let (control_client, control_shim) = transport::pair()?;
     let mut command = Command::new(shim_path);
     command
@@ -180,6 +180,12 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     launch_protocol::receive_exec_release(channel, &nonce, child_id, deadline)?;
     ptrace::cont(pid, None)
         .map_err(|error| io::Error::other(format!("release failed: {error}")))?;
+    // The client owns the master for the target's lifetime: terminal bytes
+    // flow between the client's outer terminal and the master while this
+    // tracer waits the direct child. The client's clean disconnect and the
+    // manager-owned scope retirement follow when this service exits.
+    transport::send_until(channel, transport::GO, &[master.as_fd()], deadline)?;
+    drop(master);
     let exit = wait_exit(pid, deadline)?;
     net_send(
         channel,
