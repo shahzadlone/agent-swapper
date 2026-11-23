@@ -2,11 +2,11 @@
 //! modes map to the library; the Store-backed journal wires the launch
 //! client's durable seam to the real Store. This binary never accepts a
 //! provider command; the target program is the caller's explicit argument.
-use agentswapper_core::domain::Harness;
 use std::process;
 
 #[cfg(target_os = "linux")]
 fn main() -> process::ExitCode {
+    use agentswapper_core::domain::Harness;
     enum Mode {
         Launch(Harness, String, std::ffi::OsString, Vec<std::ffi::OsString>),
     }
