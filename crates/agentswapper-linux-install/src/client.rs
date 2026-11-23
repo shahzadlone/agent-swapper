@@ -59,6 +59,25 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
             .flatten();
         let mut buffer = [0_u8; 4096];
         loop {
+            // The feeder must notice window-size changes while idle: poll
+            // the outer terminal with a short timeout instead of blocking
+            // until bytes arrive.
+            let mut ready = [rustix::event::PollFd::new(
+                &input,
+                rustix::event::PollFlags::IN,
+            )];
+            match rustix::event::poll(
+                &mut ready,
+                Some(&rustix::event::Timespec {
+                    tv_sec: 0,
+                    tv_nsec: 100_000_000,
+                }),
+            ) {
+                Err(rustix::io::Errno::INTR) => {}
+                value => {
+                    value?;
+                }
+            };
             if rustix::termios::isatty(&input)
                 && let Ok(size) = rustix::termios::tcgetwinsize(&input)
                 && last_size != Some(size)
