@@ -73,6 +73,25 @@ def main():
             seen += chunk
             if b"got:ping" in seen and b"111 33" in seen:
                 break
+        code = process.wait(timeout=20)
+        # Drain whatever the client wrote last (its diagnostics land on the
+        # pty and may arrive after the exit).
+        drain_deadline = time.monotonic() + 2
+        while time.monotonic() < drain_deadline:
+            ready, _, _ = select.select([master], [], [], 0.3)
+            if not ready:
+                break
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            seen += chunk
+        require(
+            code == 0,
+            f"the launch client did not succeed: {code}; saw {seen[-800:]!r}",
+        )
         require(
             b"got:ping" in seen,
             f"the target did not receive the input through the relay; saw {seen[-600:]!r}",
