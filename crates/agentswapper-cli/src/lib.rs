@@ -46,6 +46,16 @@ enum Commands {
         #[command(subcommand)]
         command: Option<config_cli::ConfigCommands>,
     },
+    /// Experimental Linux managed launch through the installed session helper.
+    /// Execs the helper image as a fresh process with the shell's job identity;
+    /// never links the transport into this process. The caller passes the
+    /// target program and its arguments explicitly.
+    ManagedLaunch {
+        profile: Alias,
+        /// Arguments passed directly to the native CLI, without a shell.
+        #[arg(last = true)]
+        args: Vec<OsString>,
+    },
     /// Compare execution engines, ownership, benefits and limitations.
     Engines,
     #[command(flatten)]
@@ -342,6 +352,9 @@ fn dispatch(cli: Cli) -> Result<i32> {
         }
         Some(Commands::Handover { command }) => {
             return handover_cli::dispatch(command, cli.json, cli.state_dir);
+        }
+        Some(Commands::ManagedLaunch { profile, args }) => {
+            return managed_launch_exec(profile, args);
         }
         Some(Commands::Registry(command)) => command,
         None => return Ok(0),
@@ -882,6 +895,73 @@ fn launch_profile(
     match engine {
         ExecutionEngine::Native => plan.execute(store, true),
         ExecutionEngine::Gents => plan.execute_gents(store, true),
+    }
+}
+
+/// Experimental Linux managed launch: exec the installed session-helper
+/// image as a fresh process, preserving this shell's PID, group and job
+/// membership (the fresh-entry design's first requirement). This process
+/// never links the transport; the helper owns the Store, the manager
+/// connection and the launch client. The installation must be compatible:
+/// a stale or mismatched installation refuses instead of launching outside
+/// containment.
+fn managed_launch_exec(profile: Alias, args: Vec<OsString>) -> Result<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        use agentswapper_linux_runtime::installed_selection::SelectedInstallation;
+        use std::os::unix::process::CommandExt;
+
+        let selection = SelectedInstallation::open()?;
+        let identity = selection.artifacts().manifest().identity();
+        if identity.0 != rustix::process::getuid().as_raw() {
+            return Err(Error::UnsafePath);
+        }
+        let (helper, _expected) = selection.artifacts().manifest().session_helper();
+        let root = Store::default_root()?;
+        let harness = {
+            let store = Store::open(&root)?;
+            let found = store
+                .profiles()?
+                .into_iter()
+                .find(|candidate| candidate.alias == profile)
+                .ok_or(Error::NotFound)?;
+            found.harness
+        };
+        let harness_arg = match harness {
+            Harness::Claude => "claude",
+            Harness::Codex => "codex",
+            Harness::Kimi => "kimi",
+            Harness::Gents => return Err(Error::UnsupportedContainment),
+        };
+        let program = args
+            .first()
+            .ok_or(Error::NotFound)?
+            .to_str()
+            .ok_or(Error::UnsafePath)?
+            .to_owned();
+        let rest: Vec<String> = args
+            .iter()
+            .skip(1)
+            .map(|argument| {
+                argument
+                    .to_str()
+                    .map(str::to_owned)
+                    .ok_or(Error::UnsafePath)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut command = std::process::Command::new(helper);
+        command
+            .arg(root.into_os_string())
+            .arg(harness_arg)
+            .arg(profile.to_string())
+            .arg(&program)
+            .args(&rest);
+        Err(command.exec().into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (profile, args);
+        Err(Error::UnsupportedContainment)
     }
 }
 

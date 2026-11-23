@@ -60,6 +60,7 @@ name = "agentswapper-cli"
 version = "0.1.0-dev"
 dependencies = [
  "agentswapper-core",
+ "agentswapper-linux-runtime",
  "assert_cmd",
  "clap",
  "crossterm",

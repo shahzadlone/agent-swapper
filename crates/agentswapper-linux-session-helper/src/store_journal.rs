@@ -62,7 +62,17 @@ impl StoreJournal {
     pub fn open(root: &Path, harness: Harness, alias: &str) -> io::Result<Self> {
         let alias: Alias = alias.parse().map_err(other)?;
         let mut store = Store::open(root).map_err(other)?;
-        let profile = store.register(harness, alias).map_err(other)?.id;
+        // The profile is the caller's existing registration: the helper
+        // never creates profiles, it launches through one.
+        let profile = store
+            .profiles()
+            .map_err(other)?
+            .into_iter()
+            .find(|profile| profile.alias == alias && profile.harness == harness)
+            .ok_or_else(|| {
+                io::Error::other("no active profile matches the requested harness and alias")
+            })?
+            .id;
         let lease = store.lease(profile).map_err(other)?;
         let run = store
             .begin_run_with_scope(
