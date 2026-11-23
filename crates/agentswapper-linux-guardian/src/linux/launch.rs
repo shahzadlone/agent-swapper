@@ -132,6 +132,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     // The client's launch data travels only over the authenticated
     // connection, never in helper argv or the helper environment.
     let envelope = LaunchEnvelope::receive_from_until(channel, deadline)?;
+    eprintln!("guardian: envelope received");
     let (master, slave) = terminal::pair()?;
     let (control_client, control_shim) = transport::pair()?;
     let mut command = Command::new(shim_path);
@@ -171,6 +172,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     // The kernel's exec trap is the only exec evidence; the shim's exit
     // code and any EOF prove nothing.
     wait_trap(pid, deadline)?;
+    eprintln!("guardian: exec trapped child={}", pid);
     let child_id = child.id();
     net_send(
         channel,
@@ -178,6 +180,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
         deadline,
     )?;
     launch_protocol::receive_exec_release(channel, &nonce, child_id, deadline)?;
+    eprintln!("guardian: exec released child={child_id}");
     ptrace::cont(pid, None)
         .map_err(|error| io::Error::other(format!("release failed: {error}")))?;
     // The client owns the master for the target's lifetime: terminal bytes
@@ -187,6 +190,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     transport::send_until(channel, transport::GO, &[master.as_fd()], deadline)?;
     drop(master);
     let exit = wait_exit(pid, deadline)?;
+    eprintln!("guardian: target exited {exit:?}");
     net_send(
         channel,
         &launch_protocol::exit_report_packet(&nonce, &exit)?,
