@@ -52,11 +52,10 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
     let master_feed = master.as_fd().try_clone_to_owned()?;
     let writer = std::thread::spawn(move || -> io::Result<()> {
         let input = feeder_input;
-        let mut last_size = rustix::termios::isatty(&input)
-            .then(|| rustix::termios::tcgetwinsize(&input))
-            .transpose()
-            .ok()
-            .flatten();
+        // The baseline starts unset: the first poll syncs the inner master
+        // to the outer terminal's current size, whatever it is by the time
+        // the relay starts.
+        let mut last_size = None;
         let mut buffer = [0_u8; 4096];
         loop {
             // The feeder must notice window-size changes while idle: poll
