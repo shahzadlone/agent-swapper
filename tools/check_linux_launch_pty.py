@@ -65,8 +65,14 @@ def main():
             seen += chunk
             if b"got:ping" in seen and b"111 33" in seen:
                 break
-        require(b"got:ping" in seen, "the target did not receive the input through the relay")
-        require(b"111 33" in seen, "the window-size change was not forwarded to the target")
+        require(
+            b"got:ping" in seen,
+            f"the target did not receive the input through the relay; saw {seen[-600:]!r}",
+        )
+        require(
+            b"111 33" in seen,
+            f"the window-size change was not forwarded to the target; saw {seen[-600:]!r}",
+        )
         require(
             b"target exited" not in seen or b"Code" in seen or b"code" in seen,
             "unexpected launch outcome",
