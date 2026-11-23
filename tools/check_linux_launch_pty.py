@@ -6,6 +6,7 @@ the control. Read-only evidence; no provider command is ever accepted.
 """
 import fcntl
 import os
+import pty
 import select
 import struct
 import subprocess
