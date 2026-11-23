@@ -387,3 +387,27 @@ Next implementation work:
    PTY master backhaul), resize/raw/stop-bg-fg per the qualified relay
    fixture.
 3. The session-helper role and authenticated restart recovery.
+
+# Session continuation: 2026-11-22 (third)
+
+- `e66ad1d`..`2bc7837` added the terminal master backhaul and the bounded
+  client-side relay: the guardian hands the PTY master to the client after
+  the held-exec release, the client relays the target's bytes to its outer
+  terminal (a feeder thread feeds outer input without shutting down the
+  target's terminal), and consumes the authenticated exit report after the
+  master ends. The master's EIO after the last slave closes is the relay's
+  clean end (the qualified fixture's convention). The hosted launch control
+  launches /bin/echo and requires its output to reach the client; the full
+  pipeline passed at `2bc7837`
+  ([45103616256](https://github.com/shahzadlone/agent-swapper/actions/runs/45103616256)).
+- Raw modes, resize and job-control handoff stay with the separately
+  qualified relay composition (managed_terminal_relay); this bounded path
+  preserves byte order, final output and the exit-report ordering.
+
+Next implementation work:
+1. The interactive relay qualification: raw mode entry/exit, resize
+   (TIOCSWINSZ backhaul), shell stop/bg/fg with the outer terminal, hidden
+   input — per the qualified managed_terminal_relay fixture, adapted to the
+   production channel.
+2. The production Store adapter behind the `Journal` seam + CLI wiring.
+3. The session-helper role and authenticated restart recovery.
