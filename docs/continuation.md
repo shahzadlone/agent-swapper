@@ -430,3 +430,34 @@ Next implementation work:
    managed_terminal_relay fixture.
 2. The production Store adapter behind the `Journal` seam + the CLI wiring.
 3. The session-helper role and authenticated restart recovery.
+
+## Session status summary (2026-11-22, end)
+
+Qualified and integrated on main, each with full-pipeline evidence:
+- Endpoint authentication + adversarial pathname replacement races.
+- Installation transaction (producer plan, root executor, hosted lifecycle
+  with upgrade/removal/deselect) + the install executor crate.
+- Activation protocol: guardian service, offer vocabulary, connection
+  identity, bind-mode round trip, instance retirement.
+- Held-exec launch: envelope, PTY, tracer hold, exec event, exact-child
+  release, authenticated exit report.
+- Terminal backhaul: master transfer, bounded byte relay, raw mode +
+  resize backhaul, EIO convention; /bin/echo output reaches the client.
+- Durable journal seam (intent before gate, spawn observation before
+  release, exit audit) with the fsync'd FileJournal and the hosted
+  three-record control.
+
+Open gates, in order, each needing its own focused session:
+1. **Production Store adapter** behind `launch_client::Journal` — the seam's
+   contract requires an independent review before wiring; core's live
+   linux-scope path stays qualification-gated until that review (do not
+   promote it by relaxing checks).
+2. **Interactive relay qualification** on a real pty (wrap the client in
+   `script` on hosted CI): stop/bg/fg, hidden input, resize evidence.
+3. **Session-helper role** (the outer owner image: launch client + Store)
+   and the CLI exec composition per the fresh-entry design; the CLI must
+   not link the transport (boundary check stays).
+4. **Authenticated restart recovery**; then the real-provider cells (the
+   user's Claude/Codex/Kimi subscriptions are available; disposable test
+   profiles were deferred until all provider-free work is done — this is
+   the trigger point for asking).
