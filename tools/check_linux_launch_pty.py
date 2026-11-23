@@ -34,12 +34,20 @@ def main():
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    def foreground_session():
+        # The client becomes the session leader with the pty as its
+        # controlling terminal and its own group as the foreground group, so
+        # its terminal reads and mode changes cannot be stopped by SIGTTIN
+        # or SIGTTOU.
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
     process = subprocess.Popen(
         [client, user, "launch", journal, *target],
         stdin=slave,
         stdout=slave,
         stderr=slave,
-        start_new_session=True,
+        preexec_fn=foreground_session,
         close_fds=True,
     )
     os.close(slave)
