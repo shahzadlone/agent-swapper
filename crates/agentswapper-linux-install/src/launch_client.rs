@@ -5,6 +5,7 @@
 //! is a separately reviewed gate; this module defines the mandatory
 //! semantics and ships a local fsync'd journal for disposable launches.
 use crate::client;
+use agentswapper_linux_manager::{RetiredService, ServiceKey};
 use std::{
     fs,
     io::{self, Write},
@@ -22,21 +23,31 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 
 /// The durable journal boundary the launch client composes on. Implementations
 /// must satisfy, and the client enforces:
-/// - `open` creates or attaches the durable journal before preparation runs.
 /// - `confirm_intent` commits the durable run intent synchronously while the
 ///   exec is held, before the client releases it; its `Ok(())` is the only
-///   launch-gate authority the client receives.
+///   launch-gate authority the client receives. It receives the launch's
+///   one-use `ServiceKey` by value: the adapter moves it into the durable
+///   scope association, where it cannot be extracted or serialized. A failed
+///   commit consumes the key into the adapter's pending association; the run
+///   stays unresolved and is never re-launched.
 /// - `observe_spawn` durably records the spawn observation before the client
 ///   releases the held exec; an uncertain write is an error.
-/// - `audit_exit` records the authenticated target exit; it never completes
-///   the run or manufactures retirement evidence.
+/// - `audit_exit` commits the authenticated target exit together with the
+///   one-use retirement value. It runs only after the client has
+///   independently observed the original scope's retirement on its retained
+///   handles; the retirement value authorizes exactly this commit and no
+///   other. A failure is retry-safe: the adapter retains the retirement
+///   value for in-place retry, and the run's profile stays blocked until the
+///   commit lands.
 ///
-/// A production Store adapter needs an independent review of these
-/// properties; fixture or example success alone does not qualify it.
+/// An independent review (2026-11-22) fixed these signatures and the client's
+/// closure order; a production Store adapter must additionally decide the
+/// durable recording of a scoped run's target exit, which today lives only
+/// in this journal's records and the client's memory.
 pub trait Journal {
-    fn confirm_intent(&self, invocation: &str, nonce: &str) -> io::Result<()>;
+    fn confirm_intent(&self, invocation: &str, nonce: &str, key: ServiceKey) -> io::Result<()>;
     fn observe_spawn(&self, invocation: &str, child: u32) -> io::Result<()>;
-    fn audit_exit(&self, invocation: &str, exit: &str) -> io::Result<()>;
+    fn audit_exit(&self, invocation: &str, exit: &str, retired: RetiredService) -> io::Result<()>;
 }
 
 /// A local fsync'd journal in one private directory. Records are created
@@ -76,7 +87,9 @@ impl FileJournal {
 }
 
 impl Journal for FileJournal {
-    fn confirm_intent(&self, invocation: &str, nonce: &str) -> io::Result<()> {
+    fn confirm_intent(&self, invocation: &str, nonce: &str, _key: ServiceKey) -> io::Result<()> {
+        // The disposable record cannot hold the non-serializable key; the
+        // record only marks the durable intent for this launch.
         self.record(
             &format!("intent-{invocation}"),
             &format!("run intent held before launch gate; nonce {nonce}; outcome unresolved"),
@@ -88,7 +101,9 @@ impl Journal for FileJournal {
             &format!("authenticated exec observed; child {child}"),
         )
     }
-    fn audit_exit(&self, invocation: &str, exit: &str) -> io::Result<()> {
+    fn audit_exit(&self, invocation: &str, exit: &str, _retired: RetiredService) -> io::Result<()> {
+        // The retirement value is consumed here; the disposable record
+        // cannot serialize it.
         self.record(
             &format!("exit-{invocation}"),
             &format!("authenticated target exit: {exit}"),

@@ -173,12 +173,19 @@ async fn connect_endpoint(selection: &SelectedInstallation) -> io::Result<Endpoi
     })
 }
 
+/// Bind the original service and hand back the retained binding together
+/// with its one-use key: the key moves into the durable journal association,
+/// and the retained binding observes the original scope's retirement before
+/// any retirement commit is authorized.
 async fn bind_original(
     manager: &agentswapper_linux_manager::Manager,
     owner: &str,
     offer: &Offer,
     selection: SelectedInstallation,
-) -> io::Result<()> {
+) -> io::Result<(
+    agentswapper_linux_manager::BoundService,
+    agentswapper_linux_manager::ServiceKey,
+)> {
     let policy = ServicePolicy::installed(selection)?;
     let mut bound = BoundService::bind(
         manager,
@@ -192,8 +199,7 @@ async fn bind_original(
     )
     .await?;
     let key = bound.claim_key()?;
-    drop(key);
-    Ok(())
+    Ok((bound, key))
 }
 
 /// Bind-only activation: authenticate the endpoint, send the bind request,
@@ -269,9 +275,10 @@ pub fn launch(
                 "activation offer names another installation",
             ));
         }
-        bind_original(&endpoint.manager, &endpoint.owner, &offer, selection)
-            .await
-            .map_err(|error| io::Error::other(format!("service binding failed: {error}")))?;
+        let (mut bound, service_key) =
+            bind_original(&endpoint.manager, &endpoint.owner, &offer, selection)
+                .await
+                .map_err(|error| io::Error::other(format!("service binding failed: {error}")))?;
         // The launch-control frames need the receive timeout, which only
         // applies to a blocking channel, and they refuse any credential
         // control data; the offer above needed the nonblocking
@@ -292,9 +299,10 @@ pub fn launch(
             .map_err(|error| io::Error::other(format!("envelope transfer failed: {error}")))?;
         let run_nonce = nonce()?;
         let nonce_hex = launch_protocol::encoded(&run_nonce);
-        // The durable run intent is the only launch-gate authority.
+        // The durable run intent is the only launch-gate authority; it
+        // consumes the one-use key into the durable scope association.
         journal
-            .confirm_intent(&offer.invocation, &nonce_hex)
+            .confirm_intent(&offer.invocation, &nonce_hex, service_key)
             .map_err(|error| io::Error::other(format!("run intent failed: {error}")))?;
         net::send(
             &endpoint.socket,
@@ -328,11 +336,22 @@ pub fn launch(
         relay(&master, deadline)?;
         let exit = launch_protocol::receive_exit_report(&endpoint.socket, &run_nonce, deadline)
             .map_err(|error| io::Error::other(format!("exit report missing: {error}")))?;
+        // Clean disconnect of the activation socket only: the manager
+        // connection stays open as the retirement observation's transport.
+        drop(endpoint.socket);
+        // Independently observe the original scope's retirement on the
+        // retained binding and original handles; a received exit report
+        // alone never authorizes the retirement commit.
+        let retired = bound
+            .observe_retirement(&endpoint.manager, tokio::time::Instant::from_std(deadline))
+            .await
+            .map_err(|error| io::Error::other(format!("retirement observation failed: {error}")))?;
+        // The audit commits the retirement with the one-use value and
+        // records the authenticated target exit; retry-safe in the adapter.
         journal
-            .audit_exit(&offer.invocation, &format!("{exit:?}"))
+            .audit_exit(&offer.invocation, &format!("{exit:?}"), retired)
             .map_err(|error| io::Error::other(format!("exit audit failed: {error}")))?;
         let closed = endpoint.manager.close().await.map_err(io::Error::other);
-        drop(endpoint.socket);
         closed?;
         Ok(format!(
             "target exited: {exit:?} (run {} in {})",
