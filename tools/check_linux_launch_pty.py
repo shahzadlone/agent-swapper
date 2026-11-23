@@ -31,11 +31,13 @@ def main():
     target = args[separator + 1:]
     require(bool(command) and bool(target), "both the client command and the target are required")
     client = command[0]
+    # Some client interfaces carry the numeric user id (the disposable
+    # client); others derive it from the process identity (the CLI's
+    # managed launch). The control never uses it itself.
     user = next(
         (argument for argument in command[1:] if argument.isdigit()),
         None,
     )
-    require(user is not None, "the client command must carry the numeric user id")
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
