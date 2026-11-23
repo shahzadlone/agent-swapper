@@ -451,6 +451,7 @@ jobs:
           chmod 700 "$pty_journal"
           /usr/bin/python3 tools/check_linux_launch_pty.py --client "$bind" "$uid" "$pty_journal" -- \
             /bin/sh -c 'sleep 1; stty size; read line; echo got:$line' || {
+            dump_journal
             echo '::error title=launch pty control::interactive launch failed'
             exit 1
           }
