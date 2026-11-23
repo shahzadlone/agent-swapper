@@ -461,3 +461,38 @@ Open gates, in order, each needing its own focused session:
    user's Claude/Codex/Kimi subscriptions are available; disposable test
    profiles were deferred until all provider-free work is done — this is
    the trigger point for asking).
+
+# Session continuation: 2026-11-22 (fifth)
+
+- `bc51be2`..`f80ab01` qualified the **interactive launch through a real
+  pty**: the hosted control gives the launch client a real outer pty as its
+  controlling terminal with its own group in the foreground (a background
+  terminal read or mode change raises SIGTTIN/SIGTTOU and stopped the whole
+  client), feeds input through the full production channel, applies a
+  window-size change mid-flight, and requires the target to see both the
+  forwarded size and the input. The relay's feeder syncs the inner master
+  to the outer terminal's current size at relay start and forwards changes
+  on a 100 ms poll. The full pipeline passed at `f80ab01`
+  ([45160165455](https://github.com/shahzadlone/agent-swapper/actions/runs/45160165455)).
+- Debugging lessons encoded: the client's feeder is detached (joining it
+  hangs on a terminal whose read side never closes); the tracer detaches at
+  the exec release (continuing it delivered the shell's own SIGCHLD as a
+  tracer stop); pty master reads report EIO after the last slave closes;
+  `stty size` prints rows-then-columns.
+- The independent review of the `Journal` seam (2026-11-22) fixed the
+  signatures: `confirm_intent` consumes the one-use ServiceKey by value,
+  `audit_exit` takes the one-use retirement value after the client's own
+  retirement observation, and the client keeps its retained binding through
+  the closure (`13c4e23`). The standing gap — durable recording of a scoped
+  run's target exit — is documented on the seam for the Store adapter design.
+
+Next implementation work:
+1. The production Store adapter behind the reviewed seam (in a home where
+   core and the manager crate can both be depended on — the session-helper
+   binary composition), including the schema/event decision for the scoped
+   run's durable target exit.
+2. The CLI wiring (`aswp` subcommands exec'ing the installed helpers per
+   the fresh-entry design; the CLI never links the transport).
+3. Shell stop/bg/fg through the relay (the qualified fixture's job-control
+   evidence adapts to the production channel).
+4. Authenticated restart recovery.
