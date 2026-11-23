@@ -18,8 +18,32 @@ impl super::Store {
     }
 }
 
+/// An authenticated direct target's wait status in the journal's pinned
+/// serialization, mirroring the runtime's `TargetExit`. Recorded only from
+/// the nonce-bound exit report that arrived before the retirement
+/// observation; a lost report stays unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TargetExit {
+    Code { code: u8 },
+    Signal { signal: u8, core_dumped: bool },
+}
+impl TargetExit {
+    /// The journal's established exit-code convention: a signal termination
+    /// propagates as 128 + signal. Returns None only for an out-of-range
+    /// signal, which the runtime's validation already refuses.
+    pub fn exit_code(self) -> Option<i32> {
+        match self {
+            Self::Code { code } => Some(i32::from(code)),
+            Self::Signal { signal, .. } if (1..=64).contains(&signal) => {
+                Some(128 + i32::from(signal))
+            }
+            Self::Signal { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(super) struct LinuxBinding {
     pub unit: String,
     pub invocation: [u8; 16],
@@ -137,6 +161,7 @@ mod live {
             &mut self,
             pending: &PendingLinuxScope,
             retired: RetiredService,
+            target_exit: Option<TargetExit>,
         ) -> std::result::Result<(), Box<ScopeRetireFailure>> {
             let result = (|| -> Result<()> {
                 if !Arc::ptr_eq(&self.scope_instance, &pending.store)
@@ -160,13 +185,17 @@ mod live {
                 {
                     return Err(Error::ScopeReceiptMismatch);
                 }
-                // The event and its projection commit atomically. Unknown target
-                // exit remains NULL; only the independently observed scope closes.
+                // The event and its projection commit atomically. The target
+                // exit is recorded only from the nonce-bound report that
+                // arrived before this retirement observation; unknown stays
+                // NULL, and the independently observed scope closure commits
+                // separately from the exit.
                 self.record_lifecycle_with_scope(
                     Event::LinuxScopeRetired {
                         id: pending.run.clone(),
                         scope: pending.scope,
                         binding,
+                        exit: target_exit,
                     },
                     Some(&ScopeAuthority { _private: () }),
                 )
@@ -234,6 +263,7 @@ mod tests {
                 id: run.clone(),
                 scope,
                 binding: binding(),
+                exit: None,
             },
         ];
         for event in events {
@@ -312,6 +342,7 @@ mod tests {
                 id: runs[0].0.clone(),
                 scope: runs[0].1,
                 binding: binding(),
+                exit: None,
             })
             .unwrap();
         assert!(store.record_scope_fixture(attempt).is_err());
@@ -349,6 +380,7 @@ mod tests {
             id: run.clone(),
             scope,
             binding: binding(),
+            exit: None,
         };
         let before = store.verify().unwrap().events;
         store.fail_after_scope_commit = true;
@@ -374,6 +406,7 @@ mod tests {
                 id: run.clone(),
                 scope,
                 binding: different,
+                exit: None
             }),
             Err(Error::CorruptRegistry)
         ));
@@ -419,6 +452,7 @@ mod tests {
                 id: run.clone(),
                 scope,
                 binding: binding(),
+                exit: None,
             })
             .unwrap();
         store
@@ -466,6 +500,7 @@ mod tests {
             id: run.clone(),
             scope,
             binding: binding(),
+            exit: None,
         };
         assert!(store.record_scope_fixture(finish.clone()).is_err());
         store
@@ -539,7 +574,8 @@ mod tests {
                     .record_scope_fixture(Event::LinuxScopeRetired {
                         id: run.clone(),
                         scope: claimed_scope,
-                        binding: wrong
+                        binding: wrong,
+                        exit: None
                     })
                     .is_err()
             );
@@ -553,6 +589,7 @@ mod tests {
                 id: run.clone(),
                 scope,
                 binding: binding(),
+                exit: None,
             })
             .unwrap();
         assert_eq!(store.run(&run).unwrap().exit_code, None);

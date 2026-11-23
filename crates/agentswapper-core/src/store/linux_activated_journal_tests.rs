@@ -101,17 +101,21 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     let (b_profile, b_run, b_pending, b) = pending(&mut store, "receipt-b", &prefix);
     let a_receipt = a.close().retire().unwrap().into_service();
     let b_receipt = b.close().retire().unwrap().into_service();
-    let a_failure = store.retire_linux_scope(&b_pending, a_receipt).unwrap_err();
-    let b_failure = store.retire_linux_scope(&a_pending, b_receipt).unwrap_err();
+    let a_failure = store
+        .retire_linux_scope(&b_pending, a_receipt, None)
+        .unwrap_err();
+    let b_failure = store
+        .retire_linux_scope(&a_pending, b_receipt, None)
+        .unwrap_err();
     assert!(matches!(a_failure.error, Error::ScopeReceiptMismatch));
     assert!(matches!(b_failure.error, Error::ScopeReceiptMismatch));
     unresolved(&store, a_profile, &a_run);
     unresolved(&store, b_profile, &b_run);
     store
-        .retire_linux_scope(&a_pending, a_failure.retired)
+        .retire_linux_scope(&a_pending, a_failure.retired, None)
         .unwrap();
     store
-        .retire_linux_scope(&b_pending, b_failure.retired)
+        .retire_linux_scope(&b_pending, b_failure.retired, None)
         .unwrap();
     drop(store.lease(a_profile).unwrap());
     drop(store.lease(b_profile).unwrap());
@@ -145,23 +149,25 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     assert!(foreign.original_directory_removed && foreign.main_pidfd_exited);
     assert!(!forged.matches(original.key()) && receipt.matches(original.key()));
     assert!(matches!(
-        store.retire_linux_scope(&original, forged),
+        store.retire_linux_scope(&original, forged, None),
         Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
     ));
     unresolved(&store, profile, &run);
     let before = store.verify().unwrap().events;
     store.db.commit_hook(Some(|| true)).unwrap();
-    let failure = store.retire_linux_scope(&original, receipt).unwrap_err();
+    let failure = store
+        .retire_linux_scope(&original, receipt, None)
+        .unwrap_err();
     store.db.commit_hook(None::<fn() -> bool>).unwrap();
     assert!(matches!(failure.error, Error::Database(_)));
     unresolved(&store, profile, &run);
     assert_eq!(store.verify().unwrap().events, before);
     store
-        .retire_linux_scope(&original, failure.retired)
+        .retire_linux_scope(&original, failure.retired, None)
         .unwrap();
     let count = store.verify().unwrap().events;
     assert!(matches!(
-        store.retire_linux_scope(&original, duplicate.retire().unwrap().into_service()),
+        store.retire_linux_scope(&original, duplicate.retire().unwrap().into_service(), None),
         Err(ref failure) if matches!(failure.error, Error::ScopeReceiptMismatch)
     ));
     assert_eq!(store.verify().unwrap().events, count);
@@ -175,12 +181,14 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     let (profile, run, original, prepared) = pending(&mut store, "reopened-store", &prefix);
     let receipt = prepared.close().retire().unwrap().into_service();
     let mut reopened = Store::open(&root).unwrap();
-    let failure = reopened.retire_linux_scope(&original, receipt).unwrap_err();
+    let failure = reopened
+        .retire_linux_scope(&original, receipt, None)
+        .unwrap_err();
     assert!(matches!(failure.error, Error::ScopeReceiptMismatch));
     unresolved(&store, profile, &run);
     drop(reopened);
     store
-        .retire_linux_scope(&original, failure.retired)
+        .retire_linux_scope(&original, failure.retired, None)
         .unwrap();
     drop(store.lease(profile).unwrap());
 
@@ -188,7 +196,9 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
     let receipt = prepared.close().retire().unwrap().into_service();
     let before = store.verify().unwrap().events;
     store.fail_after_scope_commit = true;
-    let failure = store.retire_linux_scope(&original, receipt).unwrap_err();
+    let failure = store
+        .retire_linux_scope(&original, receipt, None)
+        .unwrap_err();
     assert!(matches!(failure.error, Error::Io(error)
         if error.to_string() == "injected lost scope commit acknowledgement"));
     assert_eq!(store.verify().unwrap().events, before + 1);
@@ -197,7 +207,7 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
         ProcessCustody::LocalScopeEmpty
     );
     let failure = store
-        .retire_linux_scope(&original, failure.retired)
+        .retire_linux_scope(&original, failure.retired, None)
         .unwrap_err();
     assert!(matches!(failure.error, Error::ScopeAlreadyRetired));
     assert_eq!(store.verify().unwrap().events, before + 1);
@@ -223,7 +233,7 @@ fn opaque_scope_retirement_rejects_substitution_and_preserves_unknown_target_exi
         .retire()
         .unwrap()
         .into_service();
-    store.retire_linux_scope(&original, receipt).unwrap();
+    store.retire_linux_scope(&original, receipt, None).unwrap();
     let record = store.run(&run).unwrap();
     assert_eq!(record.custody, ProcessCustody::LocalScopeEmpty);
     assert_eq!(record.exit_code, None);

@@ -285,7 +285,9 @@ pub(super) fn validate_event(event: &Event) -> Result<()> {
             }
             binding.validate()?;
         }
-        Event::LinuxScopeRetired { id, scope, binding } => {
+        Event::LinuxScopeRetired {
+            id, scope, binding, ..
+        } => {
             if !canonical_uuid(id) || scope.is_nil() {
                 return Err(Error::CorruptRegistry);
             }

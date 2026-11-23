@@ -95,6 +95,8 @@ enum Event {
         id: String,
         scope: Uuid,
         binding: linux_scope::LinuxBinding,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit: Option<linux_scope::TargetExit>,
     },
     RunSpawned {
         id: String,
@@ -662,7 +664,10 @@ impl Store {
         if json.len() > journal::MAX_EVENT_BYTES {
             return Err(Error::RegistryEventTooLarge);
         }
-        if let Event::LinuxScopeRetired { id, scope, binding } = &event {
+        if let Event::LinuxScopeRetired {
+            id, scope, binding, ..
+        } = &event
+        {
             // The snapshot above is verified while holding the write lock.
             // Match both the exact event and its projection before recognizing
             // a lost acknowledgement. A similar outcome alone is insufficient.
@@ -889,10 +894,15 @@ fn apply(tx: &Transaction<'_>, event: &Event, recorded_at: &str) -> Result<()> {
                 params![serde_json::to_string(binding)?, id],
             )? != 1 { return Err(Error::CorruptRegistry); }
         }
-        Event::LinuxScopeRetired { id, scope, binding } => {
+        Event::LinuxScopeRetired { id, scope, binding, exit } => {
+            // The authenticated target exit (nonce-bound report received
+            // before the retirement observation) and the independently
+            // observed scope closure commit in one transaction; unknown
+            // exit stays NULL.
+            let exit_code = exit.and_then(|exit| exit.exit_code());
             if tx.execute(
-                "UPDATE main.runs SET outcome='local_scope_empty' WHERE id=?1 AND outcome IS NULL AND exit_code IS NULL AND linux_binding=?2 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND json_extract(local_scope,'$.id')=?3 AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')",
-                params![id, serde_json::to_string(binding)?, scope.to_string()],
+                "UPDATE main.runs SET outcome='local_scope_empty', exit_code=?4 WHERE id=?1 AND outcome IS NULL AND exit_code IS NULL AND linux_binding=?2 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND json_extract(local_scope,'$.id')=?3 AND profile IN (SELECT id FROM main.profiles WHERE harness<>'gents')",
+                params![id, serde_json::to_string(binding)?, scope.to_string(), exit_code],
             )? != 1 { return Err(Error::CorruptRegistry); }
         }
         Event::RunSpawned { id, pid } => {

@@ -127,7 +127,7 @@ impl FixtureJournal {
         drop(self.store.acquire_lease(self.profile)?);
         let pending = self.service.as_ref().ok_or(Error::Busy)?;
         self.store
-            .retire_linux_scope(pending, retired)
+            .retire_linux_scope(pending, retired, None)
             .map_err(|failure| {
                 // This fixed CLI fixture aborts on failure. The Store API also
                 // returns the original value for consumers that retry in place.
