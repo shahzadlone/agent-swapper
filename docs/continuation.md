@@ -524,3 +524,40 @@ references in the review:
 - No rollback of a partially begun run: atomic event+projection commits and
   the append-only journal mean the unresolved intent is the durable state
   that blocks reuse until the separately qualified restart recovery.
+
+# Session continuation: 2026-11-22 (sixth)
+
+- `30b6b71` closed the review's standing schema gap: the LinuxScopeRetired
+  event carries the nonce-bound authenticated target exit (pinned
+  serialization mirroring the runtime's shape) and the projection commits
+  exit_code with the scope-emptiness outcome in one atomic transaction,
+  using the journal's established code/128+signal mapping. Unknown exits
+  stay NULL; the optional field keeps older journal rows decodable. Full
+  pipeline passed.
+- `976800e`/`e363c97` added the **session-helper crate** — the outer owner's
+  launch entry whose Store-backed journal implements the reviewed Journal
+  seam: the run intent consumes the one-use ServiceKey into the durable
+  scope association before the gate, the spawn observation precedes the
+  release, and the authenticated exit commits with the retirement,
+  resolving the run and releasing the lease. The live linux-scope path is
+  promoted to the reviewed production surface (the 2026-11-22 review being
+  the demanded gate), feature-gated so core's and the CLI's default graphs
+  stay free of the manager dependency; the boundary check pins the
+  session-helper's default graph. Full pipeline passed at `e363c97`
+  ([45274663129](https://github.com/shahzadlone/agent-swapper/actions/runs/45274663129)).
+- The core gents launch test `core_opt_ins_cannot_authorize...` was
+  observed failing once in a full-workspace parallel run and passing in
+  isolation and on reruns (timing flake, same class as socket_reset).
+  Watch CI.
+
+Next implementation work:
+1. The session-helper's CLI-facing composition: the `aswp` entry exec'ing
+   the installed session-helper image per the fresh-entry design (the CLI
+   never links the transport), with the profile/alias selection coming from
+   the caller's configuration.
+2. Shell stop/bg/fg through the production relay (the qualified fixture's
+   job-control evidence adapts to the production channel).
+3. Authenticated restart recovery.
+4. The real-provider cells (Claude/Codex/Kimi subscriptions available; the
+   deferred disposable-profile request triggers once the provider-free
+   gates above close).
