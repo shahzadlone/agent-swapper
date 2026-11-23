@@ -411,3 +411,22 @@ Next implementation work:
    production channel.
 2. The production Store adapter behind the `Journal` seam + CLI wiring.
 3. The session-helper role and authenticated restart recovery.
+
+# Session continuation: 2026-11-22 (fourth)
+
+- `66a5f59` added the relay's interactive essentials: when the client's
+  outer terminal is a real tty the relay runs it in raw mode for the
+  target's lifetime and restores the saved attributes on every exit path,
+  and the feeder forwards window-size changes to the PTY master
+  (TIOCSWINSZ). Without a tty the outer terminal is untouched. Raw-mode
+  entry still requires the foreground, per the qualified terminal owner
+  policy. Full pipeline passed at `66a5f59`
+  ([45105708094](https://github.com/shahzadlone/agent-swapper/actions/runs/45105708094)).
+
+Next implementation work:
+1. The interactive relay qualification on a real pty (the hosted control
+   can wrap the client in `script` to give it a tty): shell stop/bg/fg,
+   hidden input, resize evidence — per the qualified
+   managed_terminal_relay fixture.
+2. The production Store adapter behind the `Journal` seam + the CLI wiring.
+3. The session-helper role and authenticated restart recovery.
