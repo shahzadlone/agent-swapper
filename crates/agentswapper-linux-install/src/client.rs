@@ -36,10 +36,36 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
     use std::os::fd::AsFd;
     let input = io::stdin().as_fd().try_clone_to_owned()?;
+    // When the outer terminal is a real tty, run it in raw mode for the
+    // target's lifetime and restore the saved attributes on every exit path.
+    // Without a tty (hosted controls, pipes) the outer terminal is left
+    // untouched and window-size forwarding is skipped.
+    let mut outer = None;
+    if rustix::termios::isatty(&input) {
+        let saved = rustix::termios::tcgetattr(&input)?;
+        let mut raw = saved.clone();
+        raw.make_raw();
+        rustix::termios::tcsetattr(&input, rustix::termios::OptionalActions::Now, &raw)?;
+        outer = Some(saved);
+    }
+    let feeder_input = input.as_fd().try_clone_to_owned()?;
     let master_feed = master.as_fd().try_clone_to_owned()?;
     let writer = std::thread::spawn(move || -> io::Result<()> {
+        let input = feeder_input;
+        let mut last_size = rustix::termios::isatty(&input)
+            .then(|| rustix::termios::tcgetwinsize(&input))
+            .transpose()
+            .ok()
+            .flatten();
         let mut buffer = [0_u8; 4096];
         loop {
+            if rustix::termios::isatty(&input)
+                && let Ok(size) = rustix::termios::tcgetwinsize(&input)
+                && last_size != Some(size)
+            {
+                last_size = Some(size);
+                rustix::termios::tcsetwinsize(&master_feed, size)?;
+            }
             let count = match rustix::io::read(&input, &mut buffer) {
                 Ok(count) => count,
                 // The target ended: its slave is gone and the master rejects
@@ -94,6 +120,12 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
         output.flush()?;
     }
     // The stdin feeder ends on its own; a join failure is an outer error.
+    // The outer terminal's saved attributes are restored on every exit path
+    // Restore the outer terminal's saved attributes on every exit path
+    // before the relay's outcome is reported.
+    if let Some(saved) = &outer {
+        rustix::termios::tcsetattr(&input, rustix::termios::OptionalActions::Now, saved)?;
+    }
     let fed = writer
         .join()
         .map_err(|_| io::Error::other("terminal feeder panicked"))?;
