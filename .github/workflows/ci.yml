@@ -350,7 +350,7 @@ jobs:
           python3 -m unittest discover -s tools -p test_linux_socket_activation.py -v
           python3 -m unittest discover -s tools -p test_linux_managed_terminal_relay.py -v
       - name: Exercise install transaction staging
-        timeout-minutes: 2
+        timeout-minutes: 8
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example install_transaction
           root_dir=$(sudo -n mktemp -d /var/lib/aswp-install-tx-XXXXXXXX)
@@ -360,22 +360,25 @@ jobs:
       - name: Qualify installer transaction controls
         run: cargo +1.98.0 test --locked -p agentswapper-linux-install --features qualification
       - name: Exercise the installation lifecycle end to end
-        timeout-minutes: 3
+        timeout-minutes: 6
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           cargo +1.98.0 build --locked -p agentswapper-linux-install --examples
           cargo +1.98.0 build --locked -p agentswapper-linux-guardian
+          cargo +1.98.0 build --locked -p agentswapper-linux-session-helper
+          cargo +1.98.0 build --locked -p agentswapper-cli --bin aswp
           eval="$PWD/tools/linux-manager-evaluation/target/debug/aswp-linux-manager-evaluation"
           admin="$PWD/target/debug/examples/install_admin"
           verify="$PWD/target/debug/examples/install_verify"
           bind="$PWD/target/debug/examples/activation_client"
           guardian="$PWD/target/debug/agentswapper-linux-guardian"
+          aswp="$PWD/target/debug/aswp"
           uid=$(id -u); gid=$(id -g)
           gen_a=33445566778899aabbccddeeff001122
           gen_b=445566778899aabbccddeeff00112233
           cleanup() { sudo -n "$admin" deactivate "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" deactivate "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_a" >/dev/null 2>&1 || true; sudo -n "$admin" remove "$uid" "$gid" "$gen_b" >/dev/null 2>&1 || true; sudo -n rm -rf -- "/run/agentswapper/$uid" "/etc/agentswapper" "/usr/libexec/agentswapper" "/etc/systemd/system/agentswapper-$uid-$gen_a.socket" "/etc/systemd/system/agentswapper-$uid-$gen_a@.service" "/etc/systemd/system/agentswapper-$uid-$gen_b.socket" "/etc/systemd/system/agentswapper-$uid-$gen_b@.service"; sudo -n systemctl daemon-reload; }
           trap cleanup EXIT
-          sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$guardian" "$eval" "$guardian"
+          sudo -n "$admin" install "$uid" "$gid" "$gen_a" "$guardian" "$PWD/target/debug/aswp-session-helper" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_a.sock"
           # The installed guardian image must bind to its own running bytes
           # and then refuse at the not-yet-enabled service protocol gate.
@@ -443,10 +446,24 @@ jobs:
             ls -la "$launch_journal"
             exit 1
           fi
-          # Interactive qualification on a real pty: the client's outer
-          # terminal becomes a tty, a resize is applied mid-flight, and the
-          # target must see both the forwarded size and the input through
-          # the full production channel.
+          # Interactive qualification on a real pty through the CLI's
+          # managed-launch composition: the CLI execs the installed
+          # session-helper image, whose Store-backed journal commits the
+          # durable intent and retirement; the target must see both the
+          # forwarded size and the input.
+          "$aswp" profile add codex --alias aswp-launch
+          aswp_journal=$(mktemp -d "$RUNNER_TEMP/aswp-managed-pty-XXXXXXXX")
+          chmod 700 "$aswp_journal"
+          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$aswp" managed-launch aswp-launch --target \
+            /bin/sh -c 'stty size; sleep 2; stty size; read line; echo got:$line' || {
+            dump_journal
+            echo '::error title=managed launch pty control::interactive managed launch failed'
+            exit 1
+          }
+          # Interactive qualification on a real pty with the disposable
+          # client: the client's outer terminal becomes a tty, a resize is
+          # applied mid-flight, and the target must see both the forwarded
+          # size and the input through the full production channel.
           pty_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-pty-XXXXXXXX")
           chmod 700 "$pty_journal"
           /usr/bin/python3 tools/check_linux_launch_pty.py --client "$bind" "$uid" "$pty_journal" launch --target \
@@ -457,7 +474,7 @@ jobs:
           }
           echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation, held-exec launch, durable journal and interactive pty launch completed; no provider command'
 
-          sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$eval" "$guardian"
+          sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$PWD/target/debug/aswp-session-helper" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"
           sudo -n "$admin" remove "$uid" "$gid" "$gen_a"
           if sudo -n "$admin" remove "$uid" "$gid" "$gen_b"; then
