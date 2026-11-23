@@ -117,7 +117,7 @@ def main():
             f"the target did not receive the input through the relay; saw {seen[-600:]!r}",
         )
         require(
-            b"111 33" in seen,
+            b"33 111" in seen,
             f"the window-size change was not forwarded to the target; saw {seen[-600:]!r}",
         )
         require(
