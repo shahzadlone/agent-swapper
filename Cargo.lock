@@ -170,6 +170,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentswapper-linux-session-helper"
+version = "0.1.0-dev"
+dependencies = [
+ "agentswapper-core",
+ "agentswapper-linux-install",
+ "agentswapper-linux-manager",
+ "agentswapper-linux-runtime",
+ "rustix",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "agentswapper-windows-security"
 version = "0.1.0-dev"
 dependencies = [

@@ -367,7 +367,7 @@ pub fn launch(
         // The audit commits the retirement with the one-use value and
         // records the authenticated target exit; retry-safe in the adapter.
         journal
-            .audit_exit(&offer.invocation, &format!("{exit:?}"), retired)
+            .audit_exit(&offer.invocation, exit, retired)
             .map_err(|error| io::Error::other(format!("exit audit failed: {error}")))?;
         let closed = endpoint.manager.close().await.map_err(io::Error::other);
         closed?;

@@ -78,8 +78,13 @@ impl LinuxBinding {
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-journal-qualification"))]
-pub(super) use live::PendingLinuxScope;
+pub use live::PendingLinuxScope;
 
+/// The live linux-scope association surface, promoted to the reviewed
+/// production API by the 2026-11-22 independent review of the Journal seam
+/// (recorded in docs/continuation.md). The feature gate keeps the manager
+/// dependency out of core's default graph; enabling it is the session
+/// helper's production composition, not a relaxation.
 #[cfg(all(target_os = "linux", feature = "linux-journal-qualification"))]
 mod live {
     use super::*;
@@ -90,7 +95,7 @@ mod live {
 
     /// Original live association. It cannot be serialized or reconstructed by
     /// reopening the registry after a crash.
-    pub(crate) struct PendingLinuxScope {
+    pub struct PendingLinuxScope {
         store: Arc<()>,
         key: ServiceKey,
         run: String,
@@ -98,12 +103,15 @@ mod live {
         binding: LinuxBinding,
     }
     impl PendingLinuxScope {
-        pub(crate) fn key(&self) -> &ServiceKey {
+        pub fn key(&self) -> &ServiceKey {
             &self.key
         }
     }
+    /// A failed retirement retains its original retirement value for
+    /// in-place retry by the session helper; the error never carries
+    /// authority.
     #[must_use = "failed completion retains its original retirement value for retry"]
-    pub(crate) struct ScopeRetireFailure {
+    pub struct ScopeRetireFailure {
         pub error: Error,
         pub retired: RetiredService,
     }
@@ -115,7 +123,7 @@ mod live {
         }
     }
     impl Store {
-        pub(crate) fn bind_linux_scope(
+        pub fn bind_linux_scope(
             &mut self,
             run: &str,
             lease: &ProfileLease,
@@ -157,7 +165,7 @@ mod live {
             })
         }
 
-        pub(crate) fn retire_linux_scope(
+        pub fn retire_linux_scope(
             &mut self,
             pending: &PendingLinuxScope,
             retired: RetiredService,

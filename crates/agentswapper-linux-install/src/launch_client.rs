@@ -6,6 +6,7 @@
 //! semantics and ships a local fsync'd journal for disposable launches.
 use crate::client;
 use agentswapper_linux_manager::{RetiredService, ServiceKey};
+use agentswapper_linux_runtime::target_exit::TargetExit;
 use std::{
     fs,
     io::{self, Write},
@@ -47,7 +48,12 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 pub trait Journal {
     fn confirm_intent(&self, invocation: &str, nonce: &str, key: ServiceKey) -> io::Result<()>;
     fn observe_spawn(&self, invocation: &str, child: u32) -> io::Result<()>;
-    fn audit_exit(&self, invocation: &str, exit: &str, retired: RetiredService) -> io::Result<()>;
+    fn audit_exit(
+        &self,
+        invocation: &str,
+        exit: TargetExit,
+        retired: RetiredService,
+    ) -> io::Result<()>;
 }
 
 /// A local fsync'd journal in one private directory. Records are created
@@ -101,12 +107,20 @@ impl Journal for FileJournal {
             &format!("authenticated exec observed; child {child}"),
         )
     }
-    fn audit_exit(&self, invocation: &str, exit: &str, _retired: RetiredService) -> io::Result<()> {
+    fn audit_exit(
+        &self,
+        invocation: &str,
+        exit: TargetExit,
+        _retired: RetiredService,
+    ) -> io::Result<()> {
         // The retirement value is consumed here; the disposable record
-        // cannot serialize it.
+        // cannot serialize it. The pinned serialization keeps the exit
+        // durable in the record.
+        let encoded =
+            serde_json::to_string(&exit).map_err(|error| io::Error::other(error.to_string()))?;
         self.record(
             &format!("exit-{invocation}"),
-            &format!("authenticated target exit: {exit}"),
+            &format!("authenticated target exit: {encoded}"),
         )
     }
 }

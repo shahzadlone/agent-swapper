@@ -26,7 +26,7 @@ mod lease_transfer_tests;
 mod linux_activated_journal_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod linux_journal_guardian_tests;
-mod linux_scope;
+pub mod linux_scope;
 #[cfg(all(feature = "linux-journal-qualification", target_os = "linux"))]
 #[doc(hidden)]
 pub mod qualification;
@@ -486,7 +486,7 @@ impl Store {
         self.begin_run_with_scope(lease, kind, gents_session, None)
     }
 
-    pub(crate) fn begin_run_with_scope(
+    pub fn begin_run_with_scope(
         &mut self,
         lease: &ProfileLease,
         kind: &str,
@@ -550,7 +550,7 @@ impl Store {
         Err(Error::Busy)
     }
 
-    pub(crate) fn observe_spawn(&mut self, id: &str, pid: u32) -> Result<()> {
+    pub fn observe_spawn(&mut self, id: &str, pid: u32) -> Result<()> {
         self.record_lifecycle(Event::RunSpawned {
             id: id.to_owned(),
             pid,
