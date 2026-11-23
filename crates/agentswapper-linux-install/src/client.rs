@@ -40,13 +40,23 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
     let writer = std::thread::spawn(move || -> io::Result<()> {
         let mut buffer = [0_u8; 4096];
         loop {
-            let count = rustix::io::read(&input, &mut buffer)?;
+            let count = match rustix::io::read(&input, &mut buffer) {
+                Ok(count) => count,
+                // The target ended: its slave is gone and the master rejects
+                // further writes. A clean relay end, not a feeder failure.
+                Err(rustix::io::Errno::IO) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            };
             if count == 0 {
                 // Outer input ended: stop feeding the target without
                 // shutting down its terminal.
                 return Ok(());
             }
-            rustix::io::write(&master_feed, &buffer[..count])?;
+            match rustix::io::write(&master_feed, &buffer[..count]) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::IO) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
         }
     });
     let mut output = io::stdout();
@@ -70,6 +80,9 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
             value => value?,
         };
         let count = match rustix::io::read(master, &mut buffer) {
+            // The last slave closed with the target: the master reports EIO
+            // rather than EOF, and that is the relay's clean end.
+            Err(rustix::io::Errno::IO) => break,
             Err(rustix::io::Errno::AGAIN) => continue,
             Err(rustix::io::Errno::INTR) => continue,
             value => value?,
