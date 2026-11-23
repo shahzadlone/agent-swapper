@@ -119,23 +119,23 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
         output.write_all(&buffer[..count])?;
         output.flush()?;
     }
-    // The stdin feeder ends on its own; a join failure is an outer error.
-    // The outer terminal's saved attributes are restored on every exit path
-    // Restore the outer terminal's saved attributes on every exit path
-    // before the relay's outcome is reported.
+    // The stdin feeder is detached: it ends on its own when the outer input
+    // ends or the target's terminal rejects writes, and the process exit
+    // reclaims it. Joining it would hang the client on an interactive
+    // terminal whose read side never closes. The outer terminal's saved
+    // attributes are restored on every exit path before the relay's outcome
+    // is reported.
+    drop(writer);
     if let Some(saved) = &outer {
         rustix::termios::tcsetattr(&input, rustix::termios::OptionalActions::Now, saved)?;
     }
-    let fed = writer
-        .join()
-        .map_err(|_| io::Error::other("terminal feeder panicked"))?;
     if timed_out {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
             "terminal relay deadline expired",
         ));
     }
-    fed
+    Ok(())
 }
 
 fn nonce() -> io::Result<[u8; 16]> {
