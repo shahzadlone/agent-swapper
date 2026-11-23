@@ -73,7 +73,27 @@ def main():
             seen += chunk
             if b"got:ping" in seen and b"111 33" in seen:
                 break
-        code = process.wait(timeout=20)
+        try:
+            code = process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            state = []
+            for probe in (
+                f"/proc/{process.pid}/status",
+                f"/proc/{process.pid}/wchan",
+                f"/proc/{process.pid}/syscall",
+                f"/proc/{process.pid}/task",
+            ):
+                try:
+                    result = subprocess.run(["sudo", "-n", "cat", probe],
+                                            capture_output=True, text=True, timeout=10)
+                    state.append(f"{probe}: {result.stdout[-400:]!r}")
+                except Exception as probe_error:
+                    state.append(f"{probe}: {probe_error!r}")
+            raise RuntimeError(
+                "the launch client never exited; "
+                + " | ".join(state)
+                + f"; saw {seen[-400:]!r}"
+            )
         # Drain whatever the client wrote last (its diagnostics land on the
         # pty and may arrive after the exit).
         drain_deadline = time.monotonic() + 2
@@ -104,7 +124,27 @@ def main():
             b"target exited" not in seen or b"Code" in seen or b"code" in seen,
             "unexpected launch outcome",
         )
-        code = process.wait(timeout=20)
+        try:
+            code = process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            state = []
+            for probe in (
+                f"/proc/{process.pid}/status",
+                f"/proc/{process.pid}/wchan",
+                f"/proc/{process.pid}/syscall",
+                f"/proc/{process.pid}/task",
+            ):
+                try:
+                    result = subprocess.run(["sudo", "-n", "cat", probe],
+                                            capture_output=True, text=True, timeout=10)
+                    state.append(f"{probe}: {result.stdout[-400:]!r}")
+                except Exception as probe_error:
+                    state.append(f"{probe}: {probe_error!r}")
+            raise RuntimeError(
+                "the launch client never exited; "
+                + " | ".join(state)
+                + f"; saw {seen[-400:]!r}"
+            )
         # Drain whatever the client wrote last (its diagnostics land on the
         # pty and may arrive after the exit).
         deadline = time.monotonic() + 2
