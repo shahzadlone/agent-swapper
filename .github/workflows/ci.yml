@@ -424,7 +424,8 @@ jobs:
           # the target's real status. No provider command is ever accepted.
           launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
           chmod 700 "$launch_journal"
-          launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok) || { dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
+          launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || { printf '%s\n' "$launch_output"; dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
+          printf '%s\n' "$launch_output"
           printf '%s\n' "$launch_output"
           printf '%s\n' "$launch_output" | grep -F "launch-relay-ok" || {
             echo '::error title=launch control::target output did not reach the client'
