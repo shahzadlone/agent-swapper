@@ -561,3 +561,30 @@ Next implementation work:
 4. The real-provider cells (Claude/Codex/Kimi subscriptions available; the
    deferred disposable-profile request triggers once the provider-free
    gates above close).
+
+# Session continuation: 2026-11-23
+
+- `30b6b71` closed the review's standing schema gap (durable scoped-run
+  target exit) — full pipeline passed.
+- `976800e`/`e363c97` added the session-helper crate and qualified it.
+- `6718598` wired the CLI's opt-in `aswp managed-launch PROFILE --
+  PROGRAM [ARGS]`: it requires a compatible protected installation for the
+  calling user, resolves the profile's harness from the Store, and execs
+  the installed session-helper image as a fresh process with the shell's
+  job identity preserved (the fresh-entry design's first requirement).
+  This process never links the transport; the helper owns the Store, the
+  manager connection and the launch client. The session-helper's Store
+  adapter looks up the caller's existing profile instead of registering
+  one. Full pipeline passed at `6718598`
+  ([45281538786](https://github.com/shahzadlone/agent-swapper/actions/runs/45281538786)).
+
+Next implementation work:
+1. The hosted managed-launch composition control: the lifecycle's launch
+   control switches to `aswp managed-launch` through the installed
+   session-helper image (installing the session-helper image into the
+   manifest's role) and requires the durable journal records plus the
+   pty relay evidence through the fresh-exec composition.
+2. Shell stop/bg/fg through the production relay.
+3. Authenticated restart recovery.
+4. The real-provider cells (the deferred disposable-profile request
+   triggers once the provider-free gates above close).
