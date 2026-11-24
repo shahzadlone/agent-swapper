@@ -52,6 +52,24 @@ pub(crate) fn blocked_job_signals() -> io::Result<SigSet> {
     pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&mask), None)?;
     Ok(mask)
 }
+/// Mirror of the production stop-signal blocking entry point: the kernel's
+/// terminal-change check treats a blocked stop signal as ignored, and the
+/// production `signals.rs` - path-included by the fixtures - calls this
+/// after its owner admission. It blocks only the terminal in-band stop
+/// signals, never the caught set, so the fixtures' signal semantics stay
+/// unchanged.
+#[allow(
+    dead_code,
+    reason = "the production signals.rs path-include calls this; fixtures that do not exercise the claim sequence still compile the mirror"
+)]
+pub(crate) fn block_stop_signals() -> io::Result<()> {
+    let mut mask = SigSet::empty();
+    for signal in [Signal::SIGTSTP, Signal::SIGTTIN, Signal::SIGTTOU] {
+        mask.add(signal);
+    }
+    pthread_sigmask(SigmaskHow::SIG_BLOCK, Some(&mask), None)?;
+    Ok(())
+}
 pub(crate) fn target_signals() -> io::Result<()> {
     dispositions()?;
     let current = SigSet::thread_get_mask()?;
