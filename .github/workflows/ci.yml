@@ -404,6 +404,14 @@ jobs:
           dump_journal() {
             sudo -n journalctl -q -u 'agentswapper-*' --no-pager 2>/dev/null | tail -60
           }
+          # The guardian's refusal diagnostics reach only journald, so the
+          # failure annotations carry the journal tail as their message:
+          # the annotations are readable even where raw logs are not.
+          journal_brief() {
+            sudo -n journalctl -q -u 'agentswapper-*' --no-pager 2>/dev/null \
+              | grep -E 'refused|guardian' | tail -n 4 \
+              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-700
+          }
           "$bind" "$uid" bind || { dump_journal; echo '::error title=activation control::bind control failed'; exit 1; }
           wait_for_instance_gone() {
             for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -424,7 +432,7 @@ jobs:
           # the target's real status. No provider command is ever accepted.
           launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
           chmod 700 "$launch_journal"
-          launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || { printf '%s\n' "$launch_output"; dump_journal; echo '::error title=launch control::launch control failed'; exit 1; }
+          launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || { printf '%s\n' "$launch_output"; dump_journal; echo "::error title=launch control::launch control failed; journal: $(journal_brief)"; exit 1; }
           printf '%s\n' "$launch_output"
           printf '%s\n' "$launch_output"
           printf '%s\n' "$launch_output" | grep -F "launch-relay-ok" || {
