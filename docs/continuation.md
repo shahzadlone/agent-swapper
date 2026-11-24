@@ -671,3 +671,24 @@ its pinned test fixtures need a careful, fresh pass).
 
 The next session should start with the production relay composition — the
 last provider-free gate before the real-provider work begins.
+
+# Session continuation: 2026-11-23 (third)
+
+- `bcd8f41` added the relay's suspension handling: in raw mode the suspend
+  character arrives as a plain byte; the relay intercepts it, stops the
+  target's process group, restores the outer terminal's cooked mode, and
+  waits for the user's explicit `fg` before re-entering raw and continuing
+  the target (the inner pty's ISIG would also generate the stop, but then
+  the client could not observe or reverse it). The suspension flag is
+  shared with the relay's main loop; the exit paths restore the outer
+  terminal's saved attributes. Full pipeline passed at `bcd8f41`
+  ([45305344313](https://github.com/shahzadlone/agent-swapper/actions/runs/45305344313)).
+
+Next implementation work:
+1. The production relay composition's remaining interactive evidence
+   (nested jobs, hidden input, long sessions) — adapted from the qualified
+   fixture's owned-PTY cases to the production channel.
+2. Authenticated restart recovery.
+3. The candidate packaging's helper-asset inclusion.
+4. The real-provider cells (the deferred disposable-profile request
+   triggers once the provider-free gates above close).
