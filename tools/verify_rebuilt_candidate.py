@@ -15,19 +15,21 @@ from release_candidate import verify_build_marker
 
 def verify_rebuild(directory, target, revision, lock, version, source_files, binaries):
     suffix = ".exe" if "windows" in target else ""
-    names = ["aswp" + suffix, "agentswapper" + suffix]
-    if "linux" in target:
-        # The Linux candidate packages the root-installed helper images.
-        names += ["agentswapper-linux-guardian", "aswp-session-helper"]
+    # The rebuilt marker's inventory defines the comparison: Linux
+    # candidates carry the root-installed helper images; other targets keep
+    # their two-binary archives.
+    marker = binaries / "agentswapper-build.json"
+    if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 65536:
+        raise ValueError("rebuilt candidate marker is missing or invalid")
+    inventory = json.loads(read_bounded(marker, 65536).decode("utf-8")).get("binaries")
+    if not isinstance(inventory, dict) or not inventory:
+        raise ValueError("rebuilt candidate marker inventory is invalid")
     local = {}
-    for name in names:
+    for name in inventory:
         path = binaries / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024 * 1024:
             raise ValueError(f"rebuilt {name} is missing or invalid")
         local[name] = read_bounded(path, 256 * 1024 * 1024)
-    marker = binaries / "agentswapper-build.json"
-    if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 65536:
-        raise ValueError("rebuilt candidate marker is missing or invalid")
     verify_build_marker(json.loads(read_bounded(marker, 65536).decode("utf-8")), revision, False, lock, local)
     binary_hashes = {name: hashlib.sha256(data).hexdigest() for name, data in local.items()}
     verify_one(directory, target, revision, lock, version, source_files, binary_hashes, local)

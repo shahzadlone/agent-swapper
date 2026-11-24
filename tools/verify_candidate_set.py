@@ -109,11 +109,18 @@ def verify_one(directory, target, revision, lock_hash, version, source_files, ex
                 raise ValueError("candidate project notice does not match checked-out source")
         if expected_binaries is not None:
             # The rebuilt marker's binary inventory defines the comparison:
-            # Linux candidates carry the helper images; other targets do not.
-            names = set(expected_binaries)
-            if not names:
+            # Linux candidates carry the helper images; other targets keep
+            # their two-binary archives. The inventory must name exactly the
+            # candidate's executables.
+            executables = {"aswp" + suffix, "agentswapper" + suffix}
+            executables |= {
+                helper + suffix
+                for helper in ("agentswapper-linux-guardian", "aswp-session-helper")
+                if helper + suffix in names
+            }
+            if set(expected_binaries) != executables:
                 raise ValueError("rebuilt executables do not match candidate")
-            for name in sorted(names):
+            for name in sorted(executables):
                 if hashes[name] != expected_binaries[name]:
                     detail = None
                     if rebuilt_contents is not None and name in rebuilt_contents:
