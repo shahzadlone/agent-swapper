@@ -712,3 +712,21 @@ Next implementation work:
 2. Authenticated restart recovery.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
+
+# Session continuation: 2026-11-24 (second)
+
+- `60f469f` moved the journal dump out of the annotation budget (the
+  per-line error annotations consumed the step's cap and hid the actual
+  control failure) and `8b920c0` raised the lifecycle step's timeout to 14
+  minutes for the three launch controls. The full pipeline passed at
+  `8b920c0`
+  ([45322498534](https://github.com/shahzadlone/agent-swapper/actions/runs/45322498534));
+  an earlier run of the same commit had timed out — the composition's
+  three launch controls need the headroom on slower runners.
+
+Next implementation work:
+1. The production relay composition's remaining interactive evidence
+   (nested jobs, hidden input, long sessions).
+2. Authenticated restart recovery.
+3. The real-provider cells (the deferred disposable-profile request
+   triggers once the provider-free gates above close).
