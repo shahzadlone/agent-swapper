@@ -692,3 +692,23 @@ Next implementation work:
 3. The candidate packaging's helper-asset inclusion.
 4. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
+
+# Session continuation: 2026-11-24
+
+- `bc82390`..`7d4c5cf` included the Linux helper images in the candidate
+  packaging and its reproducibility verification: the Linux candidate
+  builds, packages and rebuild-verifies the guardian and session-helper
+  images alongside the CLI binaries (the rebuilt marker's inventory defines
+  the comparison; other targets keep their two-binary archives; the
+  verifier's executable-mode check covers the helpers when present). An
+  administrator can now install a full managed-launch deployment from a
+  candidate. Full pipeline passed at `7d4c5cf`
+  ([45315043782](https://github.com/shahzadlone/agent-swapper/actions/runs/45315043782)).
+
+Next implementation work:
+1. The production relay composition's remaining interactive evidence
+   (nested jobs, hidden input, long sessions) — adapted from the qualified
+   fixture's owned-PTY cases to the production channel.
+2. Authenticated restart recovery.
+3. The real-provider cells (the deferred disposable-profile request
+   triggers once the provider-free gates above close).
