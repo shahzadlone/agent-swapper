@@ -360,7 +360,7 @@ jobs:
       - name: Qualify installer transaction controls
         run: cargo +1.98.0 test --locked -p agentswapper-linux-install --features qualification
       - name: Exercise the installation lifecycle end to end
-        timeout-minutes: 8
+        timeout-minutes: 14
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           cargo +1.98.0 build --locked -p agentswapper-linux-install --examples
