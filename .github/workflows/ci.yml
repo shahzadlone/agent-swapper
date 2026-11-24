@@ -433,25 +433,6 @@ jobs:
           # target through the installed guardian; the held exec releases on
           # the client's exec release and the authenticated exit report names
           # the target's real status. No provider command is ever accepted.
-          # Diagnostic wrapper for the lifecycle gate: the guardian's death
-          # between the exec-trap wait and any observable diagnostic shrinks to
-          # a silent successful deactivation, invisible to journal-only
-          # evidence. This round traces signal/process events; the manifest's
-          # template digest is recomputed so the launch still self-binds.
-          # Revert once the failure mechanism is captured.
-          if command -v strace >/dev/null 2>&1 || sudo -n apt-get install -y -qq strace >/dev/null 2>&1; then
-            if command -v strace >/dev/null 2>&1; then
-              sudo -n mkdir -p /aswp-trace >/dev/null 2>&1
-              sudo -n chown "$uid:$gid" /aswp-trace
-              template="/etc/systemd/system/agentswapper-$uid-$gen_a@.service"
-              sudo -n sysctl -w kernel.yama.ptrace_scope=0 >/dev/null 2>&1 || true
-              sudo -n sed -i "s|^ExecStart=.*|ExecStart=/usr/bin/strace -D -tt -e trace=signal,process,desc -o /aswp-trace/trace.log /usr/libexec/agentswapper/$uid/$gen_a/guardian %n|" "$template"
-              new_sha=$(sudo -n sha256sum "$template" | cut -d' ' -f1)
-              manifest_path="/etc/agentswapper/installations/$uid/$gen_a.json"
-              sudo -n python3 -c 'import json,sys; p,s=sys.argv[1],sys.argv[2]; d=json.load(open(p)); d["service_template_sha256"]=s; json.dump(d,open(p,"w"))' "$manifest_path" "$new_sha"
-              sudo -n systemctl daemon-reload
-            fi
-          fi
           launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
           chmod 700 "$launch_journal"
           launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || {
@@ -466,11 +447,6 @@ jobs:
             done | sed 's/%/%25/g' | tr '\n' '|' | cut -c1-500)
             echo "::error title=launch scene::time=$scene_time | procs=[$scene_procs] | state=[$scene_state]"
             echo "::error title=launch control::launch control failed; journal: $(journal_brief)"
-            if sudo -n test -f /aswp-trace/trace.log; then
-              trace_tail=$(sudo -n sh -c "grep -vE 'wait4\\(.*WNOHANG.*= 0$|rt_sigaction|sigaltstack' /aswp-trace/trace.log | tail -n 60" 2>/dev/null \
-                | sed 's/%/%25/g; s/\r/%0D/g; s/:/;/g' | tr '\n' '~' | tail -c 1800)
-              echo "::error title=launch trace::$trace_tail"
-            fi
             exit 1
           }
           printf '%s\n' "$launch_output"
