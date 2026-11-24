@@ -45,7 +45,7 @@ def main():
     subprocess.run(["cargo", "+1.98.0", "build", "--locked", "--release", "-p", "agentswapper-cli", "--bins"],
                    cwd=ROOT, env=env, check=True)
     names = ["aswp", "agentswapper"]
-    if os.name == "posix":
+    if "linux" in hosts[0]:
         # The Linux helper images are root-installed assets; the candidate
         # packages them so an administrator can install from a candidate.
         subprocess.run(["cargo", "+1.98.0", "build", "--locked", "--release",
