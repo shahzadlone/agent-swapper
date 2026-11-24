@@ -466,9 +466,9 @@ jobs:
             done | sed 's/%/%25/g' | tr '\n' '|' | cut -c1-500)
             echo "::error title=launch scene::time=$scene_time | procs=[$scene_procs] | state=[$scene_state]"
             echo "::error title=launch control::launch control failed; journal: $(journal_brief)"
-            if [ -f /aswp-trace/trace.log ]; then
-              trace_tail=$(sudo -n tail -n 80 /aswp-trace/trace.log 2>/dev/null \
-                | sed 's/%/%25/g; s/\r/%0D/g; s/:/;/g' | tr '\n' '~' | cut -c1-1800)
+            if sudo -n test -f /aswp-trace/trace.log; then
+              trace_tail=$(sudo -n sh -c "grep -vE 'wait4\\(.*WNOHANG.*= 0$|rt_sigaction|sigaltstack' /aswp-trace/trace.log | tail -n 60" 2>/dev/null \
+                | sed 's/%/%25/g; s/\r/%0D/g; s/:/;/g' | tr '\n' '~' | tail -c 1800)
               echo "::error title=launch trace::$trace_tail"
             fi
             exit 1
