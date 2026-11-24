@@ -325,8 +325,8 @@ def scenario_basic(session):
     time.sleep(1.0)
     session.write(b"ping\n")
     session.wait_for(b"got:ping", 45, "the input relayed to the target")
-    session.wait_for(b"111 33", 45, "the resized window forwarded to the target")
-    session.finish(0, [b"got:ping", b"111 33"])
+    session.wait_for(b"33 111", 45, "the resized window forwarded to the target")
+    session.finish(0, [b"got:ping", b"33 111"])
     print("interactive launch pty: input, resize backhaul and output verified")
 
 
