@@ -454,7 +454,7 @@ jobs:
           "$aswp" profile add codex --alias aswp-launch
           aswp_journal=$(mktemp -d "$RUNNER_TEMP/aswp-managed-pty-XXXXXXXX")
           chmod 700 "$aswp_journal"
-          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$aswp" managed-launch aswp-launch --target \
+          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$aswp" managed-launch aswp-launch -- --target \
             /bin/sh -c 'stty size; sleep 2; stty size; read line; echo got:$line' || {
             dump_journal
             echo '::error title=managed launch pty control::interactive managed launch failed'
