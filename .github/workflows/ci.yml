@@ -466,7 +466,7 @@ jobs:
           # size and the input through the full production channel.
           pty_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-pty-XXXXXXXX")
           chmod 700 "$pty_journal"
-          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$bind" "$uid" "$pty_journal" launch --target \
+          /usr/bin/python3 tools/check_linux_launch_pty.py --client "$bind" "$uid" launch "$pty_journal" --target \
             /bin/sh -c 'stty size; sleep 2; stty size; read line; echo got:$line' || {
             dump_journal
             echo '::error title=launch pty control::interactive launch failed'
