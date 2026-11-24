@@ -438,15 +438,14 @@ jobs:
           launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || {
             printf '%s\n' "$launch_output"
             dump_journal
-            sudo -n systemctl list-units "agentswapper-$uid-$gen_a@*" --all --no-pager --no-legend --plain 2>/dev/null | tail -n 3 \
-              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-400 \
-              | sed 's/^/units:/'
-            for unit in $(sudo -n systemctl list-units "agentswapper-$uid-$gen_a@*" --all --no-legend --plain 2>/dev/null | awk '{print $1}'); do
-              sudo -n systemctl show "$unit" -p Result -p ExecMainCode -p ExecMainStatus -p ActiveState \
-                --no-pager 2>/dev/null | sed "s/^/$unit:/"
-            done | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-600 \
-              | sed 's/^/state:/'
-            echo ""
+            scene_time=$(date -u '+%H:%M:%S')
+            scene_procs=$(sudo -n ps -eo pid,ppid,pgid,sid,state,wchan:24,cmd --no-headers 2>/dev/null \
+              | grep -E 'guardian|exec-shim|echo' | grep -v grep | head -n 14 \
+              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '|' | cut -c1-1000)
+            scene_state=$(for unit in $(sudo -n systemctl list-units "agentswapper-$uid-$gen_a@*" --all --no-legend --plain 2>/dev/null | awk '{print $1}'); do
+              sudo -n systemctl show "$unit" -p Result -p ExecMainCode -p ExecMainStatus -p MainPID --no-pager 2>/dev/null | tr '\n' ' ' | sed "s/^/$unit;/"
+            done | sed 's/%/%25/g' | tr '\n' '|' | cut -c1-500)
+            echo "::error title=launch scene::time=$scene_time | procs=[$scene_procs] | state=[$scene_state]"
             echo "::error title=launch control::launch control failed; journal: $(journal_brief)"
             exit 1
           }
