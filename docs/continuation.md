@@ -588,3 +588,27 @@ Next implementation work:
 3. Authenticated restart recovery.
 4. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
+
+# Session continuation: 2026-11-23 (second)
+
+- `41d998d`..`d65cfd0` qualified the **managed-launch composition on hosted
+  systemd**: the lifecycle installs the real session-helper image in its
+  manifest role, registers a disposable native profile, and runs the
+  interactive pty control through `aswp managed-launch` — the CLI execs the
+  installed session-helper image (fresh-exec with the shell's job identity
+  preserved), whose Store-backed journal commits the durable intent and the
+  retirement with the authenticated exit while the target sees the
+  forwarded size and the input through the production channel. The
+  lifecycle's durable-journal and disposable-launch controls were kept, the
+  pty control's client interface was generalized (`--client ARGS... --target
+  TARGET...`), and the step's timeout was raised for the added controls.
+  Full pipeline passed at `d65cfd0`
+  ([45301246754](https://github.com/shahzadlone/agent-swapper/actions/runs/45301246754)).
+
+Next implementation work:
+1. Shell stop/bg/fg through the production relay (the qualified fixture's
+   job-control evidence adapts to the production channel).
+2. Authenticated restart recovery.
+3. The real-provider cells (the deferred disposable-profile request
+   triggers once the provider-free gates above close).
+4. The release-candidate packaging/signing gates.
