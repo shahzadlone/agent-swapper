@@ -445,7 +445,7 @@ jobs:
               sudo -n chown "$uid:$gid" /aswp-trace
               template="/etc/systemd/system/agentswapper-$uid-$gen_a@.service"
               sudo -n sysctl -w kernel.yama.ptrace_scope=0 >/dev/null 2>&1 || true
-              sudo -n sed -i "s|^ExecStart=.*|ExecStart=/usr/bin/strace -D -tt -e trace=signal,process -o /aswp-trace/trace.log /usr/libexec/agentswapper/$uid/$gen_a/guardian %n|" "$template"
+              sudo -n sed -i "s|^ExecStart=.*|ExecStart=/usr/bin/strace -D -tt -e trace=signal,process,desc -o /aswp-trace/trace.log /usr/libexec/agentswapper/$uid/$gen_a/guardian %n|" "$template"
               new_sha=$(sudo -n sha256sum "$template" | cut -d' ' -f1)
               manifest_path="/etc/agentswapper/installations/$uid/$gen_a.json"
               sudo -n python3 -c 'import json,sys; p,s=sys.argv[1],sys.argv[2]; d=json.load(open(p)); d["service_template_sha256"]=s; json.dump(d,open(p,"w"))' "$manifest_path" "$new_sha"
