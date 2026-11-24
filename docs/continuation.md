@@ -640,3 +640,34 @@ The remaining design slices, each needing its own focused session:
    (the deferred disposable-profile request triggers here).
 4. **Release-candidate packaging/signing gates**: the candidate pipeline
    exists (unsigned, reproducibility-verified); the signing gate is open.
+
+## Final checkpoint (2026-11-23, end of run)
+
+The managed-launch composition is fully qualified end-to-end on hosted
+systemd through the real CLI entry, on both Ubuntu images, with every
+intermediate gate green. The complete chain, each step with hosted CI
+evidence recorded in this document:
+
+`aswp managed-launch PROFILE -- PROGRAM ARGS` (fresh-exec, shell job
+identity preserved, transport never linked into the CLI) → the installed
+session-helper image → the Store-backed journal (durable intent with the
+one-use key before the gate; spawn observation before the release; the
+authenticated exit committed with the one-use retirement value) → the
+guardian's activation protocol (kernel-sender authentication, systemd
+connection-instance binding, bounded offer) → the held-exec launch
+(envelope, PTY, tracer hold, exec trap, exact-child release) → the
+terminal relay (raw mode, resize backhaul, EIO convention, detached
+feeder) → the authenticated exit report → the retirement commit → the run
+resolves and the lease drops.
+
+The two open design slices, both recorded above with their constraints:
+1. The production relay composition with job control (the qualified
+   fixture's 68-case evidence adapts to the production channel).
+2. Authenticated restart recovery (a separately qualified mechanism).
+
+Then the provider cells (the disposable-profile request triggers) and the
+candidate packaging's helper-asset inclusion (the adversarial verifier and
+its pinned test fixtures need a careful, fresh pass).
+
+The next session should start with the production relay composition — the
+last provider-free gate before the real-provider work begins.
