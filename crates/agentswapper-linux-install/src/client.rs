@@ -33,7 +33,7 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 /// outer terminal until the master ends. Raw modes, resize and job-control
 /// handoff stay with the separately qualified relay composition; this
 /// bounded path preserves byte order and final output only.
-fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
+fn relay(master: &rustix::fd::OwnedFd, deadline: Instant, target_group: u32) -> io::Result<()> {
     use std::os::fd::AsFd;
     let input = io::stdin().as_fd().try_clone_to_owned()?;
     // When the outer terminal is a real tty, run it in raw mode for the
@@ -50,8 +50,13 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
     }
     let feeder_input = input.as_fd().try_clone_to_owned()?;
     let master_feed = master.as_fd().try_clone_to_owned()?;
+    let suspended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let feeder_suspended = std::sync::Arc::clone(&suspended);
+    let feeder_outer = outer.clone();
     let writer = std::thread::spawn(move || -> io::Result<()> {
         let input = feeder_input;
+        let outer = feeder_outer;
+        let suspended = feeder_suspended;
         // The baseline starts unset: the first poll syncs the inner master
         // to the outer terminal's current size, whatever it is by the time
         // the relay starts.
@@ -95,6 +100,71 @@ fn relay(master: &rustix::fd::OwnedFd, deadline: Instant) -> io::Result<()> {
                 // Outer input ended: stop feeding the target without
                 // shutting down its terminal.
                 return Ok(());
+            }
+            // Suspend handling: the outer terminal is raw, so the suspend
+            // character arrives as a plain byte. Intercept it, stop the
+            // target's group, restore the outer terminal's cooked mode, and
+            // wait for the user's explicit resume before re-entering raw.
+            // The inner pty's ISIG would also generate the stop, but then
+            // the client could not observe or reverse it.
+            if suspended.load(std::sync::atomic::Ordering::Acquire)
+                || buffer[..count].contains(&0x1a)
+            {
+                if !suspended.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    // Stop the target's group and hand the outer terminal
+                    // back to the user in cooked mode.
+                    let group = rustix::process::Pid::from_raw(target_group as i32)
+                        .ok_or_else(|| io::Error::other("invalid target group"))?;
+                    let _ =
+                        rustix::process::kill_process_group(group, rustix::process::Signal::TSTP);
+                    if let Some(saved) = &outer {
+                        rustix::termios::tcsetattr(
+                            &input,
+                            rustix::termios::OptionalActions::Now,
+                            saved,
+                        )?;
+                    }
+                }
+                // Cooked-mode resume loop: `fg` continues the target; EOF
+                // leaves it stopped for the operator.
+                let mut line = Vec::new();
+                let mut byte = [0_u8; 1];
+                loop {
+                    match rustix::io::read(&input, &mut byte) {
+                        Ok(0) => return Ok(()),
+                        Err(rustix::io::Errno::IO) => return Ok(()),
+                        Err(rustix::io::Errno::INTR) => continue,
+                        Err(error) => return Err(error.into()),
+                        Ok(_) => {}
+                    }
+                    match byte[0] {
+                        b'\n' | b'\r' => {
+                            if line == b"fg" {
+                                break;
+                            }
+                            line.clear();
+                        }
+                        0x7f => {
+                            line.pop();
+                        }
+                        printable => line.push(printable),
+                    }
+                }
+                if let Some(saved) = &outer {
+                    let mut raw = saved.clone();
+                    raw.make_raw();
+                    rustix::termios::tcsetattr(
+                        &input,
+                        rustix::termios::OptionalActions::Now,
+                        &raw,
+                    )?;
+                }
+                let group = rustix::process::Pid::from_raw(target_group as i32)
+                    .ok_or_else(|| io::Error::other("invalid target group"))?;
+                rustix::process::kill_process_group(group, rustix::process::Signal::CONT)
+                    .map_err(|error| io::Error::other(format!("resume failed: {error}")))?;
+                suspended.store(false, std::sync::atomic::Ordering::Release);
+                continue;
             }
             match rustix::io::write(&master_feed, &buffer[..count]) {
                 Ok(_) => {}
@@ -351,7 +421,7 @@ pub fn launch(
             deadline,
         )
         .map_err(|error| io::Error::other(format!("terminal master missing: {error}")))?;
-        relay(&master, deadline)?;
+        relay(&master, deadline, child)?;
         let exit = launch_protocol::receive_exit_report(&endpoint.socket, &run_nonce, deadline)
             .map_err(|error| io::Error::other(format!("exit report missing: {error}")))?;
         // Clean disconnect of the activation socket only: the manager
