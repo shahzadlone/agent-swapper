@@ -435,7 +435,21 @@ jobs:
           # the target's real status. No provider command is ever accepted.
           launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
           chmod 700 "$launch_journal"
-          launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || { printf '%s\n' "$launch_output"; dump_journal; echo "::error title=launch control::launch control failed; journal: $(journal_brief)"; exit 1; }
+          launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || {
+            printf '%s\n' "$launch_output"
+            dump_journal
+            sudo -n systemctl list-units "agentswapper-$uid-$gen_a@*" --all --no-pager --no-legend --plain 2>/dev/null | tail -n 3 \
+              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-400 \
+              | sed 's/^/units:/'
+            for unit in $(sudo -n systemctl list-units "agentswapper-$uid-$gen_a@*" --all --no-legend --plain 2>/dev/null | awk '{print $1}'); do
+              sudo -n systemctl show "$unit" -p Result -p ExecMainCode -p ExecMainStatus -p ActiveState \
+                --no-pager 2>/dev/null | sed "s/^/$unit:/"
+            done | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-600 \
+              | sed 's/^/state:/'
+            echo ""
+            echo "::error title=launch control::launch control failed; journal: $(journal_brief)"
+            exit 1
+          }
           printf '%s\n' "$launch_output"
           printf '%s\n' "$launch_output"
           printf '%s\n' "$launch_output" | grep -F "launch-relay-ok" || {

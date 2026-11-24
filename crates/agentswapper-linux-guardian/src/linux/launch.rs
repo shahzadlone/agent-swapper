@@ -455,6 +455,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     eprintln!("guardian: envelope transferred");
     // The kernel's exec trap is the only exec evidence; the shim's exit
     // code and any EOF prove nothing.
+    eprintln!("guardian: awaiting exec trap");
     wait_trap(pid, deadline)?;
     eprintln!("guardian: exec trapped child={}", pid);
     let child_id = child.id();
@@ -463,6 +464,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
         &launch_protocol::exec_event_packet(&nonce, child_id),
         deadline,
     )?;
+    eprintln!("guardian: exec event sent");
     launch_protocol::receive_exec_release(channel, &nonce, child_id, deadline)?;
     eprintln!("guardian: exec released child={child_id}");
     // Detach rather than continue: the released target runs untraced, so its
