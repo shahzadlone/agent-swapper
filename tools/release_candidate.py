@@ -149,7 +149,12 @@ def candidate(output, allow_dirty):
         raise ValueError("invalid workspace version")
     suffix = ".exe" if "windows" in host else ""
     files = {}
-    for name in ("aswp", "agentswapper"):
+    binary_names = ["aswp", "agentswapper"]
+    if "linux" in host:
+        # The Linux helper images are root-installed assets; the candidate
+        # packages them so an administrator can install from a candidate.
+        binary_names += ["agentswapper-linux-guardian", "aswp-session-helper"]
+    for name in binary_names:
         add(files, name + suffix, ROOT / "target" / "release" / (name + suffix), 0o755)
         reject_build_paths(files[name + suffix][0], (ROOT, Path.home()), os.name == "nt")
     marker_path = ROOT / "target/release/agentswapper-build.json"
@@ -157,7 +162,7 @@ def candidate(output, allow_dirty):
         raise ValueError("candidate build marker is missing; rebuild the binaries")
     verify_build_marker(json.loads(marker_path.read_text(encoding="utf-8")), revision, dirty,
                         digest((ROOT / "Cargo.lock").read_bytes()),
-                        {name + suffix: files[name + suffix][0] for name in ("aswp", "agentswapper")})
+                        {name + suffix: files[name + suffix][0] for name in binary_names})
     for name in ("LICENSE", "NOTICE"):
         add(files, name, ROOT / name)
     add(files, "assets/brand/THIRD_PARTY_NOTICES.txt", ROOT / "assets/brand/THIRD_PARTY_NOTICES.txt")

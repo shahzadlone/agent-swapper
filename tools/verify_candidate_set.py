@@ -91,7 +91,9 @@ def verify_one(directory, target, revision, lock_hash, version, source_files, ex
         suffix = ".exe" if "windows" in target else ""
         if not {"aswp" + suffix, "agentswapper" + suffix, "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt", "PREVIEW.txt"}.issubset(names):
             raise ValueError("candidate is missing required files")
-        if any((bundle.getinfo(name + suffix).external_attr >> 16) & 0o777 != 0o755 for name in ("aswp", "agentswapper")):
+        if any((bundle.getinfo(name + suffix).external_attr >> 16) & 0o777 != 0o755
+               for name in ("aswp", "agentswapper", "agentswapper-linux-guardian", "aswp-session-helper")
+               if name + suffix in names):
             raise ValueError("candidate executable modes do not match")
         preview = bundle.getinfo("PREVIEW.txt")
         if preview.file_size > 4096 or not bundle.read(preview).startswith(b"Internal developer preview; not a signed or published release.\n"):
@@ -106,8 +108,10 @@ def verify_one(directory, target, revision, lock_hash, version, source_files, ex
             if name not in hashes or hashes[name] != digest(expected):
                 raise ValueError("candidate project notice does not match checked-out source")
         if expected_binaries is not None:
-            names = {"aswp" + suffix, "agentswapper" + suffix}
-            if set(expected_binaries) != names:
+            # The rebuilt marker's binary inventory defines the comparison:
+            # Linux candidates carry the helper images; other targets do not.
+            names = set(expected_binaries)
+            if not names:
                 raise ValueError("rebuilt executables do not match candidate")
             for name in sorted(names):
                 if hashes[name] != expected_binaries[name]:

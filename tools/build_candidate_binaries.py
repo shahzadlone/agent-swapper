@@ -44,6 +44,15 @@ def main():
     env["SOURCE_DATE_EPOCH"] = source_epoch
     subprocess.run(["cargo", "+1.98.0", "build", "--locked", "--release", "-p", "agentswapper-cli", "--bins"],
                    cwd=ROOT, env=env, check=True)
+    names = ["aswp", "agentswapper"]
+    if os.name == "posix":
+        # The Linux helper images are root-installed assets; the candidate
+        # packages them so an administrator can install from a candidate.
+        subprocess.run(["cargo", "+1.98.0", "build", "--locked", "--release",
+                        "-p", "agentswapper-linux-guardian",
+                        "-p", "agentswapper-linux-session-helper"],
+                       cwd=ROOT, env=env, check=True)
+        names += ["agentswapper-linux-guardian", "aswp-session-helper"]
     if revision != output("git", "rev-parse", "--verify", "HEAD") or status != output("git", "status", "--porcelain", "--untracked-files=all"):
         raise SystemExit("source revision or working-tree state changed during build")
     suffix = ".exe" if os.name == "nt" else ""
@@ -54,7 +63,7 @@ def main():
         "dirty": bool(status),
         "lock_sha256": hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
         "binaries": {name + suffix: hashlib.sha256((release / (name + suffix)).read_bytes()).hexdigest()
-                     for name in ("aswp", "agentswapper")},
+                     for name in names},
     }
     temporary = None
     try:
