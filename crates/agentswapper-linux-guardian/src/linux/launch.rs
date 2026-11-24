@@ -124,24 +124,36 @@ fn prepare_session() -> io::Result<()> {
     job_control::block_stop_signals()
 }
 
-/// Bind the session's controlling terminal and grant the foreground to the
-/// raised exec-shim's group. This runs only once the shim's group exists
-/// and holds: binding earlier would leave this guardian's own group as the
-/// terminal's foreground, and any pre-handoff refusal that closed the
-/// master would then hang up the guardian itself instead of a child that
-/// provably cannot run past its control receive. The kernel assigns a
-/// fresh controlling terminal's foreground to the session leader; the
-/// grant below moves it to the shim's group before anything can read or
-/// close the slave.
-fn grant_session(slave: &OwnedFd, group: Pid) -> io::Result<()> {
+/// Bind the session's controlling terminal before anything is spawned: a
+/// child inherits the controlling-terminal link only at fork time, so the
+/// shim can verify - never take - the binding only if this leader already
+/// owns the terminal when the fork happens. The kernel assigns a fresh
+/// controlling terminal's foreground to the session leader, so this
+/// guardian's own group is the terminal's foreground until the spawned
+/// group's explicit grant below.
+fn bind_session(slave: &OwnedFd) -> io::Result<()> {
     let own = rustix::process::getpid();
     // The safe ioctl uses argument zero: acquire an unowned terminal, never
     // steal one.
     rustix::process::ioctl_tiocsctty(slave)?;
+    require(
+        rustix::termios::tcgetsid(slave)? == own && rustix::termios::tcgetpgrp(slave)? == own,
+        "the guardian did not own the bound terminal",
+    )
+}
+
+/// Grant the terminal's foreground to the raised exec-shim's group. This
+/// runs only once the shim's group exists and holds at its tracer stop, so
+/// the grant can never leave anything else as the terminal's foreground,
+/// and a pre-handoff refusal that closed the master would hang up this
+/// guardian's own held group instead of a child that provably cannot run
+/// past its control receive.
+fn grant_foreground(slave: &OwnedFd, group: Pid) -> io::Result<()> {
+    let own = rustix::process::getpid();
     rustix::termios::tcsetpgrp(slave, group)?;
     require(
         rustix::termios::tcgetsid(slave)? == own && rustix::termios::tcgetpgrp(slave)? == group,
-        "the guardian did not own the granted terminal",
+        "the guardian did not grant the shim's group the foreground",
     )
 }
 
@@ -426,10 +438,12 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     // session's controlling-terminal binding stays observable until this
     // service exits.
     let session_tty = slave.try_clone()?;
-    // The session is taken before the spawn so the shim inherits the
-    // blocked stop-signal mask as its spawn witness; the terminal binding
-    // and foreground grant come only after the shim's group holds.
+    // The session and its controlling terminal are taken before the spawn:
+    // the shim inherits the blocked stop-signal mask as its spawn witness,
+    // and it can only inherit the session's controlling-terminal binding
+    // from a leader that already owns it when the fork happens.
     prepare_session()?;
+    bind_session(&slave)?;
     let (control_client, control_shim) = transport::pair()?;
     let mut command = Command::new(shim_path);
     command
@@ -464,14 +478,14 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     .map_err(|error| io::Error::other(format!("tracer options failed: {error}")))?;
     ptrace::cont(pid, None)
         .map_err(|error| io::Error::other(format!("tracer resume failed: {error}")))?;
-    // The shim's group exists, so the terminal binding and the foreground
-    // grant can never leave the guardian's own group as the terminal's
-    // foreground. The trusted shim still holds inside its control receive:
-    // it reads nothing and cannot run until the durable-intent-gated
-    // transfer below, so the grant stays inert until the launch data
-    // proves the launch. (Its stdio slave descriptors are open but
-    // untouched: the control receive comes first.)
-    grant_session(&slave, group)?;
+    // The shim's group exists and holds at its tracer stop, so the
+    // foreground grant can never leave the guardian's own group as the
+    // terminal's foreground. The trusted shim still holds inside its
+    // control receive: it reads nothing and cannot run until the
+    // durable-intent-gated transfer below, so the grant stays inert until
+    // the launch data proves the launch. (Its stdio slave descriptors are
+    // open but untouched: the control receive comes first.)
+    grant_foreground(&slave, group)?;
     // The durable run intent arrives before the slave transfer: the shim
     // execs only after the nonce and the envelope follow this gate.
     let nonce = launch_protocol::receive_launch_gate_open(channel, deadline)?;
