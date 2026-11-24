@@ -15,8 +15,12 @@ from release_candidate import verify_build_marker
 
 def verify_rebuild(directory, target, revision, lock, version, source_files, binaries):
     suffix = ".exe" if "windows" in target else ""
+    names = ["aswp" + suffix, "agentswapper" + suffix]
+    if "linux" in target:
+        # The Linux candidate packages the root-installed helper images.
+        names += ["agentswapper-linux-guardian", "aswp-session-helper"]
     local = {}
-    for name in ("aswp" + suffix, "agentswapper" + suffix):
+    for name in names:
         path = binaries / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024 * 1024:
             raise ValueError(f"rebuilt {name} is missing or invalid")
