@@ -173,7 +173,34 @@ fn trace_stop(child: nix::unistd::Pid, deadline: Instant) -> io::Result<Signal> 
     }
 }
 
-fn wait_trap(child: nix::unistd::Pid, deadline: Instant) -> io::Result<()> {
+/// Nonblocking drain of the held terminal master at a refusal point. A
+/// refused shim writes its diagnostic to the slave; the bytes sit in the
+/// PTY buffer where the not-yet-dispatched master can still read them, so
+/// the refusal reaches the journal alongside the reaper's own evidence.
+fn master_residue(master: &OwnedFd) -> String {
+    let saved = match rustix::fs::fcntl_getfl(master) {
+        Ok(flags) => flags,
+        Err(_) => return String::new(),
+    };
+    let _ = rustix::fs::fcntl_setfl(master, saved | rustix::fs::OFlags::NONBLOCK);
+    let mut text = Vec::new();
+    let mut buffer = [0_u8; 256];
+    while text.len() < 1024 {
+        match rustix::io::read(master, &mut buffer) {
+            Ok(0) => break,
+            Ok(count) => text.extend_from_slice(&buffer[..count]),
+            Err(_) => break,
+        }
+    }
+    let _ = rustix::fs::fcntl_setfl(master, saved);
+    String::from_utf8_lossy(&text)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(240)
+        .collect()
+}
+
+fn wait_trap(child: nix::unistd::Pid, deadline: Instant, master: &OwnedFd) -> io::Result<()> {
     loop {
         require(Instant::now() < deadline, "the held exec deadline expired")?;
         match nix::sys::wait::waitpid(
@@ -202,8 +229,14 @@ fn wait_trap(child: nix::unistd::Pid, deadline: Instant) -> io::Result<()> {
                 return Err(io::Error::other("the held target was killed before exec"));
             }
             Ok(status) => {
+                let residue = master_residue(master);
+                let suffix = if residue.is_empty() {
+                    String::new()
+                } else {
+                    format!("; shim diagnostics: {residue}")
+                };
                 return Err(io::Error::other(format!(
-                    "the shim left the tracer hold: {status:?}"
+                    "the shim left the tracer hold: {status:?}{suffix}"
                 )));
             }
             Err(nix::Error::EINTR) => {}
@@ -456,7 +489,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     // The kernel's exec trap is the only exec evidence; the shim's exit
     // code and any EOF prove nothing.
     eprintln!("guardian: awaiting exec trap");
-    wait_trap(pid, deadline)?;
+    wait_trap(pid, deadline, &master)?;
     eprintln!("guardian: exec trapped child={}", pid);
     let child_id = child.id();
     net_send(
