@@ -433,6 +433,20 @@ jobs:
           # target through the installed guardian; the held exec releases on
           # the client's exec release and the authenticated exit report names
           # the target's real status. No provider command is ever accepted.
+          # Diagnostic wrapper for the lifecycle gate: the exact guardian
+          # process tree fate was invisible in journal-only evidence, so this
+          # round traces signal/process events into a file the annotations
+          # can carry. Revert once the failure mechanism is captured.
+          strace_wrap=""
+          if command -v strace >/dev/null 2>&1 || sudo -n apt-get install -y -qq strace >/dev/null 2>&1; then
+            if command -v strace >/dev/null 2>&1; then
+              sudo -n touch /tmp/aswp-guardian.strace
+              sudo -n chown "$uid:$gid" /tmp/aswp-guardian.strace
+              sudo -n sed -i "s|^ExecStart=.*|ExecStart=/usr/bin/strace -f -tt -e trace=signal,process -o /tmp/aswp-guardian.strace /usr/libexec/agentswapper/$uid/$gen_a/guardian %n|" "/etc/systemd/system/agentswapper-$uid-$gen_a@.service"
+              sudo -n systemctl daemon-reload
+              strace_wrap="on"
+            fi
+          fi
           launch_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-journal-XXXXXXXX")
           chmod 700 "$launch_journal"
           launch_output=$("$bind" "$uid" launch "$launch_journal" /bin/echo launch-relay-ok 2>&1) || {
@@ -447,6 +461,11 @@ jobs:
             done | sed 's/%/%25/g' | tr '\n' '|' | cut -c1-500)
             echo "::error title=launch scene::time=$scene_time | procs=[$scene_procs] | state=[$scene_state]"
             echo "::error title=launch control::launch control failed; journal: $(journal_brief)"
+            if [ "$strace_wrap" = "on" ]; then
+              trace_tail=$(sudo -n tail -n 50 /tmp/aswp-guardian.strace 2>/dev/null \
+                | sed 's/%/%25/g; s/\r/%0D/g; s/:/;/g' | tr '\n' '~' | cut -c1-1400)
+              echo "::error title=launch trace::$trace_tail"
+            fi
             exit 1
           }
           printf '%s\n' "$launch_output"
