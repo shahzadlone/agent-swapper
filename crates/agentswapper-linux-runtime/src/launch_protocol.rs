@@ -27,10 +27,23 @@ const LAUNCH_GATE: &[u8] = b"ASWPLGS1";
 pub const EXEC_EVENT: &[u8] = b"ASWPLGE1";
 /// The guardian's authenticated target-exit report: tag + JSON body.
 pub const EXIT_REPORT: &[u8] = b"ASWPLGT1";
+/// The guardian's authenticated job-stop notice: tag + nonce + child + signal
+/// + sequence. Grounded in the qualified fixture stop/resume exchange.
+pub const STOP_NOTICE: &[u8] = b"ASWPLSN1";
+/// The client's authenticated resume grant: tag + nonce + sequence, the
+/// qualified fixture's 32-byte shape that fits the shared control-frame
+/// bound. The nonce binds the run; the exact sequence binds the one pending
+/// stop the notice already reported for the original child.
+pub const RESUME_GRANT: &[u8] = b"ASWPLRG1";
+
+/// The number of suspensions one session will mediate. The qualified fixture
+/// allowed 8; a long production session may suspend more often, so this is a
+/// larger explicit policy bound, not an inherited qualification. A session
+/// that exceeds it is refused and retires like any other bounded refusal.
+pub const MAX_STOP_SEQUENCE: u64 = 64;
 
 /// One direct target's wait status in its pinned serialization.
 use crate::target_exit::TargetExit;
-
 fn channel_preconditions(channel: impl AsFd) -> io::Result<()> {
     require(
         net::sockopt::socket_type(&channel)? == net::SocketType::SEQPACKET
@@ -95,6 +108,14 @@ fn withdrawn(channel: impl AsFd, deadline: Instant) -> io::Result<bool> {
     })();
     let restored = net::sockopt::set_socket_passcred(&channel, false).map_err(io::Error::from);
     restore(result, restored)
+}
+
+/// Whether the peer closed its end cleanly with no record queued. This is
+/// the production wrapper over the internal withdrawal peek so another
+/// crate can distinguish a withdrawal from unsolicited control data.
+pub fn peer_withdrew(channel: impl AsFd, deadline: Instant) -> io::Result<bool> {
+    channel_preconditions(&channel)?;
+    withdrawn(&channel, deadline)
 }
 
 /// A client withdrew from the control gate by closing its end cleanly.
@@ -391,6 +412,174 @@ pub fn receive_exit_report(
     restore(result, restored)
 }
 
+/// The guardian's job-stop notice: tag + nonce + the stopped child + the
+/// terminal stop signal + the monotonic sequence.
+pub fn stop_notice_packet(nonce: &[u8; 16], child: u32, signal: u16, sequence: u64) -> Vec<u8> {
+    [
+        STOP_NOTICE,
+        nonce.as_slice(),
+        &u64::from(child).to_be_bytes(),
+        &signal.to_be_bytes(),
+        &sequence.to_be_bytes(),
+    ]
+    .concat()
+}
+
+/// The client's resume grant for the one pending stop: tag + nonce + the
+/// exact sequence the guardian reported.
+pub fn resume_grant_packet(nonce: &[u8; 16], sequence: u64) -> Vec<u8> {
+    [RESUME_GRANT, nonce.as_slice(), &sequence.to_be_bytes()].concat()
+}
+
+/// The queued control record a relay can see before consuming it. Never a
+/// commitment that the full record is valid: the consuming receive still
+/// enforces the exact framing, nonce, child and capability refusal.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QueuedControl {
+    StopNotice,
+    ExitReport,
+    /// The peer closed cleanly and the queue is empty.
+    Closed,
+    /// A record with a tag no relay stage accepts, or a record carrying a
+    /// capability:
+    /// no launching or resuming data survives it.
+    Foreign,
+}
+
+/// Non-destructive peek of the next queued record's tag. A payload longer
+/// than the peeked prefix is expected and never an error here; capabilities
+/// are detected through the zero-capacity ancillary refusal instead.
+pub fn peek_queued_control(channel: impl AsFd) -> io::Result<QueuedControl> {
+    channel_preconditions(&channel)?;
+    let mut prefix = [0_u8; 8];
+    let mut ancillary = RecvAncillaryBuffer::new(&mut []);
+    let packet = net::recvmsg(
+        &channel,
+        &mut [IoSliceMut::new(&mut prefix)],
+        &mut ancillary,
+        RecvFlags::PEEK | RecvFlags::DONTWAIT,
+    )?;
+    if packet.bytes == 0
+        && !packet
+            .flags
+            .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+    {
+        return Ok(QueuedControl::Closed);
+    }
+    if packet.flags.intersects(ReturnFlags::CTRUNC) {
+        return Ok(QueuedControl::Foreign);
+    }
+    if packet.bytes >= STOP_NOTICE.len() && prefix.starts_with(STOP_NOTICE) {
+        return Ok(QueuedControl::StopNotice);
+    }
+    if packet.bytes >= EXIT_REPORT.len() && prefix.starts_with(EXIT_REPORT) {
+        return Ok(QueuedControl::ExitReport);
+    }
+    Ok(QueuedControl::Foreign)
+}
+
+/// Receive the guardian's job-stop notice for this nonce and child and
+/// return the stop signal and its monotonic sequence. Foreign children,
+/// non-monotonic sequences and any capability refuse.
+pub fn receive_stop_notice(
+    channel: impl AsFd,
+    nonce: &[u8; 16],
+    child: u32,
+    deadline: Instant,
+) -> io::Result<(u16, u64)> {
+    channel_preconditions(&channel)?;
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "launch control expired"))?;
+    let previous = net::sockopt::socket_timeout(&channel, net::sockopt::Timeout::Recv)?;
+    net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, Some(remaining))?;
+    let result = (|| -> io::Result<(u16, u64)> {
+        if withdrawn(&channel, deadline)? {
+            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, Withdrawn));
+        }
+        let mut bytes = [0_u8; STOP_NOTICE.len() + 16 + 8 + 2 + 8];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut []);
+        let packet = net::recvmsg(
+            &channel,
+            &mut [IoSliceMut::new(&mut bytes)],
+            &mut ancillary,
+            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+        )?;
+        require(
+            packet.bytes == bytes.len()
+                && !packet
+                    .flags
+                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                && bytes.starts_with(STOP_NOTICE)
+                && &bytes[STOP_NOTICE.len()..STOP_NOTICE.len() + 16] == nonce
+                && Instant::now() < deadline,
+            "invalid job-stop notice record",
+        )?;
+        let noticed_child = u32::try_from(u64::from_be_bytes(
+            bytes[STOP_NOTICE.len() + 16..STOP_NOTICE.len() + 16 + 8]
+                .try_into()
+                .map_err(|_| io::Error::other("invalid job-stop notice child"))?,
+        ))
+        .map_err(|_| io::Error::other("invalid job-stop notice child"))?;
+        require(noticed_child == child, "invalid job-stop notice child")?;
+        let signal = u16::from_be_bytes(
+            bytes[STOP_NOTICE.len() + 16 + 8..STOP_NOTICE.len() + 16 + 8 + 2]
+                .try_into()
+                .map_err(|_| io::Error::other("invalid job-stop notice signal"))?,
+        );
+        let sequence = u64::from_be_bytes(
+            bytes[STOP_NOTICE.len() + 16 + 8 + 2..]
+                .try_into()
+                .map_err(|_| io::Error::other("invalid job-stop notice sequence"))?,
+        );
+        require(
+            (1..=MAX_STOP_SEQUENCE).contains(&sequence)
+                // Only a genuine job-stop signal can authorize a client
+                // suspension; every other number is a forged notice.
+                && matches!(
+                    nix::sys::signal::Signal::try_from(i32::from(signal)),
+                    Ok(nix::sys::signal::Signal::SIGSTOP
+                        | nix::sys::signal::Signal::SIGTSTP
+                        | nix::sys::signal::Signal::SIGTTIN
+                        | nix::sys::signal::Signal::SIGTTOU)
+                ),
+            "invalid job-stop notice record",
+        )?;
+        Ok((signal, sequence))
+    })();
+    let restored =
+        net::sockopt::set_socket_timeout(&channel, net::sockopt::Timeout::Recv, previous)
+            .map_err(io::Error::from);
+    restore(result, restored).map_err(|error| {
+        if is_withdrawal(&error) {
+            error
+        } else {
+            io::Error::other(format!("invalid job-stop notice record: {error}"))
+        }
+    })
+}
+
+/// Receive the client's resume grant for this run's nonce and pending stop
+/// sequence. A grant for any other sequence or nonce refuses.
+pub fn receive_resume_grant(
+    channel: impl AsFd,
+    nonce: &[u8; 16],
+    sequence: u64,
+    deadline: Instant,
+) -> io::Result<()> {
+    require(
+        (1..=MAX_STOP_SEQUENCE).contains(&sequence),
+        "resume grant requires a bounded sequence",
+    )?;
+    receive_exact(
+        channel,
+        &resume_grant_packet(nonce, sequence),
+        deadline,
+        "invalid resume grant record",
+    )
+}
+
 /// The nonce in its bounded hex encoding for bounded diagnostics.
 pub fn encoded(nonce: &[u8; 16]) -> String {
     nonce.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -484,6 +673,189 @@ mod tests {
                 .err()
                 .ok_or_else(|| io::Error::other("withdrawal accepted as a gate"))?;
             assert!(is_withdrawal(&error));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stop_notices_and_resume_grants_round_trip_and_refuse_forgery() -> io::Result<()> {
+        let nonce = [5_u8; 16];
+        for (signal, sequence) in [(20_u16, 1_u64), (19, 2), (21, MAX_STOP_SEQUENCE)] {
+            let (sender, receiver) = pair()?;
+            let notice = stop_notice_packet(&nonce, 77, signal, sequence);
+            let handle =
+                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
+            send(&sender, &notice, &[])?;
+            let received = handle
+                .join()
+                .map_err(|_| io::Error::other("thread panicked"))??;
+            assert_eq!(received, (signal, sequence));
+            // The matching grant is accepted.
+            let (sender, receiver) = pair()?;
+            let grant = resume_grant_packet(&nonce, sequence);
+            let handle = std::thread::spawn(move || {
+                receive_resume_grant(&receiver, &nonce, sequence, deadline())
+            });
+            send(&sender, &grant, &[])?;
+            handle
+                .join()
+                .map_err(|_| io::Error::other("thread panicked"))??;
+        }
+        // Stale, foreign and beyond-bound sequences never grant a resume.
+        for (label, bytes, sequence) in [
+            ("stale sequence", resume_grant_packet(&nonce, 1), 2_u64),
+            ("foreign nonce", resume_grant_packet(&[6; 16], 2), 2),
+            (
+                "beyond the bound",
+                resume_grant_packet(&nonce, MAX_STOP_SEQUENCE + 1),
+                MAX_STOP_SEQUENCE + 1,
+            ),
+            ("empty frame", Vec::new(), 1),
+        ] {
+            let (sender, receiver) = pair()?;
+            let handle = std::thread::spawn(move || {
+                receive_resume_grant(&receiver, &nonce, sequence, deadline())
+            });
+            send(&sender, &bytes, &[])?;
+            assert!(
+                handle
+                    .join()
+                    .map_err(|_| io::Error::other("thread panicked"))?
+                    .is_err(),
+                "{label}"
+            );
+        }
+        // Foreign children, nonces, sequences beyond the bound, truncation
+        // and capabilities refuse the stop notice itself.
+        let (capability, _witness) = pair()?;
+        for (label, bytes, rights) in [
+            (
+                "foreign notice child",
+                stop_notice_packet(&nonce, 78, 20, 1),
+                Vec::new(),
+            ),
+            (
+                "foreign notice nonce",
+                stop_notice_packet(&[6; 16], 77, 20, 1),
+                Vec::new(),
+            ),
+            (
+                "beyond the notice bound",
+                stop_notice_packet(&nonce, 77, 20, MAX_STOP_SEQUENCE + 1),
+                Vec::new(),
+            ),
+            (
+                "truncated notice",
+                stop_notice_packet(&nonce, 77, 20, 1)[..30].to_vec(),
+                Vec::new(),
+            ),
+        ] {
+            let (sender, receiver) = pair()?;
+            let handle =
+                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
+            send(&sender, &bytes, &rights)?;
+            assert!(
+                handle
+                    .join()
+                    .map_err(|_| io::Error::other("thread panicked"))?
+                    .is_err(),
+                "{label}"
+            );
+        }
+        {
+            let (sender, receiver) = pair()?;
+            let rights = vec![capability.as_fd().try_clone_to_owned()?];
+            let handle =
+                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
+            send(&sender, &stop_notice_packet(&nonce, 77, 20, 1), &rights)?;
+            assert!(
+                handle
+                    .join()
+                    .map_err(|_| io::Error::other("thread panicked"))?
+                    .is_err()
+            );
+        }
+        // Bounds exposed through the raw packet shape: a stop beyond the
+        // sequence policy has a valid shape but a refused sequence.
+        let (sender, receiver) = pair()?;
+        let handle =
+            std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
+        send(&sender, &stop_notice_packet(&nonce, 77, 20, 0), &[])?;
+        assert!(
+            handle
+                .join()
+                .map_err(|_| io::Error::other("thread panicked"))?
+                .is_err()
+        );
+        // Non-stop signal numbers never authorize a client suspension,
+        // in the wire shape of each genuine stop signal.
+        for (label, signal) in [
+            ("notice carries SIGCONT", 18_u16),
+            ("notice carries SIGKILL", 9),
+            ("notice carries zero", 0),
+            ("notice carries an out-of-range number", 65),
+        ] {
+            let (sender, receiver) = pair()?;
+            let notice = stop_notice_packet(&nonce, 77, signal, 1);
+            let handle =
+                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
+            send(&sender, &notice, &[])?;
+            assert!(
+                handle
+                    .join()
+                    .map_err(|_| io::Error::other("thread panicked"))?
+                    .is_err(),
+                "{label}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_relay_peek_classifies_queued_records_without_consuming_them() -> io::Result<()> {
+        let nonce = [11_u8; 16];
+        // An empty peer-closed queue classifies as Closed even with a
+        // capability-free shutdown.
+        {
+            let (sender, receiver) = pair()?;
+            drop(sender);
+            // Sequenced-packet EOF requires one poll cycle to surface.
+            std::thread::sleep(Duration::from_millis(50));
+            assert_eq!(peek_queued_control(&receiver)?, QueuedControl::Closed);
+            assert!(receive_stop_notice(&receiver, &nonce, 77, deadline()).is_err());
+        }
+        // A queued exit report peeks as one and stays queued for the exact
+        // consuming receive.
+        {
+            let (sender, receiver) = pair()?;
+            let report = exit_report_packet(&nonce, &TargetExit::Code { code: 0 })?;
+            send(&sender, &report, &[])?;
+            assert_eq!(peek_queued_control(&receiver)?, QueuedControl::ExitReport);
+            let exit = receive_exit_report(&receiver, &nonce, deadline())?;
+            assert_eq!(exit, TargetExit::Code { code: 0 });
+        }
+        // A queued stop notice peeks as one and stays queued.
+        {
+            let (sender, receiver) = pair()?;
+            send(&sender, &stop_notice_packet(&nonce, 77, 20, 1), &[])?;
+            assert_eq!(peek_queued_control(&receiver)?, QueuedControl::StopNotice);
+            assert_eq!(
+                receive_stop_notice(&receiver, &nonce, 77, deadline())?,
+                (20, 1)
+            );
+        }
+        // Any unrecognized tag is foreign, and so is a granted capability.
+        {
+            let (sender, receiver) = pair()?;
+            send(&sender, b"ASWPXXXXgarbage", &[])?;
+            assert_eq!(peek_queued_control(&receiver)?, QueuedControl::Foreign);
+        }
+        {
+            let (sender, receiver) = pair()?;
+            let (capability, _witness) = pair()?;
+            let rights = vec![capability.as_fd().try_clone_to_owned()?];
+            send(&sender, b"ASWPXXXXgarbage", &rights)?;
+            assert_eq!(peek_queued_control(&receiver)?, QueuedControl::Foreign);
         }
         Ok(())
     }

@@ -730,3 +730,188 @@ Next implementation work:
 2. Authenticated restart recovery.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
+# Session continuation: 2026-11-25 (production job control)
+
+The qualified PTY job-control topology (the evaluation fixture's
+`activated_job_control.rs` / `activated_terminal.rs` evidence) is now
+ported into the production launch path. This section records the
+implemented topology, the evaluated deviations, and the evidence plan.
+
+## Production topology (supersedes the seventh session's shape)
+
+The seventh session recorded the shim "acquires the target session without
+inheriting a controlling terminal". That shape could not survive an outer
+foreground handover: a pre-handoff master close SIGHUPs the pty's foreground
+group, and the acquisition order made that group the guardian itself (an
+empirical kill of a unit test). The guardian now owns the session in two
+halves: `prepare_session` runs before the spawn (default-disposition check,
+conditional `setsid`, tty-inheritance refusal, and a stop-signal block mask
+the shim must inherit as its witness), and `grant_session` runs after the
+kernel's exec trap delivers the trace-stop (`TIOCSCTTY` with argument zero,
+`tcsetpgrp` to the shim's own group, and read-back verification), so the
+guardian's own group is never the pty's foreground. The shim keeps its exec
+gated on the slave/nonce/envelope transfer and verifies the whole topology
+(`getsid == getppid`, its own group, the slave's session is the parent's,
+the slave's foreground is its own group) plus the inherited blocked-stop
+mask, clearing that mask only immediately before `exec`.
+
+One evaluated deviation: the foreground grant now precedes the run gate.
+No bypass exists — the slave/nonce/envelope transfer remains the only exec
+path and is still gated on the durable intent; the grant only orders the
+terminal handover ahead of it.
+
+`bcd8f41`'s suspension handling was defective: it intercepted the suspend
+byte at the relay and stopped the target's group directly. That is not
+honest job control — the guardian never observed a real stop, and the
+client stayed accountable for the inner terminal's conventions. The
+production client now suspends ITSELF through its signal owner: the inner
+pty's ISIG generates the real SIGTSTP, the guardian observes the child's
+stop and sends a 42-byte literal STOP notice (signal, child, sequence),
+the client restores the outer terminal, suspends on SIGTSTP, and after
+the outer shell's `fg` returns the foreground it re-enters raw and sends
+a 32-byte RESUME grant; the guardian accepts exactly one authorized
+continued, re-grants the inner foreground and resumes the target.
+
+## Deviations from the qualified fixture (evaluated, deliberate)
+
+- Literal versioned frames instead of the fixture's JSON records:
+  STOP notice 42 bytes, resume grant 32 bytes (it must fit the control
+  receive's 32-byte bound; the child binding lives in the notice).
+- Resume-sequence bound 64 against the fixture's 8: the bound exists to
+  fail a pathological loop loudly, and 64 gives interactive use room the
+  fixture's 8 would under-serve; the protocol's monotonic check still
+  governs each cycle.
+- A target that dies while stopped is reported as the honest exit over
+  the same control channel before the guardian closes: the client's
+  grant-send BrokenPipe path receives the queued authenticated report
+  instead of declaring the target missing.
+- The hosted 68-case fixture matrix is not duplicated; the production
+  channel's interactive evidence moves into the rewritten
+  `tools/check_linux_launch_pty.py` scenarios.
+
+## Hosted evidence plan (CI wiring included)
+
+`tools/check_linux_launch_pty.py` is rewritten around the production
+shape: an anchoring session-leader process (a fresh fork, so `setsid`
+always succeeds) owns the controlling terminal, spawns the launch client
+in its own process group, and releases the child's exec from behind a
+pipe barrier only after its group and the foreground exist, so the
+setpgid race can never let exec win; it performs the shell's own `fg`
+resumption on an explicit command. Scenarios: basic (kept), hidden-input
+(a target-side echo-off read announced by a readiness marker; the token
+may appear exactly once), raw-bytes (64 deliberate bytes including ISIG,
+flow-control, EOF and high bytes, verified by digest), nested-jobs (an
+interactive bash's own ^Z stops only its inner job; the client must not
+stop; the relay's raw modes must survive the whole exchange; `rc:148`
+names the inner status, amd64 runners), job-control (a direct-target
+^Z: real client suspension observed through `waitpid(WUNTRACED)` and
+`/proc/<pid>/status` state `T`, a terminal-mode audit comparing the
+suspended client's restored cooked state and the resumed client's raw
+state against the pre-exec baseline, foreground resumption, resumed run,
+authenticated exit and a second restored-to-baseline audit — the
+regression shape for the guardian's stop → grant → continued → run →
+report path, ended with SIGINT so the report shape is `Signal`, while
+`basic`/`long-active` cover `Code { 0 }`), long-active (75 s of live
+target past every admission window) and long-stopped (a 70-second hold
+across the stop/resume path, with the same mode audits before and after
+the hold). Both client paths (`aswp managed-launch` and the disposable
+`activation_client`) run all scenarios; the lifecycle step's timeout rose
+from 14 to 25 minutes. The job-control, hidden-input, nested-jobs and
+raw-byte mechanics were validated locally against a fake client; the
+real guardian path is hosted-CI-only (no root/systemd on the developer
+machine).
+Local gates green at the time of writing: the full workspace suite
+including the new harness-less fresh-process regression, clippy and fmt
+(`setpriv --inh-caps=-all` prefix required locally; the inherited CapInh
+bit defeats `scope_observation` identically at clean HEAD). Full
+pipeline evidence is to be appended once the pushed run completes.
+
+## Re-review round (all six findings incorporated)
+
+The post-restructure audit re-review rated CHANGES-REQUIRED; every
+finding is now addressed in code:
+
+1. Blocker — `Signals::new` refuses a pre-blocked mask, so the client's
+   block-before-admission ordering made every launch refuse (uncovered
+   because the guardian path cannot run locally). The sequence now lives
+   as `Signals::claim_with_terminal_stops` in the runtime crate: admit
+   first, then extend the owner's blocked mask with the terminal in-band
+   stop signals (TTIN/TTOU join it; TSTP is already part of the owner's
+   set) so every later thread inherits the stop-proof mask. A
+   harness-less fresh-process regression (`tests/signal_init_sequence`,
+   driver + fixture roles in one binary, because the libtest harness is
+   itself multithreaded) pins the exact production sequence.
+2. Feeder outcomes could vanish into a discarded `JoinHandle` return.
+   Every feeder exit path now funnels exactly one final word through the
+   status channel; the relay waits one bounded cycle (`FEEDER_FINAL`,
+   300 ms) for it after the shutdown flag and refuses even an
+   authenticated target end on a feeder failure. Silence stays the one
+   accepted case: a feeder wedged in a full master write ends with the
+   process, never reporting.
+3. The feeder's flag-to-read window is now closed from both sides: the
+   shutdown flag is rechecked after the poll returns and before every
+   read and write attempt, so no terminal reach survives the flag
+   outside one bounded poll cycle. Joining the thread was evaluated and
+   rejected again: a blocked master write must not wedge the client's
+   honest end.
+4. Mode restoration is now ownership-gated (`Outer::raw_held`): the
+   restore runs only while this owner actually holds raw mode. The
+   suspended client's failure path — the foreground wait giving up while
+   another job owns the terminal — can no longer reach for the terminal;
+   the foreground-admission failure before raw entry never touches it.
+   The checker's post-exit baseline equality audit covers the happy
+   path.
+5. The checker anchor's setpgid race is closed with an exec pipe
+   barrier: the child joins its group and holds its exec until the
+   foreground exists, and the parent-side setpgid tolerates the
+   child-side win. Stress-verified locally.
+6. The scenarios now audit terminal attributes: the job-control and
+   long-stopped scenarios assert the cooked restore at every stopped
+   checkpoint, the raw re-entry after the resume acknowledgement and the
+   final restoration against a baseline captured while the anchor still
+   holds the client's exec (the start order on the commands pipe releases
+   the exec only after the control acknowledged the capture — the
+   auditor's fast-raw-client reproduction closed this); nested-jobs
+   asserts the raw modes survive the inner job exchange, and
+   hidden-input waits for the target's echo-off readiness marker instead
+   of a fixed sleep.
+
+A second re-review pass raised two follow-ups, both incorporated:
+
+- The baseline capture raced the client's first instruction (the exec
+  release followed the PID narration directly). The anchor now waits for
+  the control's `start` order after narrating the PID; `main()` captures
+  the terminal-mode baseline and only then releases the exec, so every
+  later driver state is provably the client's own doing.
+- "Silence = wedged full master write" was unsound: the backhauled master
+  is nonblocking, so silence never established the documented exception,
+  and the feeder's blocking stdin read could outlive the shutdown flag.
+  The feeder's stdin is now set nonblocking (saved flags restored before
+  its final word is sent, so the shared description returns to its
+  caller-owned state), every cycle checks the shutdown flag, and the
+  relay requires the feeder's confirmed completion: both a feeder error
+  and timeout/disconnected silence refuse the launch, even over an
+  authenticated target end. The one-time flags change on a shared stdin
+  description is the cost of bounded I/O; it is confined to the feeder's
+  lifetime and deliberately restored before the relay may proceed.
+
+A third pass found one follow-up: a benign stdin end consumed by `drive`
+  while the target still ran (piped input closed early) would leave the
+  relay's final wait forever silent and refuse the later honest exit.
+  The single completion word is now preserved wherever it is first
+  consumed (`FeederScope` carries the receiver and the observed word;
+  `FeederScope::confirmed` is the production helper that accepts a
+  consumed word, bounds one wait for a pending one, and refuses on any
+  silence), and real feeder regressions cover the stdin-EOF and shutdown
+  paths - `spawn_feeder`'s input became an injectable `OwnedFd` so the
+  tests exercise the true thread end to end. The re-review verdict after
+  this change: APPROVE-WITH-NOTES, and the remaining note (the protocol
+  test once duplicated the combine logic) is covered by the shared
+  helper the test now calls.
+
+Next implementation work:
+1. Record the full pipeline evidence for this composition once the run
+   completes; address any scenario failures on `main`.
+2. Authenticated restart recovery.
+3. The real-provider cells (the deferred disposable-profile request
+   triggers once the provider-free gates above close).

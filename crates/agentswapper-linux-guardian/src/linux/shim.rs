@@ -1,12 +1,13 @@
 //! The exec-shim role. The guardian spawns this installed image with a
 //! private control socket on standard input; the shim re-derives its own
 //! image facts against the manifest, enters the tracer's hold at exec,
-//! receives the terminal slave, the run nonce and the launch envelope,
-//! acquires the target's session, and finally execs the captured target.
+//! receives the terminal slave, the run nonce and the launch envelope, and
+//! verifies from inside that its session and foreground group belong to the
+//! guardian's granted topology before finally execing the captured target.
 //! Its argv carries only its role and the manager-assigned unit name.
 use crate::linux::parse_unit;
 use agentswapper_linux_runtime::{
-    admission_transport as transport, installed_manifest::InstalledManifest,
+    admission_transport as transport, installed_manifest::InstalledManifest, job_control,
     launch_envelope::LaunchEnvelope, launch_protocol, self_image::SelfImage, terminal,
 };
 use std::os::unix::process::CommandExt;
@@ -74,27 +75,58 @@ pub fn run(control: &OwnedFd, unit: &str) -> io::Result<()> {
     let (user, generation) = parse_unit(unit)?;
     bind_image(user, &generation, "exec-shim")?;
     single_threaded()?;
+    // Hostile inherited signal state would silently drop job-control
+    // evidence; the shim refuses to start in one.
+    job_control::require_default_job_dispositions()?;
     // Hold before exec: the tracer (the guardian) resumes this process after
     // installing its exec trap. The stop is raised before any launch data is
     // read, so a lost guardian never reaches a running target.
     nix::sys::ptrace::traceme()?;
     nix::sys::signal::raise(nix::sys::signal::Signal::SIGSTOP)?;
+    // The guardian blocks the terminal stop signals before it operates on the
+    // session's foreground group; the mask arrives with the spawn, so its
+    // presence here is evidence of the controlled spawn itself.
+    require(
+        job_control::stop_signals_blocked()?,
+        "the exec shim did not inherit the guardian's blocked stop signals",
+    )?;
     let deadline = Instant::now() + CONTROL_BUDGET;
     let slave = transport::receive_until(control, deadline)?;
     terminal::validate_slave(&slave)?;
     let _nonce = launch_protocol::receive_launch_gate_open(control, deadline)?;
     let envelope = LaunchEnvelope::receive_from_until(control, deadline)?;
-    // The target session: no controlling terminal is inherited from the
-    // service; the slave becomes this process's own controlling terminal.
-    rustix::process::setsid()?;
-    // The safe ioctl uses argument zero: never steal a controlling terminal.
-    rustix::process::ioctl_tiocsctty(&slave)?;
-    rustix::termios::tcsetpgrp(&slave, rustix::process::getpgrp())?;
+    // The target topology: the guardian owns the session, granted this
+    // process its own group and the foreground before the transfer, and the
+    // slave is the session's controlling terminal. Everything is verified,
+    // nothing configured: a topology the guardian did not grant refuses
+    // here, before the target's final exec.
+    let parent = rustix::process::getppid()
+        .ok_or_else(|| io::Error::other("the exec shim lost its parent guardian"))?;
+    require(
+        rustix::process::getsid(None)? == parent,
+        "the exec shim is outside its guardian's session",
+    )?;
+    require(
+        rustix::process::getpgrp() == rustix::process::getpid(),
+        "the exec shim did not receive its own process group",
+    )?;
+    require(
+        rustix::termios::tcgetsid(&slave)? == parent,
+        "the terminal slave is outside the guardian's session",
+    )?;
+    require(
+        rustix::termios::tcgetpgrp(&slave)? == rustix::process::getpgrp(),
+        "the exec shim did not receive the foreground grant",
+    )?;
     let mut command = envelope.command();
     command
         .stdin(std::process::Stdio::from(slave.try_clone()?))
         .stdout(std::process::Stdio::from(slave.try_clone()?))
         .stderr(std::process::Stdio::from(slave));
+    // The exec preserves this thread's signal mask: the target must meet its
+    // own signal contract with a default unblocked state, but the guardian's
+    // stop signals stay masked until the foreground grant provably exists.
+    job_control::clear_inherited_mask()?;
     // Exec preserves the PID the client's retained pidfd already bound.
     Err(command.exec())
 }

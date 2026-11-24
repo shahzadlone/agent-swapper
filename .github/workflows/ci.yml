@@ -360,7 +360,7 @@ jobs:
       - name: Qualify installer transaction controls
         run: cargo +1.98.0 test --locked -p agentswapper-linux-install --features qualification
       - name: Exercise the installation lifecycle end to end
-        timeout-minutes: 14
+        timeout-minutes: 25
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           cargo +1.98.0 build --locked -p agentswapper-linux-install --examples
@@ -457,6 +457,44 @@ jobs:
             echo '::error title=managed launch pty control::interactive managed launch failed'
             exit 1
           }
+          # Job-control, fidelity and long-lived interactive scenarios on a
+          # real pty, across both production client paths: the anchoring
+          # session leader owns the controlling terminal in the production
+          # shape (the client is a session member in its own group), and the
+          # scenarios exercise hidden input, raw byte fidelity, nested job
+          # control, the full direct-stop suspend/resume protocol, and
+          # targets that outlive every admission window both active and
+          # held stopped.
+          managed_pty_scenario() {
+            scenario="$1"; shift
+            /usr/bin/python3 tools/check_linux_launch_pty.py --scenario "$scenario" --client "$aswp" managed-launch aswp-launch -- --target "$@" || {
+              dump_journal
+              echo "::error title=managed launch pty control::interactive $scenario scenario failed"
+              exit 1
+            }
+          }
+          disposable_pty_scenario() {
+            scenario="$1"; shift
+            scenario_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-pty-$scenario-XXXXXXXX")
+            chmod 700 "$scenario_journal"
+            /usr/bin/python3 tools/check_linux_launch_pty.py --scenario "$scenario" --client "$bind" "$uid" launch "$scenario_journal" -- --target "$@" || {
+              dump_journal
+              echo "::error title=launch pty control::interactive $scenario scenario failed"
+              exit 1
+            }
+          }
+          managed_pty_scenario hidden-input /bin/sh -c 'stty -echo; echo hidden-ready; read line; stty echo; echo got:$line'
+          managed_pty_scenario raw-bytes /bin/sh -c 'stty raw; echo raw-ready; head -c 64 | sha256sum; echo raw-certified'
+          managed_pty_scenario nested-jobs /bin/bash --noprofile --norc -i
+          managed_pty_scenario job-control /bin/sh -c 'echo target-ready; sleep 300'
+          managed_pty_scenario long-active /bin/sh -c 'sleep 75; echo long-active-done'
+          managed_pty_scenario long-stopped /bin/sh -c 'echo target-ready; sleep 300'
+          disposable_pty_scenario hidden-input /bin/sh -c 'stty -echo; echo hidden-ready; read line; stty echo; echo got:$line'
+          disposable_pty_scenario raw-bytes /bin/sh -c 'stty raw; echo raw-ready; head -c 64 | sha256sum; echo raw-certified'
+          disposable_pty_scenario nested-jobs /bin/bash --noprofile --norc -i
+          disposable_pty_scenario job-control /bin/sh -c 'echo target-ready; sleep 300'
+          disposable_pty_scenario long-active /bin/sh -c 'sleep 75; echo long-active-done'
+          disposable_pty_scenario long-stopped /bin/sh -c 'echo target-ready; sleep 300'
           # Interactive qualification on a real pty with the disposable
           # client: the client's outer terminal becomes a tty, a resize is
           # applied mid-flight, and the target must see both the forwarded
@@ -469,7 +507,7 @@ jobs:
             echo '::error title=launch pty control::interactive launch failed'
             exit 1
           }
-          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation, held-exec launch, durable journal and interactive pty launch completed; no provider command'
+          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation, held-exec launch, durable journal and interactive pty launch with job-control, fidelity and long-session scenarios completed; no provider command'
 
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$PWD/target/debug/aswp-session-helper" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"

@@ -25,3 +25,7 @@ wait-timeout = "0.2"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "signal_init_sequence"
+harness = false

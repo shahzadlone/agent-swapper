@@ -60,6 +60,17 @@ pub struct Signals {
     _thread: PhantomData<Rc<()>>,
 }
 impl Signals {
+    /// The launch client's exclusive init sequence: admit the signal owner on
+    /// a fresh process in its default signal state, then extend the owner's
+    /// blocked mask with the terminal in-band stop signals so every later
+    /// thread - the stdin feeder above all - inherits the full stop-proof
+    /// mask. Blocking before the admission instead makes every launch refuse:
+    /// the owner demands its default unblocked witness.
+    pub fn claim_with_terminal_stops() -> io::Result<Self> {
+        let owner = Self::new()?;
+        crate::job_control::block_stop_signals()?;
+        Ok(owner)
+    }
     pub fn new() -> io::Result<Self> {
         require(
             fs::read_dir("/proc/self/task")?
