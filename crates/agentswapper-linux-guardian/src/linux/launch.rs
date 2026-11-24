@@ -444,6 +444,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     let nonce = launch_protocol::receive_launch_gate_open(channel, deadline)?;
     eprintln!("guardian: run gate received");
     transport::send_until(&control_client, transport::GO, &[slave.as_fd()], deadline)?;
+    eprintln!("guardian: slave transferred");
     drop(slave);
     net_send(
         &control_client,
@@ -451,6 +452,7 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
         deadline,
     )?;
     envelope.send_to_until(&control_client, deadline)?;
+    eprintln!("guardian: envelope transferred");
     // The kernel's exec trap is the only exec evidence; the shim's exit
     // code and any EOF prove nothing.
     wait_trap(pid, deadline)?;

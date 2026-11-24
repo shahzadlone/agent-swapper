@@ -409,8 +409,11 @@ jobs:
           # the annotations are readable even where raw logs are not.
           journal_brief() {
             sudo -n journalctl -q -u 'agentswapper-*' --no-pager 2>/dev/null \
-              | grep -E 'refused|guardian' | tail -n 4 \
-              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-700
+              | tail -n 10 \
+              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-1500
+            sudo -n journalctl -q --no-pager -n 300 2>/dev/null \
+              | grep -iE 'oom|segfault|killed process|panic' \
+              | sed 's/%/%25/g; s/\r/%0D/g' | tr '\n' '~' | cut -c1-500
           }
           "$bind" "$uid" bind || { dump_journal; echo '::error title=activation control::bind control failed'; exit 1; }
           wait_for_instance_gone() {
