@@ -612,3 +612,31 @@ Next implementation work:
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
 4. The release-candidate packaging/signing gates.
+
+## Composition status (2026-11-23, end of run)
+
+The production composition now runs end to end on hosted systemd through
+the real CLI entry:
+`aswp managed-launch PROFILE -- PROGRAM ARGS` → execs the installed
+session-helper image (fresh-exec, shell job identity preserved) → the
+Store-backed journal commits the durable intent (one-use key into the
+scope association) → the launch gate → the guardian's tracer hold and
+exec release → the PTY relay with raw mode, resize backhaul and the EIO
+convention → the authenticated exit report → the retirement commit with
+the one-use retirement value → the run resolves and the lease drops.
+Every step has hosted CI evidence on both Ubuntu images.
+
+The remaining design slices, each needing its own focused session:
+1. **Production relay composition with job control**: move the qualified
+   relay composition (managed_terminal_relay, 68 owned-PTY cases) from the
+   fixture crate to the production install crate, replacing the fixture
+   journal with the Store adapter and the fixture transport with the
+   production channel; shell stop/bg/fg, hidden input, nested jobs and
+   suspension per the fixture's evidence. This is the docs' "real
+   launch-plan/Store/terminal integration" slice.
+2. **Authenticated restart recovery**: the durable intent after client
+   death; the docs require a separately qualified recovery mechanism.
+3. **Real-provider cells**: login/refresh/resume/permission per harness
+   (the deferred disposable-profile request triggers here).
+4. **Release-candidate packaging/signing gates**: the candidate pipeline
+   exists (unsigned, reproducibility-verified); the signing gate is open.
