@@ -915,3 +915,64 @@ Next implementation work:
 2. Authenticated restart recovery.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
+
+## Installation lifecycle evidence (2026-11-25)
+
+The "Exercise the installation lifecycle end to end" step is green on
+both ubuntu-22.04 and ubuntu-24.04 manager-evidence runners in run
+`45535617406` (tested commit `988beae`: the launch fix `45e4e71` plus a
+documentation-only follow-up; job 138941362212 completed
+02:51:06Z-02:58:37Z, job 138941362280 completed 02:51:26Z-02:58:58Z,
+both step conclusions `success`). Kernel-level
+diagnosis and the preceding fix chain, in order:
+
+- The held-exec launch refused itself in CI with "Inappropriate ioctl
+  for device": the production port bound the terminal's controlling
+  link after the exec-shim fork, so the shim inherited no
+  controlling-terminal pointer (it is fixed at fork and never
+  propagates) and its `tcgetsid`/`tcgetpgrp` verification failed with
+  ENOTTY. The qualified fixture (`activated_job_control.rs`) binds
+  before the fork; `17afffc` restored that order (`bind_session` before
+  the spawn, `grant_foreground` after the tracer stop). The guardian
+  teardown SIGHUP seen in earlier traces was the downstream artifact
+  of the shim dying first and the guardian closing the last terminal
+  descriptors; it is now inert (below).
+- `80e69e4` restored the rows-cols order of the resize witness that
+  `54acb58`'s control rewrite had reverted (`f80ab01` had it right:
+  `stty size` prints rows cols, so the resized target emits `33 111`).
+- `f72a5f1` removed the stray argv separator the disposable pty
+  scenarios passed into the fixed launch argv, which made the client
+  treat `--` as the program and refuse "invalid Linux launch envelope".
+  With it gone, the pty control's managed and disposable scenarios -
+  hidden-input, raw-bytes, nested-jobs, job-control, long-active,
+  long-stopped - all passed on both runners. The strace instrumentation
+  and its manifest-digest repair were retired in `9cb3ac0`.
+- `45e4e71` hardened the launch phase: the guardian blocks the whole
+  job-control vocabulary during launch (mirroring the qualified
+  fixture's `blocked_job_signals`; the shim witnesses the inherited
+  mask before clearing it for the target's exec), and a launch whose
+  installed image is absent refuses before any session or terminal is
+  taken, keeping the single-slot session machinery out of the common
+  misconfiguration refusal. Two audit rounds (sol) reviewed the chain;
+  the second returned APPROVE-WITH-NOTES, and `988beae` folded its
+  documentation notes in: the serve precondition (single-threaded
+  service process) and the grant's proven-group comment.
+
+Run-level status of the same round: the matrix run `45535617406`
+finishes `failure` because the separate `test (ubuntu-latest)` job hit
+a one-off `launch_protocol::tests::stop_notices_and_resume...`
+BrokenPipe on the new `ubuntu26` preview image (instant EPIPE, first
+occurrence in every prior green round, 60/60 locally). Retrigger
+rounds after it (`c3862e6` run 45539037326, and later retriggers) were
+externally cancelled mid-flight; the lifecycle evidence above stands on
+the completed round. If a fully-green matrix run is required before the
+next release step, retrigger once the cancellation source is cleared
+and append the run number here.
+
+Cleanup at this checkpoint: the diagnostic strace/annotation
+scaffolding is gone from `.github/workflows/ci.yml`; the master-residue
+drain on a shim refusal and the `guardian:` narration lines in
+`launch.rs` are deliberate production diagnosability and stay. No
+`aswp-trace` remnants exist. Rust build caches were cleaned at the
+checkpoint boundary (workspace target plus the evaluation target);
+recovery reported in the handoff note.
