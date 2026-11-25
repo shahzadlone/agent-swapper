@@ -1,13 +1,20 @@
 //! The ordinary launch client. The flow ordering is enforced by this
 //! module: the durable run intent is committed before the launch gate, the
 //! durable spawn observation before the held-exec release, and the
-//! authenticated exit report is audited last, after the terminal has been
-//! restored and the custody handed back. The control socket is withdrawn
-//! before the retirement observation on every path, so a failure after the
-//! intent withdraws the channel, observes the retirement and commits it with
-//! no exit; only the manager connection outlives the audit, and it is closed
-//! after the run has settled. The caller supplies the journal implementation
-//! (see `launch_client::Journal`).
+//! authenticated exit report is audited last, after the control socket has
+//! been withdrawn and the original scope's retirement observed. The
+//! withdrawal precedes the observation on every path, so a failure after the
+//! intent withdraws the channel, observes the retirement and commits it
+//! without an exit; only the manager connection outlives the audit, and the
+//! successful path closes it explicitly before returning, while a failure
+//! returns before that close and leaves it to the connection's drop.
+//!
+//! What the client cannot promise is that every failure ends with a settled
+//! run. An observation that failed leaves nothing witnessed to commit, and a
+//! commit that never landed leaves the run unresolved; in both cases the
+//! reported error is the settlement's, because a run left behind is worse
+//! than a launch that reported why it failed. The caller supplies the journal
+//! implementation (see `launch_client::Journal`).
 use crate::launch_client::Journal;
 use agentswapper_linux_manager::{
     BoundService, LoadedSocket, RetiredService, ServiceClaim, ServicePolicy, SocketPolicy,

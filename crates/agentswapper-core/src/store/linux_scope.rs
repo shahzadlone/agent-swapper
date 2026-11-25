@@ -361,12 +361,19 @@ mod tests {
             .register(Harness::Codex, "work".parse().unwrap())
             .unwrap();
         let _lease = store.lease(profile.id).unwrap();
+        // A second profile, so the pair that must be refused is refused for
+        // the binding and not for the unfinished run a second intent would
+        // collide with anyway.
+        let other = store
+            .register(Harness::Codex, "other".parse().unwrap())
+            .unwrap();
+        let _other = store.lease(other.id).unwrap();
         let authority = ScopeAuthority { _private: () };
-        let pair = |run: &str, scope: Uuid| {
+        let pair = |profile: crate::ProfileId, run: &str, scope: Uuid| {
             [
                 Event::RunPlanned {
                     id: run.to_owned(),
-                    profile: profile.id,
+                    profile,
                     kind: "run".to_owned(),
                     requires_spawn_observation: true,
                     gents_session: None,
@@ -384,17 +391,23 @@ mod tests {
         let run = Uuid::new_v4().to_string();
         let scope = Uuid::new_v4();
         store
-            .record_events_with_scope(&pair(&run, scope), Some(&authority))
+            .record_events_with_scope(&pair(profile.id, &run, scope), Some(&authority))
             .unwrap();
         assert_eq!(store.verify().unwrap().events, before + 2);
         // The second event is what fails here: one invocation cannot bind a
         // second run, and the intent is written first in the same
         // transaction, so the rejected binding must take its run with it.
         let second = Uuid::new_v4().to_string();
-        assert!(matches!(
-            store.record_events_with_scope(&pair(&second, Uuid::new_v4()), Some(&authority)),
-            Err(Error::Database(_))
-        ));
+        let refusal = store
+            .record_events_with_scope(&pair(other.id, &second, Uuid::new_v4()), Some(&authority))
+            .unwrap_err();
+        match refusal {
+            Error::Database(error) => {
+                let message = error.to_string();
+                assert!(message.contains("unique_linux_invocation"), "{message}");
+            }
+            other => panic!("unexpected refusal: {other:?}"),
+        }
         assert_eq!(store.verify().unwrap().events, before + 2);
         assert!(matches!(store.run(&second), Err(Error::RunNotFound)));
         let record = store.run(&run).unwrap();

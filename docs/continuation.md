@@ -1072,6 +1072,9 @@ line of work; the survey's own authority questions are answered below.
   same reason the settle path needs it, and `Journal::retry_audit` is the
   retry entry the contract promised: it takes neither a new receipt nor a new
   exit, and a journal that retains nothing answers so instead of pretending.
+  A journal is one launch: the adapter records the invocation its intent was
+  committed for and refuses any other, and refuses a second intent, so a
+  retained tuple can never be charged to a run it was not granted for.
 - **A lost acknowledgement with a known exit was reported as corruption.**
   The duplicate recognition compared only `exit_code IS NULL`. It now matches
   the recorded exit as well as the exact event payload, so a retry carrying a
@@ -1090,16 +1093,25 @@ observation and the commit against a live manager, and a fabricated
 retirement receipt is not constructible by design; that coverage belongs to
 the hosted lifecycle, where the experimental CLI already drives these paths.
 
-This section was written while the review of the two commits was still open;
-its findings are the retry entry, the second-event rollback assertion, the
-named refusals, the module and trait wording, and the production-path
-coverage above. All but the last are closed in the tree; the last is the
-hosted lifecycle's.
+This section was written while the review of those commits was still open.
+The review's findings were the retry entry, the second-event rollback
+assertion, the named refusals, the module and trait wording, the review
+record itself, and the production-path coverage above. All but the last are
+closed: `retry_audit` exists, the rollback fixture refuses on the binding
+using a second profile, a journal now refuses any invocation but its own and
+a second intent, and the wording above is the corrected one. Hosted
+production-path coverage is the lifecycle's and is not claimed here.
 
-Still open, deliberately: recovery of a run whose client died is a new
-authority boundary (`RecoveredService`), not a reuse of `retire_linux_scope`,
-and it stays unimplemented until its own independent review approves that
-boundary. The survey's open questions are recorded with it: whether per-boot
-kernfs inode uniqueness is documented as an assumption, whether recovery
-requires an observed pid, and whether the recovered outcome gets its own
-custody wording or reuses `LocalScopeEmpty`.
+Recovery of a run whose client died is **not** implemented, and the review
+rejected the boundary the survey proposed. An authenticated "no unit for this
+invocation" plus a missing or different cgroup directory are negatives about
+identifiers the caller chose, checked against a Store the same user can
+write; they cannot distinguish a closed scope from a record that says so, so
+a `RecoveredService` would have been attestation wearing the name of an
+observation. The proof would need root-owned retirement provenance - a
+manager-side record of the closure the user cannot write - which is new
+authority for a root component and a new cross-upgrade durable surface. Until
+that is designed and reviewed, `registry recover --confirm-stopped` stays the
+only way to clear an orphan, and stays attested rather than proved.
+`docs/linux-restart-recovery.md` records the argument, the corrected crash
+windows, and the facts a future design must start from.

@@ -45,7 +45,10 @@ fn one(exit: RuntimeExit) -> Option<TargetExit> {
 
 /// The adapter's live state. It owns the profile registration, the lease,
 /// the run and the pending scope association from construction through the
-/// audit; dropping the lease releases it only after the run has resolved.
+/// audit. The lease is held for as long as this adapter is alive: the audit's
+/// success ends it, and tearing the adapter down releases the file lock even
+/// when the durable row stays unresolved, which is the operator's problem
+/// from then on and never a second launch's.
 pub struct StoreJournal {
     store: Mutex<Store>,
     state: RefCell<Option<LiveRun>>,
@@ -58,6 +61,10 @@ pub struct StoreJournal {
 }
 
 struct LiveRun {
+    // The one invocation this adapter may settle. A journal is one launch:
+    // a second intent, or a settlement for another invocation, is refused
+    // rather than charged to this run.
+    invocation: String,
     lease: Option<ProfileLease>,
     scope: Uuid,
     pending: Option<agentswapper_core::store::linux_scope::PendingLinuxScope>,
@@ -77,7 +84,7 @@ impl StoreJournal {
     /// lease. No run is planned here: the intent and its scope binding
     /// commit together at `confirm_intent`, so a launch that fails before
     /// its intent leaves nothing behind for the profile to be blocked on.
-    /// The lease is held until the audit completes, and from the intent
+    /// The lease is held while this adapter is alive, and from the intent
     /// onward an unresolved run blocks the profile's reuse by design.
     pub fn open(root: &Path, harness: Harness, alias: &str) -> io::Result<Self> {
         let alias: Alias = alias.parse().map_err(other)?;
@@ -97,6 +104,7 @@ impl StoreJournal {
         Ok(Self {
             store: Mutex::new(store),
             state: RefCell::new(Some(LiveRun {
+                invocation: String::new(),
                 lease: Some(lease),
                 scope: Uuid::new_v4(),
                 pending: None,
@@ -115,8 +123,30 @@ impl StoreJournal {
     }
 }
 
+impl StoreJournal {
+    /// The one live run, and the check that the caller is settling the
+    /// invocation this adapter was opened for. A journal serves exactly one
+    /// launch: without this, a second intent on the same adapter could be
+    /// settled by recognizing the first run's duplicate, which would release
+    /// the lease with the second run unresolved.
+    fn live_for<'a>(
+        state: &'a mut Option<LiveRun>,
+        invocation: &str,
+    ) -> io::Result<&'a mut LiveRun> {
+        let live = state
+            .as_mut()
+            .ok_or_else(|| io::Error::other("the run already resolved"))?;
+        if live.invocation != invocation {
+            return Err(io::Error::other(
+                "the invocation does not belong to this journal",
+            ));
+        }
+        Ok(live)
+    }
+}
+
 impl Journal for StoreJournal {
-    fn confirm_intent(&self, _invocation: &str, _nonce: &str, key: ServiceKey) -> io::Result<()> {
+    fn confirm_intent(&self, invocation: &str, _nonce: &str, key: ServiceKey) -> io::Result<()> {
         // The client's flow binds before the gate; the adapter plans the run
         // and commits the key into its durable scope association here, in one
         // transaction, where the key cannot be extracted or serialized. A
@@ -130,22 +160,31 @@ impl Journal for StoreJournal {
         let live = state
             .as_mut()
             .ok_or_else(|| io::Error::other("the run already resolved"))?;
+        // One adapter, one launch: a repeat intent would be a second run on
+        // an adapter that can only carry one settlement.
+        if !live.invocation.is_empty() || live.pending.is_some() || live.retiring.is_some() {
+            return Err(io::Error::other("the journal already began its run"));
+        }
         let lease = live
             .lease
             .as_ref()
             .ok_or_else(|| io::Error::other("the profile lease was released before the intent"))?;
-        let scope = live.scope;
-        let pending = store.begin_linux_run(lease, scope, key).map_err(other)?;
+        let pending = store
+            .begin_linux_run(lease, live.scope, key)
+            .map_err(other)?;
         *self.run.borrow_mut() = Some(pending.run_id().to_owned());
+        live.invocation = invocation.to_owned();
         live.pending = Some(pending);
         Ok(())
     }
 
-    fn observe_spawn(&self, _invocation: &str, child: u32) -> io::Result<()> {
+    fn observe_spawn(&self, invocation: &str, child: u32) -> io::Result<()> {
         let mut store = self
             .store
             .lock()
             .map_err(|_| io::Error::other("the store lock was poisoned before the spawn"))?;
+        let mut state = self.state.borrow_mut();
+        Self::live_for(&mut state, invocation)?;
         let run = self
             .run()
             .ok_or_else(|| io::Error::other("the spawn was observed before the intent"))?;
@@ -154,7 +193,7 @@ impl Journal for StoreJournal {
 
     fn audit_exit(
         &self,
-        _invocation: &str,
+        invocation: &str,
         exit: Option<RuntimeExit>,
         retired: RetiredService,
     ) -> io::Result<()> {
@@ -171,9 +210,7 @@ impl Journal for StoreJournal {
             .map_err(|_| io::Error::other("the store lock was poisoned before the audit"))?;
         let mut state = self.state.borrow_mut();
         let retained = {
-            let live = state
-                .as_mut()
-                .ok_or_else(|| io::Error::other("the run already resolved"))?;
+            let live = Self::live_for(&mut state, invocation)?;
             match live.retiring.take() {
                 // A retry runs on the retained tuple, whatever the caller passes.
                 Some(retained) => retained,
@@ -190,7 +227,7 @@ impl Journal for StoreJournal {
         commit(&mut store, &mut state, pending, retired, exit)
     }
 
-    fn retry_audit(&self, _invocation: &str) -> io::Result<bool> {
+    fn retry_audit(&self, invocation: &str) -> io::Result<bool> {
         // The retry entry the contract promises: it takes neither a new
         // receipt nor a new exit, because the observation belongs to one
         // launch and is never reissued.
@@ -199,12 +236,13 @@ impl Journal for StoreJournal {
             .lock()
             .map_err(|_| io::Error::other("the store lock was poisoned before the retry"))?;
         let mut state = self.state.borrow_mut();
-        let Some((pending, retired, exit)) = state
-            .as_mut()
-            .ok_or_else(|| io::Error::other("the run already resolved"))?
-            .retiring
-            .take()
-        else {
+        // A resolved journal has nothing to retry, and saying so is the
+        // honest answer: it must not look like a failed retry.
+        if state.is_none() {
+            return Ok(false);
+        }
+        let live = Self::live_for(&mut state, invocation)?;
+        let Some((pending, retired, exit)) = live.retiring.take() else {
             return Ok(false);
         };
         commit(&mut store, &mut state, pending, retired, exit)?;
@@ -275,5 +313,34 @@ mod tests {
                 Some(agentswapper_core::store::LocalScope::LinuxCgroup { id: scope }),
             )
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod invocation_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// A journal is one launch. The adapter has no key here, so it cannot
+    /// begin a run; what it must still refuse is any settlement or spawn
+    /// observation that names another invocation, because the retained
+    /// retirement value is only ever charged to the run it was granted for.
+    #[test]
+    fn a_journal_refuses_another_invocations_spawn_and_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        {
+            let mut store = Store::open(&root).unwrap();
+            store
+                .register(Harness::Claude, "work".parse().unwrap())
+                .unwrap();
+        }
+        let journal = StoreJournal::open(&root, Harness::Claude, "work").unwrap();
+        assert!(
+            journal
+                .observe_spawn("someone-elses-invocation", 42)
+                .is_err()
+        );
+        assert!(journal.retry_audit("someone-elses-invocation").is_err());
     }
 }

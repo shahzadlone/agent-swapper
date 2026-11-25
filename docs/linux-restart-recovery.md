@@ -1,194 +1,139 @@
-# Restart recovery for managed launches
+# Restart recovery: why it is not implementable from the user's record
 
-Status: design, reviewed 2026-11-25; **not implemented**. Nothing here
-enables a launch for a user or a release. The provider-free defects that
-made an ordinary error strand a profile are fixed separately (`6f1a621`,
-`e7fb98c`); this page is the remaining gate.
+Status: design review closed, **nothing implemented** (2026-11-25). The
+provider-free settlement defects that made an ordinary error strand a
+profile are fixed separately (`6f1a621`, `e7fb98c`, `cf1eb74`); this page
+records why the remaining gate - a run whose client died - cannot be closed
+the way the survey first proposed, and what would have to exist instead.
 
-## The problem
+## The gap
 
 A managed launch holds a durable run and a one-use retirement authority
 together. `Store::retire_linux_scope` accepts only the in-memory
 `PendingLinuxScope` that `confirm_intent` produced, matched against a
-`RetiredService` the manager observed on its own connection, and against the
-durable `LinuxScopeBound` binding
+`RetiredService` the manager observed on its own authenticated connection and
+against the durable `LinuxScopeBound` binding
 (`crates/agentswapper-core/src/store/linux_scope.rs`,
-`crates/agentswapper-linux-manager/src/service.rs`). That value cannot be
-serialized or reconstructed, so after the client dies the original handles
-are gone and the Store can no longer retire its own run. The run stays
-unresolved, the profile stays blocked behind it, and the only way out today
-is the operator attestation `aswp registry recover RUN --confirm-stopped`,
-which records `user_attested_stopped` and proves nothing.
+`crates/agentswapper-linux-manager/src/service.rs`). None of that survives the
+client's death, so the Store can no longer retire its own run: it stays
+unresolved, the profile stays blocked, and the only way out is the operator
+attestation `aswp registry recover RUN --confirm-stopped`, which records
+`user_attested_stopped` and proves nothing.
 
-The client is not the only loser: the guardian sees the withdrawn channel,
-errors out, and `ChildWaiter::drop` kills the direct target, so a dead
-client's target is bounded. Before the exec release the target is held under
-`PTRACE_O_EXITKILL`. The target's descendants are not directly killed; they
-end when the unit's cgroup is torn down.
+## What the survey proposed
 
-## Crash windows
+A new boundary: `observe_orphan_retirement` in the manager, which would
+combine an authenticated "no unit for this invocation" answer with
+kernel evidence that the recorded cgroup directory is gone and its device and
+inode are no longer the ones bound, returning a `RecoveredService` that only
+`Store::recover_linux_scope` could consume, committed under the profile lease.
+The intent was that this is more than attestation: an independent observation
+of the closure, not the user's word.
 
-The durable record is a `runs` row written by the intent, with the profile
-lease held by the live helper (a file lock, released when the helper dies).
+## Why that argument fails
 
-| Window | Durable state | Observable afterwards | Reuse today |
-| --- | --- | --- | --- |
-| before the intent | only the lease | an activated unit waiting for its envelope or gate, bounded by the launch budget | free: nothing durable was written |
-| after the intent, before the gate | intent plus binding, no pid | the guardian waits for the gate; EOF makes it refuse | blocked |
-| gate and spawn | binding, possibly a pid | the target's exec is trapped and held | blocked |
-| relay, target alive | binding and pid | the withdrawn channel errors the guardian, the waiter kills the target, the unit's cgroup is torn down | blocked |
-| target exit, before the exit commit | same | the exit report existed only in the client's memory; the guardian logged the target's exit | blocked, exit lost |
-| after the retirement commit | `local_scope_empty` | nothing live | free once the helper exits |
+Every input to the proposed proof is either the user's own write or a
+negative statement about an identifier the caller chose.
 
-The last two rows are what the fixes above changed: a failing launch now
-settles its run with an unknown exit instead of leaving it open.
+- **The record being checked is the thing in doubt.** The run row, its
+  binding, the unit name, the invocation, the device and inode all live in a
+  Store the same user can write. Matching an observation against them proves
+  only that the observation matches the file.
+- **Two negatives do not authenticate an association.** "No unit for this
+  invocation" and "that cgroup directory is not the bound one" are both true
+  of an invocation and a binding that never existed. A same-uid process can
+  write such a record and have the proposed API bless it. The result would be
+  an attestation wearing the name of an observation - worse than today's
+  honest `user_attested_stopped`, because it would look proved.
+- **The ordering in the proposal did not work.** `Store::lease` refuses a
+  profile with an unresolved run, so the recoverer cannot lease first and
+  observe after, and the proposed API observe first and lease at commit, with
+  no manager at commit time for the promised ownership check.
+- **The kernel facts are one-way, but they are not provenance.** A cgroup v2
+  directory cannot be removed while populated, and an invocation identity
+  never returns, so a genuine observation cannot be stale. Nothing about
+  those facts binds them to the record that asked the question.
 
-## Who recovers, and when
+The conclusion is not a fixable ordering defect. Within a single trust
+domain - one uid, one writable Store - no amount of checking can distinguish
+"this run's scope closed" from "the file says so", because the file is the
+only statement about which scope was ever this run's.
 
-The recoverer must hold the profile lease, so it is the same user's next
-launch or an explicit command - never the manager and never a system
-component, which would write to a user's Store across a privilege boundary
-and would have to retire a scope it runs inside.
+## What would change the answer
 
-- **The next launch, inside the installed session helper, before the journal
-  takes the lease.** The helper recovers in a short-lived Store session, then
-  opens the journal; a recovery that cannot commit falls back to today's
-  refusal.
-- **An explicit `aswp registry recover RUN` in an observed mode**, executed
-  through the helper because the CLI never links the transport.
-- **Doctor stays read-only**: it may report whether a run has a binding
-  (recoverable) or not (attestation only) and must change nothing.
-- **Reboot and service restart**: after a reboot nothing survives, so
-  recovery succeeds trivially; a systemd daemon-reexec or bus restart breaks
-  in-process observation, so those runs need the later recovery path.
+Root-owned provenance: a record of the closure made by something the user
+cannot write. The manager and the guardian are the natural authors, because
+they already observe the scope's retirement on their own authenticated
+connection and already run as a separate identity. A design would need:
 
-## What a restarted process may accept as proof
+- the installation shape to name a root-owned, append-only retirement log,
+  bounded and rotated, keyed by the unit's invocation identity and the user;
+- the manager to append exactly one record when it observes an instance's
+  scope closed, including enough to bind it to the launch that requested it -
+  and nothing that would let a user cause records for launches they did not
+  make;
+- the recoverer to read it (read-only, unprivileged) and to keep its own
+  checks as a cheap pre-filter;
+- an independent review of that new authority, because appending to a
+  root-owned log per launch is new write authority for a root component and a
+  new durable surface across upgrades.
 
-The authentication target is the *observations*, not the requester: after a
-crash there is no peer, so kernel sender credentials do not apply, and any
-process running as the same user could already write
-`user_attested_stopped`. The proof therefore reuses only existing
-primitives:
+Until such a design exists and passes review, the honest position is that
+crash recovery cannot be stronger than attestation, and adding an API that
+looks stronger is the harm to avoid.
 
-1. the profile lease, held by the recoverer;
-2. the durable binding, read from the Store;
-3. the unit name parsed as this uid's installation shape;
-4. the manager owner checked over an authenticated connection;
-5. `invocation::retired`: either an authenticated "no unit for this
-   invocation" or the same identity in `inactive`/`failed`;
-6. kernel checks as in `Binding::bind` (initial namespaces, cgroup2), then
-   the unit's cgroup path absent, or present with a different device and
-   inode than the recorded binding;
-7. the manager owner rechecked, and the commit made while still holding the
-   lease.
+## Corrected facts for the next design
 
-This is sound because a cgroup v2 directory cannot be removed while it is
-populated, moving out of it requires the root-owned `cgroup.procs` that the
-bind-time controls verified, and invocation identities never return. Both
-facts only move one way, so a later commit has no time-of-check race. The
-guardian's pidfd is not re-witnessed; the removal of the cgroup directory
-takes its place.
+The survey's crash-window table was wrong in ways that matter:
 
-Refused, always:
+- **Before the gate something is already under the tracer.** The guardian
+  forks a shim, traps it before the resume, grants it the foreground and only
+  then waits for the launch gate; a helper killed before the gate does not
+  leave "nothing running".
+- **The "exec released" marker precedes the detach, the master transfer and
+  the waiter.** `ChildWaiter` is installed after the master is handed over;
+  its drop *attempts* a kill, which is cleanup policy, not evidence of
+  retirement. Hosted crash scenarios must therefore kill at markers that do
+  not imply a state the code has not reached.
+- **No authenticated exit is durably recoverable before the commit.** The
+  exit report exists in the client's memory until `audit_exit`; a crash before
+  it loses it, so any recovered outcome has no exit by construction.
+- **A successful retirement drops the lease before the helper exits.** The
+  lease is a live-file lock, so a helper killed later leaves the profile free;
+  the unresolved row is what blocks reuse, not the lock.
+- **`Binding::bind` proves the caller's own namespaces and cgroup2, not the
+  membership of what was recorded.**
+- **Doctor must call a bound run a candidate for attestation**, never
+  "recoverable", and must change nothing.
 
-- any target exit other than the nonce-bound report, including
-  `ExecMainStatus` (the guardian's own 0/125), journal text or a guardian wait
-  status;
-- inferring "stopped" from a pid, `/proc`, a lookup by unit *name*, a free
-  lease alone, or elapsed time;
-- recovery while the lease is held or the unit is active or deactivating;
-- recovery of a run with no binding;
-- recovery by a system component.
+## What stays from the survey
 
-## The new authority boundary (for independent review)
+The one-way kernel facts still bound what any future evidence must show: the
+scope cannot close out from under a live process, and an invocation identity
+never returns, so a genuinely observed closure is final. The refusals the
+survey listed remain the right refusals - never an exit other than the
+nonce-bound report, never "stopped" from a pid, `/proc`, elapsed time or a
+free lease, never recovery by a system component. They are simply not
+sufficient to constitute proof on their own.
 
-```rust
-// crates/agentswapper-linux-manager
-pub struct RecoveredService { /* private fields, not Clone, must_use */ }
+## Decision
 
-pub fn observe_orphan_retirement(
-    manager: &AuthenticatedManager,
-    claim: RecoveryClaim,   // unit, invocation, user, device, inode
-) -> io::Result<RecoveredService>;
-```
+- `aswp registry recover RUN --confirm-stopped` remains the only way to clear
+  an orphaned run, and it remains attested rather than proved. Nothing in the
+  CLI, the helper or the docs may present it as recovery.
+- No `RecoveredService`, no `Store::recover_linux_scope`, no schema 10
+  `LinuxScopeRecovered` event. The proposed events stay unimplemented, so no
+  migration and no schema bump is owed.
+- The next step, if crash recovery is wanted, is a reviewed design for
+  root-owned retirement provenance. It is not started.
 
-`RecoveredService` means: at that moment systemd reported no live instance of
-the invocation, and the unit's cgroup path was not the recorded directory.
-It does not mean the target exited, that the guardian's pidfd exited, that
-delegated work ended, or that the profile is free.
+## Evidence for this document
 
-```rust
-// crates/agentswapper-core, behind the same feature gate as the live path
-impl Store {
-    pub fn recover_linux_scope(
-        &mut self,
-        run: &str,
-        recovered: RecoveredService,
-    ) -> Result<(), RecoverFailure>;
-}
-```
-
-It takes the lease itself, compares the claim's bytes exactly against the
-durable binding, and commits atomically. Its only caller is the session
-helper. Independent review must approve this boundary before anything is
-enabled; it is not a reuse of the in-memory path and must not become one.
-
-## Recorded vocabulary
-
-The retirement vocabulary needs one addition, because a recovered run is not
-an observed retirement:
-
-- `Event::LinuxScopeRecovered { id, scope, binding }` with no exit field,
-  whose guard requires `outcome IS NULL`, `exit_code IS NULL`, the exact
-  binding and a linux cgroup scope on a non-`gents` profile;
-- a new outcome and custody wording for it, or a deliberate decision to reuse
-  the `local_scope_empty` wording - open question below;
-- schema 10, so an older binary refuses with `NewerSchema` instead of
-  misreading the outcome as corruption.
-
-An alternative that needs no schema change - reusing
-`LinuxScopeRetired { exit: None }` - was considered and rejected because it
-merges "observed through the original handles" with "recovered from the
-stored record".
-
-## Evidence plan
-
-Local, without root:
-
-- Store fixtures for each window state, including the refusals above (busy
-  lease, mismatched binding, non-cgroup scope, `gents` profile, double
-  commit, foreign receipt);
-- compile-fail doctests showing `RecoveredService` cannot be built, cloned or
-  serialized by ordinary code;
-- unit tests for the path-absent and inode-mismatch logic and for the
-  existing invocation-collection race;
-- the admission-mutant pattern the other linux controls use.
-
-Hosted, in the lifecycle step (it already has sudo, real systemd and a pty
-harness): kill the helper's process group at guardian log markers - run gate
-received, exec event sent, exec released with a long-running target, target
-exited - and assert that the instance is gone, that a relaunch refuses
-before the change and recovers after it, and that the row shows the
-recovered outcome with an unchanged binding. Negative controls: a stopped
-helper keeps the lease, so recovery returns busy; an active unit is refused.
-
-Deterministic barriers for the mid-flight windows need qualification-only
-hooks in a separately installed generation, never in the production image.
-
-Untestable here: power loss beyond `synchronous=FULL`, whether kernfs inode
-numbers are never reused within a boot, a root process renaming cgroups, and
-same-uid tampering with the Store, which is out of scope.
-
-## Open questions
-
-1. Is per-boot kernfs `st_ino` uniqueness on 64-bit acceptable as a
-   documented assumption, and should the binding carry a boot identity for
-   diagnostics?
-2. Should recovery require an observed pid, or also accept the intent and
-   spawn windows that have a binding but no pid? The same observation proves
-   the scope retired either way.
-3. Does the recovered outcome get its own custody wording, or reuse the
-   `local_scope_empty` text?
-4. Does the atomic intent-and-binding commit need its own review record?
-   It has one (2026-11-25, in `continuation.md`); the 2026-11-22 mapping's
-   ordering is unchanged, only its failure semantics.
+`Store`'s run and binding records are user-writable by design
+(`docs/custody.md`, `docs/linux-scope-retirement.md`); the retirement path's
+in-memory values are not serializable and cannot be rebuilt
+(`store/linux_scope.rs`); the guardian's markers and the waiter's placement
+are in `crates/agentswapper-linux-guardian/src/linux/launch.rs`;
+`invocation::retired` answers a negative for identifiers it is given
+(`crates/agentswapper-linux-manager/src/invocation.rs`). The review that
+reached this conclusion is recorded in `docs/continuation.md`.

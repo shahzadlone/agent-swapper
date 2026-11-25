@@ -28,25 +28,28 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 ///   client sends the launch gate; its `Ok(())` is the only launch-gate
 ///   authority the client receives. It receives the launch's
 ///   one-use `ServiceKey` by value: the adapter moves it into the durable
-///   scope association, where it cannot be extracted or serialized. The
-///   intent is the durable run's only beginning: a failed commit means no run
-///   was planned for this launch, so nothing blocks the profile and the
-///   client never gates the target.
+///   scope association, where it cannot be extracted or serialized. `Ok(())`
+///   is also the only point after which the journal owes a settlement; a
+///   failed commit withholds the gate, and whether it leaves a run behind is
+///   the adapter's contract - a `StoreJournal` plans the run and its binding
+///   in that one transaction, so its failure leaves nothing.
 /// - `observe_spawn` durably records the spawn observation before the client
 ///   releases the held exec; an uncertain write is an error.
 /// - `audit_exit` commits the one-use retirement value together with the
 ///   authenticated target exit when the relay produced one. It runs only
 ///   after the client has independently observed the original scope's
 ///   retirement on its retained handles, on the relay's failure paths as
-///   well as its success: a launch that fails after the intent has no
-///   authenticated exit to report and commits none. The retirement value
-///   authorizes exactly this commit and no other. A failed commit is retried
-///   through `retry_audit`, which asks for neither a new receipt nor a new
-///   exit: the adapter retains the pending association, the retirement value
-///   and the exit that went with them, and a retry reuses that whole tuple
-///   rather than a receipt that belongs to another launch. The run stays
-///   unresolved, and its profile blocked, only when nothing witnessed the
-///   scope's closure or the commit itself failed before it landed.
+///   well as its success. The exit it commits is the one the whole relay
+///   path produced, its own cleanup included; a launch that failed after the
+///   intent, or whose relay refused an exit it had already received, passes
+///   none. The retirement value authorizes exactly this commit and no other.
+///   A failed commit is retried through `retry_audit`, which asks for
+///   neither a new receipt nor a new exit: a `StoreJournal` retains the
+///   pending association, the retirement value and the exit that went with
+///   them, and reuses that whole tuple rather than a receipt that belongs to
+///   another launch. The run stays unresolved, and its profile blocked, only
+///   when nothing witnessed the scope's closure or the commit itself failed
+///   before it landed.
 ///
 /// An independent review (2026-11-22) fixed these signatures and the client's
 /// closure order. The 2026-11-25 review of the restart-recovery groundwork
@@ -66,8 +69,10 @@ pub trait Journal {
     /// retained, so a commit that failed for a transient reason can land
     /// without a new observation: the retirement value belongs to one launch
     /// and is never reissued. `Ok(false)` means this journal retains nothing
-    /// to retry, which is the case for a journal that commits in memory. A
-    /// journal that cannot retry must not claim `Ok(true)`.
+    /// to retry, which is the case for a journal that commits in memory or
+    /// for one whose run has already resolved. A journal that cannot retry
+    /// must not claim `Ok(true)`, and a retry naming another invocation is an
+    /// error rather than a second settlement.
     fn retry_audit(&self, _invocation: &str) -> io::Result<bool> {
         Ok(false)
     }
