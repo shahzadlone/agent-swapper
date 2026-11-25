@@ -964,10 +964,14 @@ a one-off `launch_protocol::tests::stop_notices_and_resume...`
 BrokenPipe on the new `ubuntu26` preview image (instant EPIPE, first
 occurrence in every prior green round, 60/60 locally). Retrigger
 rounds after it (`c3862e6` run 45539037326, and later retriggers) were
-externally cancelled mid-flight; the lifecycle evidence above stands on
-the completed round. If a fully-green matrix run is required before the
-next release step, retrigger once the cancellation source is cleared
-and append the run number here.
+external cancellation mid-flight. Four later rounds met the same hand (
+`c3862e6` run 45539037326 cancelled early; `576811d` run 45542168722
+and docs head `56f1911` run 45542346656 cancelled halfway through the
+lifecycle step with every earlier step green on both runners). The
+lifecycle evidence above stands on the completed round; nothing in the
+cancelled rounds contradicts it. If a fully-green matrix run is required
+before the next release step, retrigger once the cancellation source is
+cleared and append the run number here.
 
 Cleanup at this checkpoint: the diagnostic strace/annotation
 scaffolding is gone from `.github/workflows/ci.yml`; the master-residue
