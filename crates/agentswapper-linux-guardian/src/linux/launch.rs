@@ -1,9 +1,10 @@
 //! The guardian's launch phase on the authenticated activation channel:
 //! receive the client's zeroizing launch envelope, take ownership of a fresh
-//! session, spawn the installed exec-shim image in its own process group
-//! under this tracer, and once the shim holds, bind the inner PTY as the
-//! session's controlling terminal and grant the foreground to the shim's
-//! group. The durable-intent-gated transfer (slave, nonce, envelope) still
+//! session with the job-control vocabulary blocked, bind the inner PTY as
+//! the session's controlling terminal, then spawn the installed exec-shim
+//! image in its own process group under this tracer and grant the terminal's
+//! foreground to that group once it holds. The durable-intent-gated transfer
+//! (slave, nonce, envelope) still
 //! precedes the shim's only exec path. The launch confirms the kernel's
 //! exec trap to the client, releases on the client's exec release,
 //! detaches, and then mediates the target's job-control lifetime: every
@@ -79,14 +80,17 @@ fn control_event(channel: &OwnedFd) -> io::Result<bool> {
 
 /// Take ownership of a fresh session, before the exec-shim exists: this
 /// service process becomes its session leader with no controlling
-/// terminal, on default job-signal dispositions, and blocks the terminal
-/// stop signals so its own terminal-change grants below cannot stop the
-/// only process that mediates the session. The stop-signal mask is also
-/// the spawn's inheritance witness: the shim requires it from inside (see
-/// `shim.rs`). This replaces the former shim-side `setsid`: that made the
-/// target's initial group ORPHANED, and a default-disposition SIGTSTP to
-/// an orphaned group is discarded by the kernel, so ordinary suspension
-/// could never work.
+/// terminal, on default job-signal dispositions, and blocks the whole
+/// job-control vocabulary so its own terminal-change grants below cannot
+/// stop the only process that mediates the session, and so the teardown of
+/// a refused launch cannot have the kernel's terminal hangup end this
+/// leader before its refusal diagnostics reach the journal. The blocked
+/// job-signal mask is also the spawn's inheritance witness: the shim
+/// requires it from inside (see `shim.rs`) and clears its own mask before
+/// the target's only exec. This replaces the former shim-side `setsid`:
+/// that made the target's initial group ORPHANED, and a default-disposition
+/// SIGTSTP to an orphaned group is discarded by the kernel, so ordinary
+/// suspension could never work.
 fn prepare_session() -> io::Result<()> {
     job_control::require_default_job_dispositions()?;
     let own = rustix::process::getpid();
@@ -120,8 +124,9 @@ fn prepare_session() -> io::Result<()> {
     )?;
     // A blocked stop signal is treated by the kernel's terminal-change check
     // as ignored, so the foreground grants below proceed instead of
-    // stopping the session's only mediator.
-    job_control::block_stop_signals()
+    // stopping the session's only mediator; the full blocked vocabulary
+    // keeps a refused teardown's terminal hangup from ending this leader.
+    job_control::block_job_signals()
 }
 
 /// Bind the session's controlling terminal before anything is spawned: a
@@ -144,10 +149,10 @@ fn bind_session(slave: &OwnedFd) -> io::Result<()> {
 
 /// Grant the terminal's foreground to the raised exec-shim's group. This
 /// runs only once the shim's group exists and holds at its tracer stop, so
-/// the grant can never leave anything else as the terminal's foreground,
-/// and a pre-handoff refusal that closed the master would hang up this
-/// guardian's own held group instead of a child that provably cannot run
-/// past its control receive.
+/// the grant can never leave anything else as the terminal's foreground.
+/// The guardian's blocked job-signal vocabulary keeps a refused teardown's
+/// terminal hangup inert here, so a refusal still ends at the guardian's
+/// own diagnostic instead of a kernel-sent signal.
 fn grant_foreground(slave: &OwnedFd, group: Pid) -> io::Result<()> {
     let own = rustix::process::getpid();
     rustix::termios::tcsetpgrp(slave, group)?;
@@ -438,8 +443,20 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     // session's controlling-terminal binding stays observable until this
     // service exits.
     let session_tty = slave.try_clone()?;
+    // A launch whose installed image is absent refuses before the session
+    // is taken: claiming a session and binding its terminal only to tear
+    // them down for a missing image is the one refusal path that a
+    // nonzero-exit teardown cannot face cleanly, so it never reaches the
+    // session-taking phase at all.
+    if !shim_path
+        .metadata()
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
+    {
+        return Err(io::Error::other("the installed exec-shim image is missing"));
+    }
     // The session and its controlling terminal are taken before the spawn:
-    // the shim inherits the blocked stop-signal mask as its spawn witness,
+    // the shim inherits the blocked job-signal mask as its spawn witness,
     // and it can only inherit the session's controlling-terminal binding
     // from a leader that already owns it when the fork happens.
     prepare_session()?;
@@ -478,13 +495,14 @@ pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) 
     .map_err(|error| io::Error::other(format!("tracer options failed: {error}")))?;
     ptrace::cont(pid, None)
         .map_err(|error| io::Error::other(format!("tracer resume failed: {error}")))?;
-    // The shim's group exists and holds at its tracer stop, so the
-    // foreground grant can never leave the guardian's own group as the
-    // terminal's foreground. The trusted shim still holds inside its
-    // control receive: it reads nothing and cannot run until the
-    // durable-intent-gated transfer below, so the grant stays inert until
-    // the launch data proves the launch. (Its stdio slave descriptors are
-    // open but untouched: the control receive comes first.)
+    // The shim's group exists - it stopped itself at the tracer hold before
+    // the resume above - so the foreground grant can never leave the
+    // guardian's own group as the terminal's foreground. The trusted shim
+    // now holds inside its control receive: it reads nothing and cannot
+    // run until the durable-intent-gated transfer below, so the grant
+    // stays inert until the launch data proves the launch. (Its stdio
+    // slave descriptors are open but untouched: the control receive
+    // comes first.)
     grant_foreground(&slave, group)?;
     // The durable run intent arrives before the slave transfer: the shim
     // execs only after the nonce and the envelope follow this gate.

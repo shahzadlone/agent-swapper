@@ -83,12 +83,13 @@ pub fn run(control: &OwnedFd, unit: &str) -> io::Result<()> {
     // read, so a lost guardian never reaches a running target.
     nix::sys::ptrace::traceme()?;
     nix::sys::signal::raise(nix::sys::signal::Signal::SIGSTOP)?;
-    // The guardian blocks the terminal stop signals before it operates on the
-    // session's foreground group; the mask arrives with the spawn, so its
-    // presence here is evidence of the controlled spawn itself.
+    // The guardian blocks the whole job-control vocabulary before anything
+    // is launched - the qualified fixture's discipline - and the mask
+    // arrives with the spawn, so its presence here is evidence of the
+    // controlled spawn itself.
     require(
-        job_control::stop_signals_blocked()?,
-        "the exec shim did not inherit the guardian's blocked stop signals",
+        job_control::job_signals_blocked()?,
+        "the exec shim did not inherit the guardian's blocked job signals",
     )?;
     let deadline = Instant::now() + CONTROL_BUDGET;
     let slave = transport::receive_until(control, deadline)?;
@@ -125,7 +126,8 @@ pub fn run(control: &OwnedFd, unit: &str) -> io::Result<()> {
         .stderr(std::process::Stdio::from(slave));
     // The exec preserves this thread's signal mask: the target must meet its
     // own signal contract with a default unblocked state, but the guardian's
-    // stop signals stay masked until the foreground grant provably exists.
+    // blocked vocabulary stays in force until the foreground grant provably
+    // exists.
     job_control::clear_inherited_mask()?;
     // Exec preserves the PID the client's retained pidfd already bound.
     Err(command.exec())

@@ -83,6 +83,35 @@ pub fn block_stop_signals() -> io::Result<()> {
     Ok(())
 }
 
+/// Block the whole job-control vocabulary in this thread for a session's
+/// launch phase, mirroring the qualified launch fixture. The stop-signal
+/// subset keeps terminal-group changes from stopping the only process that
+/// mediates the session; the full set additionally keeps the kernel's
+/// terminal hangup - which a pre-grant teardown of a freshly bound PTY
+/// aims at the binding leader's own group - from ending the launch owner
+/// before its refusal diagnostics reach the journal. The shim clears its
+/// inherited mask before the target's exec, so the target still meets its
+/// own default signal contract, and the mask's presence in the spawned
+/// child is the controlled spawn's inheritance witness.
+pub fn block_job_signals() -> io::Result<()> {
+    let mut mask = SigSet::empty();
+    for signal in JOB_SIGNALS {
+        mask.add(signal);
+    }
+    mask.thread_swap_mask(SigmaskHow::SIG_BLOCK)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(())
+}
+
+/// Whether every job-control signal is blocked in this thread. A spawned
+/// child verifies its inherited full-set mask as evidence that its creator
+/// owned the launch phase's signal discipline, rather than trusting the
+/// creator's claim.
+pub fn job_signals_blocked() -> io::Result<bool> {
+    let current = SigSet::thread_get_mask().map_err(io::Error::other)?;
+    Ok(JOB_SIGNALS.iter().all(|signal| current.contains(*signal)))
+}
+
 /// Whether every terminal stop signal is blocked in this thread. A spawned
 /// child verifies its inherited mask as evidence that its creator applied
 /// the discipline above, rather than trusting the creator's claim.
