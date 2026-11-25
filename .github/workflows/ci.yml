@@ -350,7 +350,7 @@ jobs:
           python3 -m unittest discover -s tools -p test_linux_socket_activation.py -v
           python3 -m unittest discover -s tools -p test_linux_managed_terminal_relay.py -v
       - name: Exercise install transaction staging
-        timeout-minutes: 8
+        timeout-minutes: 4
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml --example install_transaction
           root_dir=$(sudo -n mktemp -d /var/lib/aswp-install-tx-XXXXXXXX)
@@ -360,7 +360,7 @@ jobs:
       - name: Qualify installer transaction controls
         run: cargo +1.98.0 test --locked -p agentswapper-linux-install --features qualification
       - name: Exercise the installation lifecycle end to end
-        timeout-minutes: 25
+        timeout-minutes: 15
         run: |
           cargo +1.98.0 build --locked --manifest-path tools/linux-manager-evaluation/Cargo.toml
           cargo +1.98.0 build --locked -p agentswapper-linux-install --examples

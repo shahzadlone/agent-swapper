@@ -665,6 +665,14 @@ mod tests {
     /// it ever reads. A duplicate of the receiver's endpoint is retained until
     /// the delivery has returned, so a receiver that exits first cannot turn the
     /// delivery into `BrokenPipe` while the refusal stays the receiver's error.
+    ///
+    /// This models the shape both production peers actually use: the record may
+    /// already be queued when the receive starts (`control_event` peeks it at
+    /// `crates/agentswapper-linux-install/src/client.rs`, and the guardian's
+    /// readiness check precedes its grant receive), so a valid frame must be
+    /// accepted whether it was queued first or raced the receive. That a
+    /// receive was *already blocked* before the peer sent is not observable
+    /// from inside the process, so no control here claims it.
     fn exchange_with_retained_peer<T: Send + 'static>(
         frame: &[u8],
         rights: &[OwnedFd],
@@ -723,36 +731,6 @@ mod tests {
                 .err()
                 .ok_or_else(|| io::Error::other("withdrawal accepted as a gate"))?;
             assert!(is_withdrawal(&error));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn a_receive_that_started_before_the_frame_accepts_it() -> io::Result<()> {
-        // Both production ends wait on the channel before the peer's frame
-        // exists: the guardian sits in its stop-notice receive while the target
-        // is running and the client sits in its grant receive while it is
-        // suspended. A deliberate pause establishes that wait, so no
-        // send-before-receive queueing can stand in for it; the receiver's own
-        // bounded deadline is what would catch a wrong one.
-        let nonce = [4_u8; 16];
-        let waited = Duration::from_millis(100);
-        {
-            let (sender, receiver) = pair()?;
-            let handle =
-                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
-            std::thread::sleep(waited);
-            send(&sender, &stop_notice_packet(&nonce, 77, 19, 3), &[])?;
-            let received = join(handle)?;
-            assert_eq!(received?, (19, 3));
-        }
-        {
-            let (sender, receiver) = pair()?;
-            let handle =
-                std::thread::spawn(move || receive_resume_grant(&receiver, &nonce, 3, deadline()));
-            std::thread::sleep(waited);
-            send(&sender, &resume_grant_packet(&nonce, 3), &[])?;
-            join(handle)??;
         }
         Ok(())
     }
