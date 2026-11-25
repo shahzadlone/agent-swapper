@@ -24,9 +24,9 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 
 /// The durable journal boundary the launch client composes on. Implementations
 /// must satisfy, and the client enforces:
-/// - `confirm_intent` commits the durable run intent synchronously while the
-///   exec is held, before the client releases it; its `Ok(())` is the only
-///   launch-gate authority the client receives. It receives the launch's
+/// - `confirm_intent` commits the durable run intent synchronously before the
+///   client sends the launch gate; its `Ok(())` is the only launch-gate
+///   authority the client receives. It receives the launch's
 ///   one-use `ServiceKey` by value: the adapter moves it into the durable
 ///   scope association, where it cannot be extracted or serialized. The
 ///   intent is the durable run's only beginning: a failed commit means no run
@@ -39,13 +39,14 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 ///   after the client has independently observed the original scope's
 ///   retirement on its retained handles, on the relay's failure paths as
 ///   well as its success: a launch that fails after the intent has no
-///   authenticated exit to report and commits none, so an ordinary error
-///   never leaves the run unresolved. The retirement value authorizes
-///   exactly this commit and no other. A failure is retry-safe: the adapter
-///   retains the pending association, the retirement value and the exit that
-///   went with them, and a retry reuses that whole tuple rather than a fresh
-///   receipt that belongs to another launch. The run's profile stays blocked
-///   until the commit lands.
+///   authenticated exit to report and commits none. The retirement value
+///   authorizes exactly this commit and no other. A failed commit is retried
+///   through `retry_audit`, which asks for neither a new receipt nor a new
+///   exit: the adapter retains the pending association, the retirement value
+///   and the exit that went with them, and a retry reuses that whole tuple
+///   rather than a receipt that belongs to another launch. The run stays
+///   unresolved, and its profile blocked, only when nothing witnessed the
+///   scope's closure or the commit itself failed before it landed.
 ///
 /// An independent review (2026-11-22) fixed these signatures and the client's
 /// closure order. The 2026-11-25 review of the restart-recovery groundwork
@@ -61,6 +62,15 @@ pub trait Journal {
         exit: Option<TargetExit>,
         retired: RetiredService,
     ) -> io::Result<()>;
+    /// Retries a failed [`Journal::audit_exit`] with the authority that call
+    /// retained, so a commit that failed for a transient reason can land
+    /// without a new observation: the retirement value belongs to one launch
+    /// and is never reissued. `Ok(false)` means this journal retains nothing
+    /// to retry, which is the case for a journal that commits in memory. A
+    /// journal that cannot retry must not claim `Ok(true)`.
+    fn retry_audit(&self, _invocation: &str) -> io::Result<bool> {
+        Ok(false)
+    }
 }
 
 /// A local fsync'd journal in one private directory. Records are created

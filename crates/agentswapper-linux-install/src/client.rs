@@ -1,15 +1,16 @@
 //! The ordinary launch client. The flow ordering is enforced by this
 //! module: the durable run intent is committed before the launch gate, the
 //! durable spawn observation before the held-exec release, and the
-//! authenticated exit report is audited before the connection closes. The
-//! withdrawal precedes the retirement observation on every path, so a
-//! failure after the intent withdraws the channel, observes the retirement
-//! and commits it with no exit: the client never hands a run back
-//! unresolved without having first tried to settle it. The caller supplies
-//! the journal implementation (see `launch_client::Journal`).
+//! authenticated exit report is audited last, after the terminal has been
+//! restored and the custody handed back. The control socket is withdrawn
+//! before the retirement observation on every path, so a failure after the
+//! intent withdraws the channel, observes the retirement and commits it with
+//! no exit; only the manager connection outlives the audit, and it is closed
+//! after the run has settled. The caller supplies the journal implementation
+//! (see `launch_client::Journal`).
 use crate::launch_client::Journal;
 use agentswapper_linux_manager::{
-    BoundService, LoadedSocket, ServiceClaim, ServicePolicy, SocketPolicy,
+    BoundService, LoadedSocket, RetiredService, ServiceClaim, ServicePolicy, SocketPolicy,
 };
 use agentswapper_linux_runtime::activation_offer::{
     BIND_REQUEST, Offer, RUN_REQUEST, connection_unit,
@@ -921,19 +922,27 @@ pub fn launch(
         // Independently observe the original scope's retirement on the
         // retained binding and original handles, in its own fresh window; a
         // received exit report alone never authorizes the retirement commit.
-        let retired = bound
+        let observation = bound
             .observe_retirement(
                 &endpoint.manager,
                 tokio::time::Instant::from_std(Instant::now() + RETIREMENT_WINDOW),
             )
             .await
-            .map_err(|error| io::Error::other(format!("retirement observation failed: {error}")))?;
+            .map_err(|error| io::Error::other(format!("retirement observation failed: {error}")));
         // The audit commits the retirement with the one-use value and records
-        // the authenticated target exit when the relay observed one; the
-        // adapter's retry contract retains the value if this commit fails.
-        journal
-            .audit_exit(&offer.invocation, outcome.as_ref().ok().copied(), retired)
-            .map_err(|error| io::Error::other(format!("exit audit failed: {error}")))?;
+        // the authenticated target exit when the relay observed one, and the
+        // journal's retry entry can land a commit that failed for a transient
+        // reason. The settlement is decided by `settle_after_failure`, whose
+        // precedence rules are covered locally; only the observation and the
+        // commit themselves need the live manager.
+        settle_after_failure(observation, |retired| {
+            settle(
+                journal,
+                &offer.invocation,
+                outcome.as_ref().ok().copied(),
+                retired,
+            )
+        })?;
         // The run is settled whatever the relay's verdict, so a failed launch
         // reports its own failure only after the profile is reusable.
         let exit = outcome?;
@@ -951,10 +960,113 @@ pub fn launch(
     launched
 }
 
+/// The single settlement decision every failing path shares: an observation
+/// that failed means nothing witnessed the scope's closure, so the run stays
+/// unresolved and the observation's error is the one to report; an
+/// observation that succeeded is committed, and its own error takes
+/// precedence over the relay's verdict because a run left unresolved is worse
+/// than a launch that reported why it failed.
+///
+/// The witness is generic so the precedence rules are testable without a live
+/// manager: production passes the observed retirement, and a test passes a
+/// stand-in for the same shape.
+fn settle_after_failure<W>(
+    observation: io::Result<W>,
+    commit: impl FnOnce(W) -> io::Result<()>,
+) -> io::Result<()> {
+    let witnessed = observation.map_err(|error| {
+        io::Error::other(format!(
+            "retirement observation failed: {error}; the run stays unresolved"
+        ))
+    })?;
+    commit(witnessed)
+}
+
+/// Commits a witnessed retirement with the authenticated exit, if the relay
+/// produced one, and retries the commit in place once: the retirement value
+/// belongs to one launch and is never reissued, so a journal that retains
+/// nothing to retry (and says so) is the only case where the first error
+/// stands.
+fn settle(
+    journal: &(impl Journal + ?Sized),
+    invocation: &str,
+    exit: Option<TargetExit>,
+    retired: RetiredService,
+) -> io::Result<()> {
+    match journal.audit_exit(invocation, exit, retired) {
+        Ok(()) => Ok(()),
+        Err(error) => retried_or(error, journal.retry_audit(invocation)),
+    }
+}
+
+/// The retry decision on its own: a journal that landed the retained commit
+/// settles the run, and every other answer keeps the first error, which is
+/// the one that describes why the run is unresolved.
+fn retried_or(error: io::Error, retried: io::Result<bool>) -> io::Result<()> {
+    match retried {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(io::Error::other(format!(
+            "exit audit failed: {error}; the run stays unresolved"
+        ))),
+        Err(retry) => Err(io::Error::other(format!(
+            "exit audit failed: {error}; the retry failed too: {retry}; the run stays unresolved"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use std::{os::fd::OwnedFd, sync::Arc};
+
+    /// The settlement decision, without a manager: an observation that
+    /// failed must not reach the commit, because nothing witnessed the
+    /// scope's closure, and its error is the one reported. This is the case
+    /// that leaves a run unresolved, and it must be the only case.
+    #[test]
+    fn a_failed_observation_never_commits_a_retirement() {
+        let committed = std::cell::Cell::new(false);
+        let error = settle_after_failure::<u8>(Err(io::Error::other("manager closed")), |_| {
+            committed.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(!committed.get());
+        assert!(error.to_string().contains("stays unresolved"));
+        // A witnessed retirement is committed, and its own failure is the
+        // error that surfaces: the run is unresolved and the reason is real.
+        let mut witnessed = None;
+        assert!(
+            settle_after_failure(Ok(7u8), |w| {
+                witnessed = Some(w);
+                Err(io::Error::other("commit refused"))
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("commit refused")
+        );
+        assert_eq!(witnessed, Some(7));
+    }
+
+    /// The retry decision: a journal that landed the retained commit settles
+    /// the run, and every other answer keeps the first error, because that is
+    /// the one that describes why the run is unresolved.
+    #[test]
+    fn a_settled_retry_succeeds_and_every_other_retry_keeps_the_first_error() {
+        assert!(retried_or(io::Error::other("busy"), Ok(true)).is_ok());
+        for (retried, keeps) in [
+            (Ok(false), "busy"),
+            (Err(io::Error::other("poisoned")), "busy"),
+        ] {
+            let message = retried_or(io::Error::other("busy"), retried)
+                .unwrap_err()
+                .to_string();
+            assert!(message.contains(keeps), "{message}");
+            assert!(message.contains("stays unresolved"), "{message}");
+        }
+    }
 
     fn feeder_pair() -> io::Result<(OwnedFd, OwnedFd)> {
         let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;

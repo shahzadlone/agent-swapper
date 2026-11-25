@@ -8,7 +8,7 @@
 //! the original retirement value for in-place retry.
 use agentswapper_core::Error;
 use agentswapper_core::domain::{Alias, Harness};
-use agentswapper_core::store::linux_scope::TargetExit;
+use agentswapper_core::store::linux_scope::{PendingLinuxScope, TargetExit};
 use agentswapper_core::store::{ProfileLease, Store};
 use agentswapper_linux_install::launch_client::Journal;
 use agentswapper_linux_manager::{RetiredService, ServiceKey};
@@ -117,11 +117,11 @@ impl StoreJournal {
 
 impl Journal for StoreJournal {
     fn confirm_intent(&self, _invocation: &str, _nonce: &str, key: ServiceKey) -> io::Result<()> {
-        // The client's flow binds before the gate; the adapter commits the
-        // key into the durable scope association here, where it cannot be
-        // extracted or serialized. A failed bind consumes the key into the
-        // pending association's error contract; the run stays unresolved and
-        // is never re-launched (the review's contract).
+        // The client's flow binds before the gate; the adapter plans the run
+        // and commits the key into its durable scope association here, in one
+        // transaction, where the key cannot be extracted or serialized. A
+        // failed commit means no run was planned for this launch: nothing
+        // blocks the profile and the client never gates the target.
         let mut store = self
             .store
             .lock()
@@ -162,49 +162,78 @@ impl Journal for StoreJournal {
         // closure; the authenticated exit came from the nonce-bound report
         // that arrived before the observation, and a launch that failed
         // after its intent has none. The run resolves here and the lease
-        // drops. A retry after a failed commit reuses the retained pair: the
-        // same pending association and the same original observation.
+        // drops. A retry reuses the retained tuple - the same pending
+        // association, the same original observation and its exit - and
+        // `retry_audit` offers it without asking for a new receipt.
         let mut store = self
             .store
             .lock()
             .map_err(|_| io::Error::other("the store lock was poisoned before the audit"))?;
         let mut state = self.state.borrow_mut();
-        let live = state
-            .as_mut()
-            .ok_or_else(|| io::Error::other("the run already resolved"))?;
-        let (pending, retired, exit) = match live.retiring.take() {
-            // A retry runs on the retained tuple, whatever the caller passes.
-            Some(retained) => retained,
-            None => (
-                live.pending
-                    .take()
-                    .ok_or_else(|| io::Error::other("the scope was never bound"))?,
-                retired,
-                mapped(exit),
-            ),
+        let retained = {
+            let live = state
+                .as_mut()
+                .ok_or_else(|| io::Error::other("the run already resolved"))?;
+            match live.retiring.take() {
+                // A retry runs on the retained tuple, whatever the caller passes.
+                Some(retained) => retained,
+                None => (
+                    live.pending
+                        .take()
+                        .ok_or_else(|| io::Error::other("the scope was never bound"))?,
+                    retired,
+                    mapped(exit),
+                ),
+            }
         };
-        match store.retire_linux_scope(&pending, retired, exit) {
-            Ok(()) => {
-                live.lease = None;
-                live.pending = None;
-                live.retiring = None;
-                *state = None;
-                Ok(())
-            }
-            // The retirement is already durable: a lost acknowledgement is
-            // the same commit, and reporting it as a failure would keep the
-            // lease for the rest of the process's life.
-            Err(failure) if matches!(failure.error, Error::ScopeAlreadyRetired) => {
-                live.lease = None;
-                live.pending = None;
-                live.retiring = None;
-                *state = None;
-                Ok(())
-            }
-            Err(failure) => {
-                live.retiring = Some((pending, failure.retired, exit));
-                Err(other(failure.error))
-            }
+        let (pending, retired, exit) = retained;
+        commit(&mut store, &mut state, pending, retired, exit)
+    }
+
+    fn retry_audit(&self, _invocation: &str) -> io::Result<bool> {
+        // The retry entry the contract promises: it takes neither a new
+        // receipt nor a new exit, because the observation belongs to one
+        // launch and is never reissued.
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| io::Error::other("the store lock was poisoned before the retry"))?;
+        let mut state = self.state.borrow_mut();
+        let Some((pending, retired, exit)) = state
+            .as_mut()
+            .ok_or_else(|| io::Error::other("the run already resolved"))?
+            .retiring
+            .take()
+        else {
+            return Ok(false);
+        };
+        commit(&mut store, &mut state, pending, retired, exit)?;
+        Ok(true)
+    }
+}
+
+/// Commits the retained retirement, keeping the tuple for another retry if
+/// the commit fails. A lost acknowledgement is the same commit, so it settles
+/// too: reporting it as a failure would hold the lease for the rest of the
+/// process's life.
+fn commit(
+    store: &mut Store,
+    state: &mut Option<LiveRun>,
+    pending: PendingLinuxScope,
+    retired: RetiredService,
+    exit: Option<TargetExit>,
+) -> io::Result<()> {
+    let mut live = state
+        .take()
+        .ok_or_else(|| io::Error::other("the run already resolved"))?;
+    match store.retire_linux_scope(&pending, retired, exit) {
+        // Both successes drop the live state, and with it the lease.
+        Ok(()) => Ok(()),
+        Err(failure) if matches!(failure.error, Error::ScopeAlreadyRetired) => Ok(()),
+        Err(failure) => {
+            live.retiring = Some((pending, failure.retired, exit));
+            *state = Some(live);
+            Err(other(failure.error))
         }
     }
 }

@@ -378,24 +378,25 @@ mod tests {
                 },
             ]
         };
-        // The projection refuses a nil scope after the intent is written in
-        // the same transaction, so neither event may survive.
-        let before = store.verify().unwrap().events;
-        let rejected = Uuid::new_v4().to_string();
-        assert!(matches!(
-            store.record_events_with_scope(&pair(&rejected, Uuid::nil()), Some(&authority)),
-            Err(Error::CorruptRegistry)
-        ));
-        assert_eq!(store.verify().unwrap().events, before);
-        assert!(matches!(store.run(&rejected), Err(Error::RunNotFound)));
         // A valid pair lands as two events, and the run's binding is durable
         // from the same commit as its intent.
+        let before = store.verify().unwrap().events;
         let run = Uuid::new_v4().to_string();
         let scope = Uuid::new_v4();
         store
             .record_events_with_scope(&pair(&run, scope), Some(&authority))
             .unwrap();
         assert_eq!(store.verify().unwrap().events, before + 2);
+        // The second event is what fails here: one invocation cannot bind a
+        // second run, and the intent is written first in the same
+        // transaction, so the rejected binding must take its run with it.
+        let second = Uuid::new_v4().to_string();
+        assert!(matches!(
+            store.record_events_with_scope(&pair(&second, Uuid::new_v4()), Some(&authority)),
+            Err(Error::Database(_))
+        ));
+        assert_eq!(store.verify().unwrap().events, before + 2);
+        assert!(matches!(store.run(&second), Err(Error::RunNotFound)));
         let record = store.run(&run).unwrap();
         assert_eq!(
             record.local_scope,

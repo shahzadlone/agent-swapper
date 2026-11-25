@@ -1069,20 +1069,32 @@ line of work; the survey's own authority questions are answered below.
   already-durable retirement as terminal: a lost acknowledgement is that
   same commit, and reporting it as failure would hold the lease for the rest
   of the process's life. `audit_exit` takes the exit as an option for the
-  same reason the settle path needs it.
+  same reason the settle path needs it, and `Journal::retry_audit` is the
+  retry entry the contract promised: it takes neither a new receipt nor a new
+  exit, and a journal that retains nothing answers so instead of pretending.
 - **A lost acknowledgement with a known exit was reported as corruption.**
   The duplicate recognition compared only `exit_code IS NULL`. It now matches
   the recorded exit as well as the exact event payload, so a retry carrying a
   known exit recognizes its own commit, while a retirement claiming a
   different exit - or none - still fails closed.
 
-Evidence: `Store` fixtures for the atomic pair (a rejected binding takes its
-run with it) and for the lost acknowledgement with a known exit versus a
-foreign one; an adapter test that a launch which never reaches its intent
-leaves the profile leasable; the workspace suite, clippy and fmt green
-locally. The client's settle path has no local harness - it needs the real
-guardian - so its production coverage belongs with the restart-recovery
-evidence, where a withdrawn channel is a precondition of every scenario.
+Evidence: `Store` fixtures for the atomic pair - the refusal is the second
+event, and the assertion shows the log and the run row are unchanged - and
+for the lost acknowledgement with a known exit versus a foreign one or a
+retirement claiming none; an adapter test that a launch which never reaches
+its intent leaves the profile leasable; and local fault tests of the
+settlement decision itself (a failed observation never reaches the commit, a
+commit failure surfaces as the error, a settled retry succeeds and every
+other retry keeps the first error). What has no local harness is the
+observation and the commit against a live manager, and a fabricated
+retirement receipt is not constructible by design; that coverage belongs to
+the hosted lifecycle, where the experimental CLI already drives these paths.
+
+This section was written while the review of the two commits was still open;
+its findings are the retry entry, the second-event rollback assertion, the
+named refusals, the module and trait wording, and the production-path
+coverage above. All but the last are closed in the tree; the last is the
+hosted lifecycle's.
 
 Still open, deliberately: recovery of a run whose client died is a new
 authority boundary (`RecoveredService`), not a reuse of `retire_linux_scope`,
