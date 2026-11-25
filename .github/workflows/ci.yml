@@ -501,7 +501,7 @@ jobs:
             scenario="$1"; shift
             scenario_journal=$(mktemp -d "$RUNNER_TEMP/aswp-launch-pty-$scenario-XXXXXXXX")
             chmod 700 "$scenario_journal"
-            /usr/bin/python3 tools/check_linux_launch_pty.py --scenario "$scenario" --client "$bind" "$uid" launch "$scenario_journal" -- --target "$@" || {
+            /usr/bin/python3 tools/check_linux_launch_pty.py --scenario "$scenario" --client "$bind" "$uid" launch "$scenario_journal" --target "$@" || {
               dump_journal
               echo "::error title=launch pty control::interactive $scenario scenario failed"
               exit 1
