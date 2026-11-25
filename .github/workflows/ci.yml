@@ -519,6 +519,18 @@ jobs:
           disposable_pty_scenario job-control /bin/sh -c 'echo target-ready; sleep 300'
           disposable_pty_scenario long-active /bin/sh -c 'sleep 75; echo long-active-done'
           disposable_pty_scenario long-stopped /bin/sh -c 'echo target-ready; sleep 300'
+          python3 -m unittest discover -s tools -p test_linux_settlement.py -v
+          # Settlement control: a launch whose target cannot be executed
+          # fails after its durable intent while the helper is still alive,
+          # so the client must withdraw the channel, observe the original
+          # scope's retirement and commit it with no authenticated exit. The
+          # run has to resolve, keep its binding, record no exit, and leave
+          # the profile reusable for the next launch.
+          /usr/bin/python3 tools/check_linux_settlement.py --client "$aswp" --profile aswp-launch || {
+            dump_journal
+            echo "::error title=settlement control::a post-intent failure did not settle its run; journal: $(journal_brief)"
+            exit 1
+          }
           # Interactive qualification on a real pty with the disposable
           # client: the client's outer terminal becomes a tty, a resize is
           # applied mid-flight, and the target must see both the forwarded
@@ -531,7 +543,7 @@ jobs:
             echo '::error title=launch pty control::interactive launch failed'
             exit 1
           }
-          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation, held-exec launch, durable journal and interactive pty launch with job-control, fidelity and long-session scenarios completed; no provider command'
+          echo '::notice title=installation lifecycle::root install, ordinary verification, selector upgrade, inactive removal, active-removal refusal, deselect, removal, authenticated activation, held-exec launch, durable journal and interactive pty launch with job-control, fidelity and long-session scenarios, and settlement of a post-intent failure completed; no provider command'
 
           sudo -n "$admin" install "$uid" "$gid" "$gen_b" "$guardian" "$PWD/target/debug/aswp-session-helper" "$guardian"
           "$verify" "$uid" "$gid" | grep -F "/run/agentswapper/$uid/$gen_b.sock"
