@@ -630,37 +630,95 @@ mod tests {
         require(written == bytes.len(), "incomplete test frame")
     }
 
+    /// Run one exact receive against one frame with no send/receive ordering
+    /// race. The frame is queued while this side still owns both endpoints and
+    /// the sending endpoint stays open until the receive has reported, so a
+    /// receive that refuses on its own arguments before it ever reads the
+    /// channel (the resume-grant sequence policy is such a refusal) cannot
+    /// close the peer while this side is inside `sendmsg`. That close does race
+    /// the send into `BrokenPipe` on a scheduler that runs the fresh thread
+    /// first, and reporting the send error instead of the receiver's outcome is
+    /// what once turned a bounded-sequence refusal into an unexplained EPIPE.
+    fn exchange<T: Send + 'static>(
+        frame: &[u8],
+        rights: &[OwnedFd],
+        receive: impl FnOnce(OwnedFd) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let (sender, receiver) = pair()?;
+        let sent = send(&sender, frame, rights);
+        require(
+            sent.is_ok(),
+            &format!(
+                "the test frame must be deliverable: {:?}",
+                sent.as_ref().err()
+            ),
+        )?;
+        let handle = std::thread::spawn(move || receive(receiver));
+        let received = handle
+            .join()
+            .map_err(|_| io::Error::other("thread panicked"))?;
+        drop(sender);
+        received
+    }
+
+    /// Report a send and a receive that ran together. Neither side's error may
+    /// stand in for the other: a refusal case that accepted a send-side failure
+    /// as its expected refusal would pass without the receiver ever judging the
+    /// frame, which is exactly how the bounded-sequence refusal once surfaced as
+    /// an unexplained `BrokenPipe`. A send failure is a broken test frame, not a
+    /// refusal, so it is fatal here.
+    fn both<T>(sent: io::Result<()>, received: io::Result<T>) -> io::Result<T> {
+        require(
+            sent.is_ok(),
+            &format!(
+                "the test frame must be deliverable: {:?}",
+                sent.as_ref().err()
+            ),
+        )?;
+        received
+    }
+
+    /// Run one exact receive that is already waiting on the empty channel when
+    /// the frame arrives. The receive side announces readiness before it calls
+    /// the receive, and a duplicate of its endpoint stays open here until the
+    /// send has returned, so neither side's ordering can produce a send-side
+    /// `BrokenPipe`; a failure on either side is then reported as itself.
+    fn exchange_while_waiting<T: Send + 'static>(
+        frame: &[u8],
+        rights: &[OwnedFd],
+        receive: impl FnOnce(OwnedFd) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let (sender, receiver) = pair()?;
+        let peer = receiver.as_fd().try_clone_to_owned()?;
+        let (ready, waiting) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _ = ready.send(());
+            receive(receiver)
+        });
+        waiting
+            .recv()
+            .map_err(|_| io::Error::other("receive side lost the readiness signal"))?;
+        let sent = send(&sender, frame, rights);
+        drop(peer);
+        drop(sender);
+        let received = handle
+            .join()
+            .map_err(|_| io::Error::other("thread panicked"))?;
+        both(sent, received)
+    }
+
     #[test]
     fn launch_frames_round_trip_and_withdrawal_is_distinguished() -> io::Result<()> {
         let nonce = [7_u8; 16];
-        {
-            let (sender, receiver) = pair()?;
-            let handle =
-                std::thread::spawn(move || receive_launch_gate(&receiver, &nonce, deadline()));
-            send(&sender, &launch_gate_packet(&nonce), &[])?;
-            handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))??;
-        }
-        {
-            let (sender, receiver) = pair()?;
-            let handle = std::thread::spawn(move || {
-                receive_exec_release(&receiver, &nonce, 4001, deadline())
-            });
-            send(&sender, &exec_release_packet(&nonce, 4001), &[])?;
-            handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))??;
-        }
-        {
-            let (sender, receiver) = pair()?;
-            let handle =
-                std::thread::spawn(move || receive_exec_event(&receiver, &nonce, 4002, deadline()));
-            send(&sender, &exec_event_packet(&nonce, 4002), &[])?;
-            handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))??;
-        }
+        exchange(&launch_gate_packet(&nonce), &[], move |receiver| {
+            receive_launch_gate(&receiver, &nonce, deadline())
+        })?;
+        exchange(&exec_release_packet(&nonce, 4001), &[], move |receiver| {
+            receive_exec_release(&receiver, &nonce, 4001, deadline())
+        })?;
+        exchange(&exec_event_packet(&nonce, 4002), &[], move |receiver| {
+            receive_exec_event(&receiver, &nonce, 4002, deadline())
+        })?;
         // A clean close is a withdrawal, never an acceptance or a crash.
         {
             let (sender, receiver) = pair()?;
@@ -681,27 +739,24 @@ mod tests {
     fn stop_notices_and_resume_grants_round_trip_and_refuse_forgery() -> io::Result<()> {
         let nonce = [5_u8; 16];
         for (signal, sequence) in [(20_u16, 1_u64), (19, 2), (21, MAX_STOP_SEQUENCE)] {
-            let (sender, receiver) = pair()?;
-            let notice = stop_notice_packet(&nonce, 77, signal, sequence);
-            let handle =
-                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
-            send(&sender, &notice, &[])?;
-            let received = handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))??;
+            // The guardian is already waiting for the stop notice.
+            let received = exchange_while_waiting(
+                &stop_notice_packet(&nonce, 77, signal, sequence),
+                &[],
+                move |receiver| receive_stop_notice(&receiver, &nonce, 77, deadline()),
+            )?;
             assert_eq!(received, (signal, sequence));
-            // The matching grant is accepted.
-            let (sender, receiver) = pair()?;
-            let grant = resume_grant_packet(&nonce, sequence);
-            let handle = std::thread::spawn(move || {
-                receive_resume_grant(&receiver, &nonce, sequence, deadline())
-            });
-            send(&sender, &grant, &[])?;
-            handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))??;
+            // The matching grant is accepted while the client waits for it.
+            exchange_while_waiting(
+                &resume_grant_packet(&nonce, sequence),
+                &[],
+                move |receiver| receive_resume_grant(&receiver, &nonce, sequence, deadline()),
+            )?;
         }
-        // Stale, foreign and beyond-bound sequences never grant a resume.
+        // Stale, foreign and beyond-bound sequences never grant a resume. A
+        // sequence beyond the policy is refused before the channel is read, so
+        // the frame is queued first: the refusal is the receiver's own error,
+        // never a send-side `BrokenPipe` from its closed endpoint.
         for (label, bytes, sequence) in [
             ("stale sequence", resume_grant_packet(&nonce, 1), 2_u64),
             ("foreign nonce", resume_grant_packet(&[6; 16], 2), 2),
@@ -712,18 +767,10 @@ mod tests {
             ),
             ("empty frame", Vec::new(), 1),
         ] {
-            let (sender, receiver) = pair()?;
-            let handle = std::thread::spawn(move || {
+            let refused = exchange(&bytes, &[], move |receiver| {
                 receive_resume_grant(&receiver, &nonce, sequence, deadline())
             });
-            send(&sender, &bytes, &[])?;
-            assert!(
-                handle
-                    .join()
-                    .map_err(|_| io::Error::other("thread panicked"))?
-                    .is_err(),
-                "{label}"
-            );
+            assert!(refused.is_err(), "{label}");
         }
         // Foreign children, nonces, sequences beyond the bound, truncation
         // and capabilities refuse the stop notice itself.
@@ -750,43 +797,28 @@ mod tests {
                 Vec::new(),
             ),
         ] {
-            let (sender, receiver) = pair()?;
-            let handle =
-                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
-            send(&sender, &bytes, &rights)?;
-            assert!(
-                handle
-                    .join()
-                    .map_err(|_| io::Error::other("thread panicked"))?
-                    .is_err(),
-                "{label}"
-            );
+            let refused = exchange(&bytes, &rights, move |receiver| {
+                receive_stop_notice(&receiver, &nonce, 77, deadline())
+            });
+            assert!(refused.is_err(), "{label}");
         }
         {
-            let (sender, receiver) = pair()?;
             let rights = vec![capability.as_fd().try_clone_to_owned()?];
-            let handle =
-                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
-            send(&sender, &stop_notice_packet(&nonce, 77, 20, 1), &rights)?;
-            assert!(
-                handle
-                    .join()
-                    .map_err(|_| io::Error::other("thread panicked"))?
-                    .is_err()
+            let refused = exchange(
+                &stop_notice_packet(&nonce, 77, 20, 1),
+                &rights,
+                move |receiver| receive_stop_notice(&receiver, &nonce, 77, deadline()),
             );
+            assert!(refused.is_err());
         }
         // Bounds exposed through the raw packet shape: a stop beyond the
         // sequence policy has a valid shape but a refused sequence.
-        let (sender, receiver) = pair()?;
-        let handle =
-            std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
-        send(&sender, &stop_notice_packet(&nonce, 77, 20, 0), &[])?;
-        assert!(
-            handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))?
-                .is_err()
+        let refused = exchange(
+            &stop_notice_packet(&nonce, 77, 20, 0),
+            &[],
+            move |receiver| receive_stop_notice(&receiver, &nonce, 77, deadline()),
         );
+        assert!(refused.is_err());
         // Non-stop signal numbers never authorize a client suspension,
         // in the wire shape of each genuine stop signal.
         for (label, signal) in [
@@ -795,18 +827,12 @@ mod tests {
             ("notice carries zero", 0),
             ("notice carries an out-of-range number", 65),
         ] {
-            let (sender, receiver) = pair()?;
-            let notice = stop_notice_packet(&nonce, 77, signal, 1);
-            let handle =
-                std::thread::spawn(move || receive_stop_notice(&receiver, &nonce, 77, deadline()));
-            send(&sender, &notice, &[])?;
-            assert!(
-                handle
-                    .join()
-                    .map_err(|_| io::Error::other("thread panicked"))?
-                    .is_err(),
-                "{label}"
+            let refused = exchange(
+                &stop_notice_packet(&nonce, 77, signal, 1),
+                &[],
+                move |receiver| receive_stop_notice(&receiver, &nonce, 77, deadline()),
             );
+            assert!(refused.is_err(), "{label}");
         }
         Ok(())
     }
@@ -875,14 +901,10 @@ mod tests {
             },
         ] {
             let nonce = [9_u8; 16];
-            let (sender, receiver) = pair()?;
             let packet = exit_report_packet(&nonce, &exit)?;
-            let handle =
-                std::thread::spawn(move || receive_exit_report(&receiver, &nonce, deadline()));
-            send(&sender, &packet, &[])?;
-            let received = handle
-                .join()
-                .map_err(|_| io::Error::other("thread panicked"))??;
+            let received = exchange(&packet, &[], move |receiver| {
+                receive_exit_report(&receiver, &nonce, deadline())
+            })?;
             assert_eq!(received, exit);
         }
         Ok(())
@@ -919,33 +941,20 @@ mod tests {
                 4001,
             ),
         ] {
-            let (sender, receiver) = pair()?;
-            let handle = std::thread::spawn(move || {
+            let refused = exchange(&bytes, &rights, move |receiver| {
                 receive_exec_release(&receiver, &nonce, child, deadline())
             });
-            send(&sender, &bytes, &rights)?;
-            assert!(
-                handle
-                    .join()
-                    .map_err(|_| io::Error::other("thread panicked"))?
-                    .is_err(),
-                "{label}"
-            );
+            assert!(refused.is_err(), "{label}");
         }
         // A capability on a control frame refuses and is closed.
         {
-            let (sender, receiver) = pair()?;
             let rights = vec![capability.as_fd().try_clone_to_owned()?];
-            let handle = std::thread::spawn(move || {
-                receive_exec_release(&receiver, &nonce, 4001, deadline())
-            });
-            send(&sender, &exec_release_packet(&nonce, 4001), &rights)?;
-            assert!(
-                handle
-                    .join()
-                    .map_err(|_| io::Error::other("thread panicked"))?
-                    .is_err()
+            let refused = exchange(
+                &exec_release_packet(&nonce, 4001),
+                &rights,
+                move |receiver| receive_exec_release(&receiver, &nonce, 4001, deadline()),
             );
+            assert!(refused.is_err());
         }
         // A foreign channel shape refuses before any read.
         let (sender, receiver) = pair()?;
