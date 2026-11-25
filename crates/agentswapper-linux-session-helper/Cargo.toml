@@ -21,5 +21,8 @@ serde_json.workspace = true
 tokio = { version = "=1.54.1", default-features = false, features = ["rt", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

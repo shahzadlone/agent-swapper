@@ -45,16 +45,17 @@ fn main() -> process::ExitCode {
             );
             match journal {
                 Ok(journal) => {
-                    let run = journal.run();
                     let user = rustix::process::getuid().as_raw();
                     let outcome = agentswapper_linux_install::client::launch(
                         user, &program, arguments, &journal,
                     );
+                    // The run id exists only once the intent committed: a
+                    // launch that failed before it has no durable run at all.
                     match outcome {
-                        Ok(message) => match run {
-                            Ok(run) => Ok(format!("{message} (durable run {run})")),
-                            Err(error) => Ok(format!("{message} ({error})")),
-                        },
+                        Ok(message) => Ok(match journal.run() {
+                            Some(run) => format!("{message} (durable run {run})"),
+                            None => format!("{message} (no durable run)"),
+                        }),
                         Err(error) => Err(error),
                     }
                 }

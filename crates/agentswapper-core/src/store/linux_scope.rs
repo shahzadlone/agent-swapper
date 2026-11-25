@@ -106,6 +106,11 @@ mod live {
         pub fn key(&self) -> &ServiceKey {
             &self.key
         }
+        /// The durable run this association belongs to, for diagnostics and
+        /// journal records; it carries no retirement authority.
+        pub fn run_id(&self) -> &str {
+            &self.run
+        }
     }
     /// A failed retirement retains its original retirement value for
     /// in-place retry by the session helper; the error never carries
@@ -160,6 +165,54 @@ mod live {
                 store: Arc::clone(&self.scope_instance),
                 key,
                 run: record.id,
+                scope,
+                binding,
+            })
+        }
+
+        /// Plan the run and bind its linux scope in one transaction: the
+        /// intent and the association it authorizes commit together, so a
+        /// launch that never reaches its intent leaves no unfinished run
+        /// behind to block the profile. The lease must already be held.
+        pub fn begin_linux_run(
+            &mut self,
+            lease: &ProfileLease,
+            scope: Uuid,
+            key: ServiceKey,
+        ) -> Result<PendingLinuxScope> {
+            let identity = key.identity();
+            let (device, inode) = key.directory_identity();
+            let binding = LinuxBinding {
+                unit: identity.unit,
+                invocation: identity.invocation,
+                user: identity.user,
+                guardian: identity.main_pid,
+                device,
+                inode,
+            };
+            binding.validate()?;
+            let id = Uuid::new_v4().to_string();
+            self.record_events_with_scope(
+                &[
+                    Event::RunPlanned {
+                        id: id.clone(),
+                        profile: lease.profile,
+                        kind: "run".to_owned(),
+                        requires_spawn_observation: true,
+                        gents_session: None,
+                        local_scope: Some(LocalScope::LinuxCgroup { id: scope }),
+                    },
+                    Event::LinuxScopeBound {
+                        id: id.clone(),
+                        binding: binding.clone(),
+                    },
+                ],
+                Some(&ScopeAuthority { _private: () }),
+            )?;
+            Ok(PendingLinuxScope {
+                store: Arc::clone(&self.scope_instance),
+                key,
+                run: id,
                 scope,
                 binding,
             })
@@ -298,6 +351,111 @@ mod tests {
             ProcessCustody::LocalScopeEmpty
         );
         assert_eq!(store.run(&run).unwrap().exit_code, None);
+    }
+
+    #[test]
+    fn an_intent_and_its_binding_commit_together_or_not_at_all() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let _lease = store.lease(profile.id).unwrap();
+        let authority = ScopeAuthority { _private: () };
+        let pair = |run: &str, scope: Uuid| {
+            [
+                Event::RunPlanned {
+                    id: run.to_owned(),
+                    profile: profile.id,
+                    kind: "run".to_owned(),
+                    requires_spawn_observation: true,
+                    gents_session: None,
+                    local_scope: Some(LocalScope::LinuxCgroup { id: scope }),
+                },
+                Event::LinuxScopeBound {
+                    id: run.to_owned(),
+                    binding: binding(),
+                },
+            ]
+        };
+        // The projection refuses a nil scope after the intent is written in
+        // the same transaction, so neither event may survive.
+        let before = store.verify().unwrap().events;
+        let rejected = Uuid::new_v4().to_string();
+        assert!(matches!(
+            store.record_events_with_scope(&pair(&rejected, Uuid::nil()), Some(&authority)),
+            Err(Error::CorruptRegistry)
+        ));
+        assert_eq!(store.verify().unwrap().events, before);
+        assert!(matches!(store.run(&rejected), Err(Error::RunNotFound)));
+        // A valid pair lands as two events, and the run's binding is durable
+        // from the same commit as its intent.
+        let run = Uuid::new_v4().to_string();
+        let scope = Uuid::new_v4();
+        store
+            .record_events_with_scope(&pair(&run, scope), Some(&authority))
+            .unwrap();
+        assert_eq!(store.verify().unwrap().events, before + 2);
+        let record = store.run(&run).unwrap();
+        assert_eq!(
+            record.local_scope,
+            Some(LocalScope::LinuxCgroup { id: scope })
+        );
+        assert_eq!(record.observed_pid, None);
+        assert_eq!(record.outcome, None);
+    }
+
+    #[test]
+    fn a_lost_acknowledgement_with_a_known_exit_is_recognized_as_its_own_duplicate() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&temp.path().join("state")).unwrap();
+        let profile = store
+            .register(Harness::Codex, "work".parse().unwrap())
+            .unwrap();
+        let lease = store.lease(profile.id).unwrap();
+        let scope = Uuid::new_v4();
+        let run = store
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(LocalScope::LinuxCgroup { id: scope }),
+            )
+            .unwrap();
+        store
+            .record_scope_fixture(Event::LinuxScopeBound {
+                id: run.clone(),
+                binding: binding(),
+            })
+            .unwrap();
+        let retirement = Event::LinuxScopeRetired {
+            id: run.clone(),
+            scope,
+            binding: binding(),
+            exit: Some(TargetExit::Code { code: 7 }),
+        };
+        store.fail_after_scope_commit = true;
+        assert!(store.record_scope_fixture(retirement.clone()).is_err());
+        // The retry carries the same known exit, so it must recognize its own
+        // earlier commit instead of being reported as a corrupt registry.
+        assert!(matches!(
+            store.record_scope_fixture(retirement),
+            Err(Error::ScopeAlreadyRetired)
+        ));
+        // A retirement that claims a different exit cannot inherit the commit.
+        assert!(
+            store
+                .record_scope_fixture(Event::LinuxScopeRetired {
+                    id: run.clone(),
+                    scope,
+                    binding: binding(),
+                    exit: Some(TargetExit::Code { code: 8 }),
+                })
+                .is_err()
+        );
+        let record = store.run(&run).unwrap();
+        assert_eq!(record.exit_code, Some(7));
+        assert_eq!(record.custody, ProcessCustody::LocalScopeEmpty);
     }
 
     #[test]

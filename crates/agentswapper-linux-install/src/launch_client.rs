@@ -33,13 +33,16 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 ///   stays unresolved and is never re-launched.
 /// - `observe_spawn` durably records the spawn observation before the client
 ///   releases the held exec; an uncertain write is an error.
-/// - `audit_exit` commits the authenticated target exit together with the
-///   one-use retirement value. It runs only after the client has
-///   independently observed the original scope's retirement on its retained
-///   handles; the retirement value authorizes exactly this commit and no
-///   other. A failure is retry-safe: the adapter retains the retirement
-///   value for in-place retry, and the run's profile stays blocked until the
-///   commit lands.
+/// - `audit_exit` commits the one-use retirement value together with the
+///   authenticated target exit when the relay produced one. It runs only
+///   after the client has independently observed the original scope's
+///   retirement on its retained handles, on the relay's failure paths as
+///   well as its success: a launch that fails after the intent has no
+///   authenticated exit to report and commits none, so an ordinary error
+///   never leaves the run unresolved. The retirement value authorizes
+///   exactly this commit and no other. A failure is retry-safe: the adapter
+///   retains the retirement value for in-place retry, and the run's profile
+///   stays blocked until the commit lands.
 ///
 /// An independent review (2026-11-22) fixed these signatures and the client's
 /// closure order; a production Store adapter must additionally decide the
@@ -51,7 +54,7 @@ pub trait Journal {
     fn audit_exit(
         &self,
         invocation: &str,
-        exit: TargetExit,
+        exit: Option<TargetExit>,
         retired: RetiredService,
     ) -> io::Result<()>;
 }
@@ -110,14 +113,20 @@ impl Journal for FileJournal {
     fn audit_exit(
         &self,
         invocation: &str,
-        exit: TargetExit,
+        exit: Option<TargetExit>,
         _retired: RetiredService,
     ) -> io::Result<()> {
         // The retirement value is consumed here; the disposable record
         // cannot serialize it. The pinned serialization keeps the exit
-        // durable in the record.
-        let encoded =
-            serde_json::to_string(&exit).map_err(|error| io::Error::other(error.to_string()))?;
+        // durable in the record, and a launch that failed after its intent
+        // records that it has no authenticated exit rather than inventing
+        // one.
+        let encoded = match exit {
+            Some(exit) => {
+                serde_json::to_string(&exit).map_err(|error| io::Error::other(error.to_string()))?
+            }
+            None => "unknown".to_owned(),
+        };
         self.record(
             &format!("exit-{invocation}"),
             &format!("authenticated target exit: {encoded}"),

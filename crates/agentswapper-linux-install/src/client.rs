@@ -859,56 +859,62 @@ pub fn launch(
         journal
             .confirm_intent(&offer.invocation, &nonce_hex, service_key)
             .map_err(|error| io::Error::other(format!("run intent failed: {error}")))?;
-        net_send(
-            &endpoint.socket,
-            &launch_protocol::launch_gate_packet(&run_nonce),
-        )?;
-        let (event_nonce, child) =
-            launch_protocol::receive_exec_event_open(&endpoint.socket, deadline)
+        // From here the scope association is durable, so every path has to
+        // settle it. The relay's verdict is captured instead of returned: a
+        // failed launch still withdraws the control channel, observes the
+        // original scope's retirement and commits it with no authenticated
+        // exit, which keeps an ordinary error from leaving the profile
+        // blocked behind a run that nothing will ever resolve.
+        let socket = endpoint.socket;
+        let outcome: io::Result<TargetExit> = async {
+            net_send(&socket, &launch_protocol::launch_gate_packet(&run_nonce))?;
+            let (event_nonce, child) = launch_protocol::receive_exec_event_open(&socket, deadline)
                 .map_err(|error| io::Error::other(format!("exec event missing: {error}")))?;
-        require(
-            event_nonce == run_nonce,
-            "the exec event carried a foreign nonce",
-        )?;
-        require(child > 1, "the exec event carried a degenerate child")?;
-        // The durable spawn observation precedes the held-exec release.
-        journal
-            .observe_spawn(&offer.invocation, child)
-            .map_err(|error| io::Error::other(format!("spawn observation failed: {error}")))?;
-        net_send(
-            &endpoint.socket,
-            &launch_protocol::exec_release_packet(&run_nonce, child),
-        )?;
-        // The terminal master backhaul: the client owns the master for the
-        // target's lifetime and relays its bytes until the target ends.
-        let master = transport::receive_until(&endpoint.socket, deadline)
-            .map_err(|error| io::Error::other(format!("terminal master missing: {error}")))?;
-        // The relay is the active phase: no admission deadline applies. It
-        // owns the terminal admission, the feeder, the outer modes and the
-        // control channel from here to the target's honest end.
-        let end = relay(&master, &endpoint.socket, &run_nonce, child, &signals)
-            .map_err(|error| io::Error::other(format!("terminal relay failed: {error}")))?;
-        let exit = match end {
-            RelayEnd::Exited(exit) => exit,
-            RelayEnd::MasterEnded => launch_protocol::receive_exit_report(
-                &endpoint.socket,
-                &run_nonce,
-                Instant::now() + ACTIVE_WINDOW,
-            )
-            .map_err(|error| io::Error::other(format!("exit report missing: {error}")))?,
-            RelayEnd::ControlClosed => {
-                return Err(io::Error::other(
+            require(
+                event_nonce == run_nonce,
+                "the exec event carried a foreign nonce",
+            )?;
+            require(child > 1, "the exec event carried a degenerate child")?;
+            // The durable spawn observation precedes the held-exec release.
+            journal
+                .observe_spawn(&offer.invocation, child)
+                .map_err(|error| io::Error::other(format!("spawn observation failed: {error}")))?;
+            net_send(
+                &socket,
+                &launch_protocol::exec_release_packet(&run_nonce, child),
+            )?;
+            // The terminal master backhaul: the client owns the master for
+            // the target's lifetime and relays its bytes until the target
+            // ends.
+            let master = transport::receive_until(&socket, deadline)
+                .map_err(|error| io::Error::other(format!("terminal master missing: {error}")))?;
+            // The relay is the active phase: no admission deadline applies.
+            // It owns the terminal admission, the feeder, the outer modes
+            // and the control channel from here to the target's honest end.
+            let end = relay(&master, &socket, &run_nonce, child, &signals)
+                .map_err(|error| io::Error::other(format!("terminal relay failed: {error}")))?;
+            match end {
+                RelayEnd::Exited(exit) => Ok(exit),
+                RelayEnd::MasterEnded => launch_protocol::receive_exit_report(
+                    &socket,
+                    &run_nonce,
+                    Instant::now() + ACTIVE_WINDOW,
+                )
+                .map_err(|error| io::Error::other(format!("exit report missing: {error}"))),
+                RelayEnd::ControlClosed => Err(io::Error::other(
                     "exit report missing: the launch control channel closed",
-                ));
+                )),
+                RelayEnd::Cancelled(signal) => {
+                    Err(io::Error::other(format!("launch cancelled by {signal}")))
+                }
             }
-            RelayEnd::Cancelled(signal) => {
-                return Err(io::Error::other(format!("launch cancelled by {signal}")));
-            }
-        };
-        // The channel closes cleanly only here: from the guardian's side a
-        // withdrawal mid-session never grants a resume, so dropping it on
-        // the error paths above retires the target through the scope.
-        drop(endpoint.socket);
+        }
+        .await;
+        // The withdrawal retires the target from the guardian's side: a
+        // withdrawal mid-session never grants a resume. It precedes the
+        // retirement observation on the failing path for the same reason it
+        // always preceded it on the succeeding one.
+        drop(socket);
         // Independently observe the original scope's retirement on the
         // retained binding and original handles, in its own fresh window; a
         // received exit report alone never authorizes the retirement commit.
@@ -919,11 +925,15 @@ pub fn launch(
             )
             .await
             .map_err(|error| io::Error::other(format!("retirement observation failed: {error}")))?;
-        // The audit commits the retirement with the one-use value and
-        // records the authenticated target exit; retry-safe in the adapter.
+        // The audit commits the retirement with the one-use value and records
+        // the authenticated target exit when the relay observed one; the
+        // adapter's retry contract retains the value if this commit fails.
         journal
-            .audit_exit(&offer.invocation, exit, retired)
+            .audit_exit(&offer.invocation, outcome.as_ref().ok().copied(), retired)
             .map_err(|error| io::Error::other(format!("exit audit failed: {error}")))?;
+        // The run is settled whatever the relay's verdict, so a failed launch
+        // reports its own failure only after the profile is reusable.
+        let exit = outcome?;
         let closed = endpoint.manager.close().await.map_err(io::Error::other);
         closed?;
         Ok(format!(

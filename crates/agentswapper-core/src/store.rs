@@ -632,10 +632,24 @@ impl Store {
         event: Event,
         authority: Option<&linux_scope::ScopeAuthority>,
     ) -> Result<()> {
-        if matches!(
-            event,
-            Event::LinuxScopeBound { .. } | Event::LinuxScopeRetired { .. }
-        ) && authority.is_none()
+        self.record_events_with_scope(std::slice::from_ref(&event), authority)
+    }
+
+    /// Commit a set of events in one transaction. The scope authority covers
+    /// the whole set, and every event is validated before any of them is
+    /// applied, so a set that carries an intent and its binding either lands
+    /// together or not at all.
+    fn record_events_with_scope(
+        &mut self,
+        events: &[Event],
+        authority: Option<&linux_scope::ScopeAuthority>,
+    ) -> Result<()> {
+        if events.iter().any(|event| {
+            matches!(
+                event,
+                Event::LinuxScopeBound { .. } | Event::LinuxScopeRetired { .. }
+            )
+        }) && authority.is_none()
         {
             return Err(Error::ScopeReceiptMismatch);
         }
@@ -649,7 +663,15 @@ impl Store {
         if version != SCHEMA {
             return Err(Error::RegistrySchemaChanged);
         }
-        journal::validate_event(&event)?;
+        let mut json = Vec::with_capacity(events.len());
+        for event in events {
+            journal::validate_event(event)?;
+            let encoded = serde_json::to_string(event)?;
+            if encoded.len() > journal::MAX_EVENT_BYTES {
+                return Err(Error::RegistryEventTooLarge);
+            }
+            json.push(encoded);
+        }
         let before = journal::StateStamp::read(&tx)?;
         if self.verified != Some(before) {
             #[cfg(test)]
@@ -660,39 +682,57 @@ impl Store {
                 return Err(Error::ProjectionMismatch);
             }
         }
-        let json = serde_json::to_string(&event)?;
-        if json.len() > journal::MAX_EVENT_BYTES {
-            return Err(Error::RegistryEventTooLarge);
-        }
-        if let Event::LinuxScopeRetired {
-            id, scope, binding, ..
-        } = &event
+        if let [
+            Event::LinuxScopeRetired {
+                id,
+                scope,
+                binding,
+                exit,
+            },
+        ] = events
         {
             // The snapshot above is verified while holding the write lock.
             // Match both the exact event and its projection before recognizing
             // a lost acknowledgement. A similar outcome alone is insufficient.
+            // The recorded exit is part of the match: a retry that carries a
+            // known exit must recognize its own earlier commit, otherwise it
+            // would be reported as a corrupt registry instead of the
+            // duplicate it is.
+            let exit = exit.and_then(linux_scope::TargetExit::exit_code);
             let recorded: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM main.runs WHERE id=?1 AND outcome='local_scope_empty' AND exit_code IS NULL AND linux_binding=?2 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND json_extract(local_scope,'$.id')=?3 AND EXISTS(SELECT 1 FROM main.event_log WHERE payload=?4))",
-                params![id, serde_json::to_string(binding)?, scope.to_string(), json],
+                "SELECT EXISTS(SELECT 1 FROM main.runs WHERE id=?1 AND outcome='local_scope_empty' AND exit_code IS ?2 AND linux_binding=?3 AND json_extract(local_scope,'$.backend')='linux_cgroup' AND json_extract(local_scope,'$.id')=?4 AND EXISTS(SELECT 1 FROM main.event_log WHERE payload=?5))",
+                params![
+                    id,
+                    exit,
+                    serde_json::to_string(binding)?,
+                    scope.to_string(),
+                    json[0]
+                ],
                 |row| row.get(0),
             )?;
             if recorded {
                 return Err(Error::ScopeAlreadyRetired);
             }
         }
-        tx.execute("INSERT INTO main.event_log(payload) VALUES(?1)", [json])?;
-        let recorded_at: String = tx.query_row(
-            "SELECT recorded_at FROM main.event_log WHERE sequence=last_insert_rowid()",
-            [],
-            |row| row.get(0),
-        )?;
-        apply(&tx, &event, &recorded_at)?;
+        for (event, payload) in events.iter().zip(&json) {
+            tx.execute("INSERT INTO main.event_log(payload) VALUES(?1)", [payload])?;
+            let recorded_at: String = tx.query_row(
+                "SELECT recorded_at FROM main.event_log WHERE sequence=last_insert_rowid()",
+                [],
+                |row| row.get(0),
+            )?;
+            apply(&tx, event, &recorded_at)?;
+        }
         // Capture while this write transaction fences every other writer.
         // Reading data_version after commit could cache an unverified peer write.
         let verified = journal::StateStamp::read(&tx)?;
         tx.commit()?;
         #[cfg(test)]
-        if self.fail_after_scope_commit && matches!(event, Event::LinuxScopeRetired { .. }) {
+        if self.fail_after_scope_commit
+            && events
+                .iter()
+                .any(|event| matches!(event, Event::LinuxScopeRetired { .. }))
+        {
             self.fail_after_scope_commit = false;
             self.verified = None;
             return Err(std::io::Error::other("injected lost scope commit acknowledgement").into());

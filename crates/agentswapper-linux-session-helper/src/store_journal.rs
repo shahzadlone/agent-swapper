@@ -8,7 +8,7 @@
 //! the original retirement value for in-place retry.
 use agentswapper_core::domain::{Alias, Harness};
 use agentswapper_core::store::linux_scope::TargetExit;
-use agentswapper_core::store::{LocalScope, ProfileLease, Store};
+use agentswapper_core::store::{ProfileLease, Store};
 use agentswapper_linux_install::launch_client::Journal;
 use agentswapper_linux_manager::{RetiredService, ServiceKey};
 use agentswapper_linux_runtime::target_exit::TargetExit as RuntimeExit;
@@ -24,7 +24,11 @@ fn other<E: std::fmt::Display>(error: E) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-fn mapped(exit: RuntimeExit) -> Option<TargetExit> {
+fn mapped(exit: Option<RuntimeExit>) -> Option<TargetExit> {
+    exit.and_then(one)
+}
+
+fn one(exit: RuntimeExit) -> Option<TargetExit> {
     match exit {
         RuntimeExit::Code { code } => Some(TargetExit::Code { code }),
         RuntimeExit::Signal {
@@ -44,6 +48,9 @@ fn mapped(exit: RuntimeExit) -> Option<TargetExit> {
 pub struct StoreJournal {
     store: Mutex<Store>,
     state: RefCell<Option<LiveRun>>,
+    // The run id exists only once the intent commits; it survives resolution
+    // so the caller can report which durable run this launch was.
+    run: RefCell<Option<String>>,
     // The Store's instance identity is retained through the pending scope's
     // own Arc; this binding keeps the adapter self-contained.
     _instance: Arc<()>,
@@ -51,17 +58,27 @@ pub struct StoreJournal {
 
 struct LiveRun {
     lease: Option<ProfileLease>,
-    run: String,
+    scope: Uuid,
     pending: Option<agentswapper_core::store::linux_scope::PendingLinuxScope>,
+    // A failed retirement keeps both the pending association and the
+    // original observation, so a retry reuses the authority it was granted
+    // instead of demanding a new one.
+    retiring: Option<(
+        agentswapper_core::store::linux_scope::PendingLinuxScope,
+        RetiredService,
+    )>,
 }
 
 impl StoreJournal {
-    /// Open the Store, register (or reuse) the profile and begin the run
-    /// with a fresh linux cgroup scope. The lease is held until the audit
-    /// completes; an unresolved run blocks the profile's reuse by design.
+    /// Open the Store, find the caller's registered profile and take its
+    /// lease. No run is planned here: the intent and its scope binding
+    /// commit together at `confirm_intent`, so a launch that fails before
+    /// its intent leaves nothing behind for the profile to be blocked on.
+    /// The lease is held until the audit completes, and from the intent
+    /// onward an unresolved run blocks the profile's reuse by design.
     pub fn open(root: &Path, harness: Harness, alias: &str) -> io::Result<Self> {
         let alias: Alias = alias.parse().map_err(other)?;
-        let mut store = Store::open(root).map_err(other)?;
+        let store = Store::open(root).map_err(other)?;
         // The profile is the caller's existing registration: the helper
         // never creates profiles, it launches through one.
         let profile = store
@@ -74,35 +91,24 @@ impl StoreJournal {
             })?
             .id;
         let lease = store.lease(profile).map_err(other)?;
-        let run = store
-            .begin_run_with_scope(
-                &lease,
-                "run",
-                None,
-                Some(LocalScope::LinuxCgroup { id: Uuid::new_v4() }),
-            )
-            .map_err(other)?;
         Ok(Self {
             store: Mutex::new(store),
             state: RefCell::new(Some(LiveRun {
                 lease: Some(lease),
-                run,
+                scope: Uuid::new_v4(),
                 pending: None,
+                retiring: None,
             })),
+            run: RefCell::new(None),
             _instance: Arc::new(()),
         })
     }
 
     /// The durable run id for bounded diagnostics and the restart-recovery
-    /// handoff. Recovery itself stays a separately qualified gate.
-    pub fn run(&self) -> io::Result<String> {
-        Ok(self
-            .state
-            .borrow()
-            .as_ref()
-            .ok_or_else(|| io::Error::other("the run already resolved"))?
-            .run
-            .clone())
+    /// handoff, or None when the launch never reached its intent and so has
+    /// no durable run. Recovery itself stays a separately qualified gate.
+    pub fn run(&self) -> Option<String> {
+        self.run.borrow().clone()
     }
 }
 
@@ -125,9 +131,9 @@ impl Journal for StoreJournal {
             .lease
             .as_ref()
             .ok_or_else(|| io::Error::other("the profile lease was released before the intent"))?;
-        let pending = store
-            .bind_linux_scope(&live.run, lease, key)
-            .map_err(other)?;
+        let scope = live.scope;
+        let pending = store.begin_linux_run(lease, scope, key).map_err(other)?;
+        *self.run.borrow_mut() = Some(pending.run_id().to_owned());
         live.pending = Some(pending);
         Ok(())
     }
@@ -137,20 +143,24 @@ impl Journal for StoreJournal {
             .store
             .lock()
             .map_err(|_| io::Error::other("the store lock was poisoned before the spawn"))?;
-        let run = self.run()?;
+        let run = self
+            .run()
+            .ok_or_else(|| io::Error::other("the spawn was observed before the intent"))?;
         store.observe_spawn(&run, child).map_err(other)
     }
 
     fn audit_exit(
         &self,
         _invocation: &str,
-        exit: RuntimeExit,
+        exit: Option<RuntimeExit>,
         retired: RetiredService,
     ) -> io::Result<()> {
-        // The exit commits together with the independently observed scope
-        // retirement; the authenticated exit came from the nonce-bound
-        // report that arrived before the retirement observation. The run
-        // resolves here and the lease drops.
+        // The retirement commits with the independently observed scope
+        // closure; the authenticated exit came from the nonce-bound report
+        // that arrived before the observation, and a launch that failed
+        // after its intent has none. The run resolves here and the lease
+        // drops. A retry after a failed commit reuses the retained pair: the
+        // same pending association and the same original observation.
         let mut store = self
             .store
             .lock()
@@ -159,16 +169,66 @@ impl Journal for StoreJournal {
         let live = state
             .as_mut()
             .ok_or_else(|| io::Error::other("the run already resolved"))?;
-        let pending = live
-            .pending
-            .as_ref()
-            .ok_or_else(|| io::Error::other("the scope was never bound"))?;
+        let (pending, retired) = match live.retiring.take() {
+            Some(retained) => retained,
+            None => (
+                live.pending
+                    .take()
+                    .ok_or_else(|| io::Error::other("the scope was never bound"))?,
+                retired,
+            ),
+        };
+        match store.retire_linux_scope(&pending, retired, mapped(exit)) {
+            Ok(()) => {
+                live.lease = None;
+                live.pending = None;
+                *state = None;
+                Ok(())
+            }
+            Err(failure) => {
+                live.retiring = Some((pending, failure.retired));
+                Err(other(failure.error))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// The intent is the durable record's only beginning: opening the journal
+    /// and failing before it must not leave a run that blocks the profile.
+    /// The old adapter planned the run at open, so a launch refused before its
+    /// gate - a signal owner it cannot claim, an endpoint that refuses, a
+    /// terminal that closes - left the profile blocked behind a run nothing
+    /// would ever resolve.
+    #[test]
+    fn a_launch_that_never_reaches_its_intent_leaves_no_unfinished_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let profile = {
+            let mut store = Store::open(&root).unwrap();
+            store
+                .register(Harness::Claude, "work".parse().unwrap())
+                .unwrap()
+                .id
+        };
+        let journal = StoreJournal::open(&root, Harness::Claude, "work").unwrap();
+        assert_eq!(journal.run(), None);
+        drop(journal);
+        let mut store = Store::open(&root).unwrap();
+        // An unresolved run would refuse this; the profile must be usable.
+        let lease = store.lease(profile).unwrap();
+        let scope = Uuid::new_v4();
         store
-            .retire_linux_scope(pending, retired, mapped(exit))
-            .map_err(|failure| other(failure.error))?;
-        live.lease = None;
-        live.pending = None;
-        *state = None;
-        Ok(())
+            .begin_run_with_scope(
+                &lease,
+                "run",
+                None,
+                Some(agentswapper_core::store::LocalScope::LinuxCgroup { id: scope }),
+            )
+            .unwrap();
     }
 }
