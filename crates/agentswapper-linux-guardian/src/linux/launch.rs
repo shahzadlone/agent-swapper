@@ -147,12 +147,13 @@ fn bind_session(slave: &OwnedFd) -> io::Result<()> {
     )
 }
 
-/// Grant the terminal's foreground to the raised exec-shim's group. This
-/// runs only once the shim's group exists and holds at its tracer stop, so
-/// the grant can never leave anything else as the terminal's foreground.
-/// The guardian's blocked job-signal vocabulary keeps a refused teardown's
-/// terminal hangup inert here, so a refusal still ends at the guardian's
-/// own diagnostic instead of a kernel-sent signal.
+/// Grant the terminal's foreground to the exec-shim's group. The group
+/// provably exists - it stopped itself at its tracer hold before the
+/// resume that reaches this grant - so the grant can never leave anything
+/// else as the terminal's foreground. The guardian's blocked job-signal
+/// vocabulary keeps a refused teardown's terminal hangup inert here, so a
+/// refusal still ends at the guardian's own diagnostic instead of a
+/// kernel-sent signal.
 fn grant_foreground(slave: &OwnedFd, group: Pid) -> io::Result<()> {
     let own = rustix::process::getpid();
     rustix::termios::tcsetpgrp(slave, group)?;
@@ -427,6 +428,13 @@ fn active_wait(
 
 /// Run one launch on the authenticated channel. `unit` is the guardian's
 /// own unit name, `shim_path` the installed exec-shim image.
+/// Serve one management cycle. Prerequisite: the calling process is this
+/// service's only thread - launch control moves the whole process into a
+/// new session and binds its controlling terminal, and only a
+/// single-threaded host is fully covered by the thread-local job-signal
+/// mask (`docs/linux-terminal-job-control.md`). The installation's
+/// activation entry is the only production caller and meets this by
+/// construction.
 pub fn serve(channel: &OwnedFd, unit: &str, invocation: &str, shim_path: &Path) -> io::Result<()> {
     require(
         !invocation.is_empty(),
