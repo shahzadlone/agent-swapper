@@ -180,6 +180,7 @@ dependencies = [
  "agentswapper-linux-runtime",
  "rustix",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

@@ -2,8 +2,11 @@
 //! module: the durable run intent is committed before the launch gate, the
 //! durable spawn observation before the held-exec release, and the
 //! authenticated exit report is audited before the connection closes. The
-//! caller supplies the journal implementation; a production Store adapter
-//! needs an independent review (see `launch_client::Journal`).
+//! withdrawal precedes the retirement observation on every path, so a
+//! failure after the intent withdraws the channel, observes the retirement
+//! and commits it with no exit: the client never hands a run back
+//! unresolved without having first tried to settle it. The caller supplies
+//! the journal implementation (see `launch_client::Journal`).
 use crate::launch_client::Journal;
 use agentswapper_linux_manager::{
     BoundService, LoadedSocket, ServiceClaim, ServicePolicy, SocketPolicy,

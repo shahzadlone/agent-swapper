@@ -442,17 +442,20 @@ mod tests {
             store.record_scope_fixture(retirement),
             Err(Error::ScopeAlreadyRetired)
         ));
-        // A retirement that claims a different exit cannot inherit the commit.
-        assert!(
-            store
-                .record_scope_fixture(Event::LinuxScopeRetired {
+        // A retirement that claims a different exit cannot inherit the commit,
+        // and neither can one that claims no exit at all: both are foreign
+        // events against a run that already resolved.
+        for claimed in [Some(TargetExit::Code { code: 8 }), None] {
+            assert!(matches!(
+                store.record_scope_fixture(Event::LinuxScopeRetired {
                     id: run.clone(),
                     scope,
                     binding: binding(),
-                    exit: Some(TargetExit::Code { code: 8 }),
-                })
-                .is_err()
-        );
+                    exit: claimed,
+                }),
+                Err(Error::CorruptRegistry)
+            ));
+        }
         let record = store.run(&run).unwrap();
         assert_eq!(record.exit_code, Some(7));
         assert_eq!(record.custody, ProcessCustody::LocalScopeEmpty);

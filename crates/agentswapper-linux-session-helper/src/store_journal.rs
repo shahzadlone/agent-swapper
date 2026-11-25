@@ -6,6 +6,7 @@
 //! independently observed scope retirement. A failed commit leaves the run
 //! unresolved and blocks profile reuse; the review's retry contract retains
 //! the original retirement value for in-place retry.
+use agentswapper_core::Error;
 use agentswapper_core::domain::{Alias, Harness};
 use agentswapper_core::store::linux_scope::TargetExit;
 use agentswapper_core::store::{ProfileLease, Store};
@@ -60,12 +61,14 @@ struct LiveRun {
     lease: Option<ProfileLease>,
     scope: Uuid,
     pending: Option<agentswapper_core::store::linux_scope::PendingLinuxScope>,
-    // A failed retirement keeps both the pending association and the
-    // original observation, so a retry reuses the authority it was granted
-    // instead of demanding a new one.
+    // A failed retirement keeps the pending association, the original
+    // observation and the exit that went with it, so a retry reuses the whole
+    // tuple it was granted instead of accepting a new one: a fresh receipt
+    // belongs to another launch and must never be charged to this run.
     retiring: Option<(
         agentswapper_core::store::linux_scope::PendingLinuxScope,
         RetiredService,
+        Option<TargetExit>,
     )>,
 }
 
@@ -169,24 +172,37 @@ impl Journal for StoreJournal {
         let live = state
             .as_mut()
             .ok_or_else(|| io::Error::other("the run already resolved"))?;
-        let (pending, retired) = match live.retiring.take() {
+        let (pending, retired, exit) = match live.retiring.take() {
+            // A retry runs on the retained tuple, whatever the caller passes.
             Some(retained) => retained,
             None => (
                 live.pending
                     .take()
                     .ok_or_else(|| io::Error::other("the scope was never bound"))?,
                 retired,
+                mapped(exit),
             ),
         };
-        match store.retire_linux_scope(&pending, retired, mapped(exit)) {
+        match store.retire_linux_scope(&pending, retired, exit) {
             Ok(()) => {
                 live.lease = None;
                 live.pending = None;
+                live.retiring = None;
+                *state = None;
+                Ok(())
+            }
+            // The retirement is already durable: a lost acknowledgement is
+            // the same commit, and reporting it as a failure would keep the
+            // lease for the rest of the process's life.
+            Err(failure) if matches!(failure.error, Error::ScopeAlreadyRetired) => {
+                live.lease = None;
+                live.pending = None;
+                live.retiring = None;
                 *state = None;
                 Ok(())
             }
             Err(failure) => {
-                live.retiring = Some((pending, failure.retired));
+                live.retiring = Some((pending, failure.retired, exit));
                 Err(other(failure.error))
             }
         }

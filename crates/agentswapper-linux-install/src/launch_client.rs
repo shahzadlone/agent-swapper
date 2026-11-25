@@ -28,9 +28,10 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 ///   exec is held, before the client releases it; its `Ok(())` is the only
 ///   launch-gate authority the client receives. It receives the launch's
 ///   one-use `ServiceKey` by value: the adapter moves it into the durable
-///   scope association, where it cannot be extracted or serialized. A failed
-///   commit consumes the key into the adapter's pending association; the run
-///   stays unresolved and is never re-launched.
+///   scope association, where it cannot be extracted or serialized. The
+///   intent is the durable run's only beginning: a failed commit means no run
+///   was planned for this launch, so nothing blocks the profile and the
+///   client never gates the target.
 /// - `observe_spawn` durably records the spawn observation before the client
 ///   releases the held exec; an uncertain write is an error.
 /// - `audit_exit` commits the one-use retirement value together with the
@@ -41,13 +42,16 @@ fn require(ok: bool, message: &str) -> io::Result<()> {
 ///   authenticated exit to report and commits none, so an ordinary error
 ///   never leaves the run unresolved. The retirement value authorizes
 ///   exactly this commit and no other. A failure is retry-safe: the adapter
-///   retains the retirement value for in-place retry, and the run's profile
-///   stays blocked until the commit lands.
+///   retains the pending association, the retirement value and the exit that
+///   went with them, and a retry reuses that whole tuple rather than a fresh
+///   receipt that belongs to another launch. The run's profile stays blocked
+///   until the commit lands.
 ///
 /// An independent review (2026-11-22) fixed these signatures and the client's
-/// closure order; a production Store adapter must additionally decide the
-/// durable recording of a scoped run's target exit, which today lives only
-/// in this journal's records and the client's memory.
+/// closure order. The 2026-11-25 review of the restart-recovery groundwork
+/// changed two of them: the intent and the scope binding commit in one
+/// transaction, and the exit is optional so a failed launch settles its run.
+/// `docs/continuation.md` records that delta.
 pub trait Journal {
     fn confirm_intent(&self, invocation: &str, nonce: &str, key: ServiceKey) -> io::Result<()>;
     fn observe_spawn(&self, invocation: &str, child: u32) -> io::Result<()>;

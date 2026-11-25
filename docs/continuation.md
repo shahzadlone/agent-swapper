@@ -1027,3 +1027,67 @@ drain on a shim refusal and the `guardian:` narration lines in
 `aswp-trace` remnants exist. Rust build caches were cleaned at the
 checkpoint boundary (workspace target plus the evaluation target);
 recovery reported in the handoff note.
+
+## Restart-recovery groundwork review (2026-11-25, second pass)
+
+The design survey for authenticated restart recovery (independent, read
+only: every claim below carries a file:line in the survey record) found
+three defects that block the profile after ordinary errors, not only after
+crashes. They are fixed on `main` in `6f1a621`, and an independent review
+(2026-11-25, sol) required two corrections to that commit before it was
+accepted: the adapter's retry had to reuse the exit it was given, and the
+lost-acknowledgement tests had to name their refusal. Both are in the same
+line of work; the survey's own authority questions are answered below.
+
+- **The durable run existed before anything could resolve it.**
+  `StoreJournal::open` planned the run (`RunPlanned` with a fresh linux
+  cgroup scope) and only then connected, claimed the signal owner and bound
+  the scope. Every refusal before the intent - an unclaimable signal owner
+  under `nohup`, a refusing endpoint, a terminal that closes - therefore left
+  an unfinished run that blocked the profile until an operator attested it
+  stopped (`registry recover --confirm-stopped`). The intent and its scope
+  binding now commit in one transaction (`Store::begin_linux_run`,
+  `record_events_with_scope`), so the journal's open takes only the lease and
+  a launch that never reaches its intent leaves nothing durable behind. This
+  changes the failure semantics of the 2026-11-22 mapping recorded above: the
+  mapping's ordering is unchanged, but "a failed intent leaves an unresolved
+  run" is no longer true, because the intent is now the run's beginning.
+- **The client abandoned the scope on every post-intent error.** The relay's
+  verdict is captured instead of returned, the control channel is dropped,
+  the original scope's retirement is observed on the retained binding and
+  handles, and only then is the relay's error propagated; the retirement
+  commits with no authenticated exit. A failed launch now reports its own
+  failure after its run resolves, and no path can commit an exit that the
+  nonce-bound report did not authorize. A failing retirement observation is
+  the one case that still leaves the run unresolved, which is the only honest
+  outcome: nothing observed the scope's closure.
+- **The retry contract was documented but not implemented.** `audit_exit`
+  discarded the failed retirement value. The adapter now retains the pending
+  association, the original observation and the exit as one tuple, retries
+  from that tuple rather than from a caller's fresh receipt (a receipt
+  belongs to one launch and cannot be charged to another run), and treats an
+  already-durable retirement as terminal: a lost acknowledgement is that
+  same commit, and reporting it as failure would hold the lease for the rest
+  of the process's life. `audit_exit` takes the exit as an option for the
+  same reason the settle path needs it.
+- **A lost acknowledgement with a known exit was reported as corruption.**
+  The duplicate recognition compared only `exit_code IS NULL`. It now matches
+  the recorded exit as well as the exact event payload, so a retry carrying a
+  known exit recognizes its own commit, while a retirement claiming a
+  different exit - or none - still fails closed.
+
+Evidence: `Store` fixtures for the atomic pair (a rejected binding takes its
+run with it) and for the lost acknowledgement with a known exit versus a
+foreign one; an adapter test that a launch which never reaches its intent
+leaves the profile leasable; the workspace suite, clippy and fmt green
+locally. The client's settle path has no local harness - it needs the real
+guardian - so its production coverage belongs with the restart-recovery
+evidence, where a withdrawn channel is a precondition of every scenario.
+
+Still open, deliberately: recovery of a run whose client died is a new
+authority boundary (`RecoveredService`), not a reuse of `retire_linux_scope`,
+and it stays unimplemented until its own independent review approves that
+boundary. The survey's open questions are recorded with it: whether per-boot
+kernfs inode uniqueness is documented as an assumption, whether recovery
+requires an observed pid, and whether the recovered outcome gets its own
+custody wording or reuses `LocalScopeEmpty`.
