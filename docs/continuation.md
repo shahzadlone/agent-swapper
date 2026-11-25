@@ -19,7 +19,10 @@ a resume point, not release approval.
   default builds. This does not yet test pathname replacement during connection.
 - The fresh-entry alternative is preserved in
   [linux-fresh-entry-design.md](linux-fresh-entry-design.md); it is a proposal,
-  not an implemented topology. Production managed launch remains disabled.
+  not an implemented topology. Production managed launch remains disabled for
+  users and release: nothing enables it for a user's shell or in a release
+  artifact, though the experimental `aswp managed-launch` CLI entry exists and
+  hosted CI drives it end to end (see the 2026-11-25 section below).
 
 ## Evidence and first action on resume
 
@@ -408,7 +411,7 @@ Next implementation work:
 1. The interactive relay qualification: raw mode entry/exit, resize
    (TIOCSWINSZ backhaul), shell stop/bg/fg with the outer terminal, hidden
    input — per the qualified managed_terminal_relay fixture, adapted to the
-   production channel.
+   production channel. (Closed in the 2026-11-25 session.)
 2. The production Store adapter behind the `Journal` seam + CLI wiring.
 3. The session-helper role and authenticated restart recovery.
 
@@ -427,7 +430,7 @@ Next implementation work:
 1. The interactive relay qualification on a real pty (the hosted control
    can wrap the client in `script` to give it a tty): shell stop/bg/fg,
    hidden input, resize evidence — per the qualified
-   managed_terminal_relay fixture.
+   managed_terminal_relay fixture. (Closed in the 2026-11-25 session.)
 2. The production Store adapter behind the `Journal` seam + the CLI wiring.
 3. The session-helper role and authenticated restart recovery.
 
@@ -494,7 +497,8 @@ Next implementation work:
 2. The CLI wiring (`aswp` subcommands exec'ing the installed helpers per
    the fresh-entry design; the CLI never links the transport).
 3. Shell stop/bg/fg through the relay (the qualified fixture's job-control
-   evidence adapts to the production channel).
+   evidence adapts to the production channel). (Closed in the 2026-11-25
+   session.)
 4. Authenticated restart recovery.
 
 ## Store adapter readiness (independent review, 2026-11-22)
@@ -556,7 +560,8 @@ Next implementation work:
    never links the transport), with the profile/alias selection coming from
    the caller's configuration.
 2. Shell stop/bg/fg through the production relay (the qualified fixture's
-   job-control evidence adapts to the production channel).
+   job-control evidence adapts to the production channel). (Closed in the
+   2026-11-25 session.)
 3. Authenticated restart recovery.
 4. The real-provider cells (Claude/Codex/Kimi subscriptions available; the
    deferred disposable-profile request triggers once the provider-free
@@ -583,8 +588,11 @@ Next implementation work:
    control switches to `aswp managed-launch` through the installed
    session-helper image (installing the session-helper image into the
    manifest's role) and requires the durable journal records plus the
-   pty relay evidence through the fresh-exec composition.
-2. Shell stop/bg/fg through the production relay.
+   pty relay evidence through the fresh-exec composition. (Closed: the
+   control landed in `41d998d`..`d65cfd0`; the 2026-11-25 session added
+   the pty relay evidence it requires.)
+2. Shell stop/bg/fg through the production relay. (Closed in the
+   2026-11-25 session.)
 3. Authenticated restart recovery.
 4. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
@@ -607,7 +615,8 @@ Next implementation work:
 
 Next implementation work:
 1. Shell stop/bg/fg through the production relay (the qualified fixture's
-   job-control evidence adapts to the production channel).
+   job-control evidence adapts to the production channel). (Closed in the
+   2026-11-25 session.)
 2. Authenticated restart recovery.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
@@ -687,7 +696,8 @@ last provider-free gate before the real-provider work begins.
 Next implementation work:
 1. The production relay composition's remaining interactive evidence
    (nested jobs, hidden input, long sessions) — adapted from the qualified
-   fixture's owned-PTY cases to the production channel.
+   fixture's owned-PTY cases to the production channel. (Closed in the
+   2026-11-25 session.)
 2. Authenticated restart recovery.
 3. The candidate packaging's helper-asset inclusion.
 4. The real-provider cells (the deferred disposable-profile request
@@ -702,13 +712,22 @@ Next implementation work:
   the comparison; other targets keep their two-binary archives; the
   verifier's executable-mode check covers the helpers when present). An
   administrator can now install a full managed-launch deployment from a
-  candidate. Full pipeline passed at `7d4c5cf`
-  ([45315043782](https://github.com/shahzadlone/agent-swapper/actions/runs/45315043782)).
+  candidate. That commit's own run is a failure, not a pass: `7d4c5cf`
+  ([45315043782](https://github.com/shahzadlone/agent-swapper/actions/runs/45315043782))
+  finishes `failure` because `linux-manager-evidence (ubuntu-24.04)` failed
+  its step 22, "Evaluate fixed-user socket activation" (every candidate,
+  reproduce-candidate and attest job passed, and the ubuntu-22.04 manager
+  job passed, so the helper-asset packaging evidence itself stands). The
+  green round for this work is `8b920c0`
+  ([45322498534](https://github.com/shahzadlone/agent-swapper/actions/runs/45322498534)),
+  which is `7d4c5cf` plus the annotation and lifecycle-timeout corrections
+  below and whose every job concluded `success`.
 
 Next implementation work:
 1. The production relay composition's remaining interactive evidence
    (nested jobs, hidden input, long sessions) — adapted from the qualified
-   fixture's owned-PTY cases to the production channel.
+   fixture's owned-PTY cases to the production channel. (Closed in the
+   2026-11-25 session.)
 2. Authenticated restart recovery.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
@@ -721,12 +740,14 @@ Next implementation work:
   minutes for the three launch controls. The full pipeline passed at
   `8b920c0`
   ([45322498534](https://github.com/shahzadlone/agent-swapper/actions/runs/45322498534));
-  an earlier run of the same commit had timed out — the composition's
-  three launch controls need the headroom on slower runners.
+  that SHA has exactly one run, so no earlier same-commit timeout exists —
+  the composition's three launch controls keep the headroom on slower
+  runners.
 
 Next implementation work:
 1. The production relay composition's remaining interactive evidence
-   (nested jobs, hidden input, long sessions).
+   (nested jobs, hidden input, long sessions). (Closed in the 2026-11-25
+   session.)
 2. Authenticated restart recovery.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
@@ -743,17 +764,24 @@ The seventh session recorded the shim "acquires the target session without
 inheriting a controlling terminal". That shape could not survive an outer
 foreground handover: a pre-handoff master close SIGHUPs the pty's foreground
 group, and the acquisition order made that group the guardian itself (an
-empirical kill of a unit test). The guardian now owns the session in two
-halves: `prepare_session` runs before the spawn (default-disposition check,
-conditional `setsid`, tty-inheritance refusal, and a stop-signal block mask
-the shim must inherit as its witness), and `grant_session` runs after the
-kernel's exec trap delivers the trace-stop (`TIOCSCTTY` with argument zero,
-`tcsetpgrp` to the shim's own group, and read-back verification), so the
-guardian's own group is never the pty's foreground. The shim keeps its exec
-gated on the slave/nonce/envelope transfer and verifies the whole topology
+empirical kill of a unit test). The guardian now owns the session in three
+steps that bracket the spawn in `launch.rs`: `prepare_session` runs before
+anything exists (default-disposition check, conditional `setsid`,
+tty-inheritance refusal, and a block on the whole seven-signal job
+vocabulary — `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTSTP`, `SIGTTIN`, `SIGTTOU`
+and `SIGCHLD`, `job_control.rs`'s `JOB_SIGNALS`), `bind_session` then binds
+the session's controlling terminal before the fork (`TIOCSCTTY` with
+argument zero; a child inherits the controlling-terminal link only at fork
+time, so the bind must precede the spawn), and `grant_foreground` runs after
+the kernel's exec trap delivers the trace-stop (`tcsetpgrp` to the shim's
+own group plus read-back verification). The kernel gives a fresh
+controlling terminal's foreground to the session leader, so the guardian's
+own group IS the terminal's foreground between the bind and the grant; the
+grant is what ends that. The shim keeps its exec gated on the
+slave/nonce/envelope transfer and verifies the whole topology
 (`getsid == getppid`, its own group, the slave's session is the parent's,
-the slave's foreground is its own group) plus the inherited blocked-stop
-mask, clearing that mask only immediately before `exec`.
+the slave's foreground is its own group) plus the inherited blocked
+7-signal mask, clearing that mask only immediately before `exec`.
 
 One evaluated deviation: the foreground grant now precedes the run gate.
 No bypass exists — the slave/nonce/envelope transfer remains the only exec
@@ -815,16 +843,18 @@ report path, ended with SIGINT so the report shape is `Signal`, while
 target past every admission window) and long-stopped (a 70-second hold
 across the stop/resume path, with the same mode audits before and after
 the hold). Both client paths (`aswp managed-launch` and the disposable
-`activation_client`) run all scenarios; the lifecycle step's timeout rose
-from 14 to 25 minutes. The job-control, hidden-input, nested-jobs and
-raw-byte mechanics were validated locally against a fake client; the
-real guardian path is hosted-CI-only (no root/systemd on the developer
-machine).
+`activation_client`) run all scenarios. The step budgets here only ever
+became effective later: the job's own 10-minute cap was the real ceiling,
+so `7897d3e` raised it to 30, `ea44547` to 45, and `259aff3` brought the
+job's explicit step budgets back inside that cap (lifecycle 15 minutes,
+staging 4, 36 in total). The job-control,
+hidden-input, nested-jobs and raw-byte mechanics were validated locally
+against a fake client; the real guardian path is hosted-CI-only (no
+root/systemd on the developer machine).
 Local gates green at the time of writing: the full workspace suite
 including the new harness-less fresh-process regression, clippy and fmt
 (`setpriv --inh-caps=-all` prefix required locally; the inherited CapInh
-bit defeats `scope_observation` identically at clean HEAD). Full
-pipeline evidence is to be appended once the pushed run completes.
+bit defeats `scope_observation` identically at clean HEAD).
 
 ## Re-review round (all six findings incorporated)
 
@@ -844,7 +874,7 @@ finding is now addressed in code:
 2. Feeder outcomes could vanish into a discarded `JoinHandle` return.
    Every feeder exit path now funnels exactly one final word through the
    status channel; the relay waits one bounded cycle (`FEEDER_FINAL`,
-   300 ms) for it after the shutdown flag and refuses even an
+   500 ms) for it after the shutdown flag and refuses even an
    authenticated target end on a feeder failure. Silence stays the one
    accepted case: a feeder wedged in a full master write ends with the
    process, never reporting.
@@ -945,8 +975,12 @@ diagnosis and the preceding fix chain, in order:
   treat `--` as the program and refuse "invalid Linux launch envelope".
   With it gone, the pty control's managed and disposable scenarios -
   hidden-input, raw-bytes, nested-jobs, job-control, long-active,
-  long-stopped - all passed on both runners. The strace instrumentation
-  and its manifest-digest repair were retired in `9cb3ac0`.
+  long-stopped - all passed on both runners at `988beae`
+  ([45535617406](https://github.com/shahzadlone/agent-swapper/actions/runs/45535617406),
+  lifecycle step green on ubuntu-22.04 and ubuntu-24.04); `f72a5f1`'s own
+  round ([45517591514](https://github.com/shahzadlone/agent-swapper/actions/runs/45517591514))
+  was cancelled mid-step and carries no pty evidence. The strace
+  instrumentation and its manifest-digest repair were retired in `9cb3ac0`.
 - `45e4e71` hardened the launch phase: the guardian blocks the whole
   job-control vocabulary during launch (mirroring the qualified
   fixture's `blocked_job_signals`; the shim witnesses the inherited
@@ -962,16 +996,29 @@ Run-level status of the same round: the matrix run `45535617406`
 finishes `failure` because the separate `test (ubuntu-latest)` job hit
 a one-off `launch_protocol::tests::stop_notices_and_resume...`
 BrokenPipe on the new `ubuntu26` preview image (instant EPIPE, first
-occurrence in every prior green round, 60/60 locally). Retrigger
-rounds after it (`c3862e6` run 45539037326, and later retriggers) were
-external cancellation mid-flight. Four later rounds met the same hand (
-`c3862e6` run 45539037326 cancelled early; `576811d` run 45542168722
-and docs head `56f1911` run 45542346656 cancelled halfway through the
-lifecycle step with every earlier step green on both runners). The
-lifecycle evidence above stands on the completed round; nothing in the
-cancelled rounds contradicts it. If a fully-green matrix run is required
-before the next release step, retrigger once the cancellation source is
-cleared and append the run number here.
+occurrence in every prior green round, 60/60 locally). The cause was the
+test's own ordering, never the production bound check: that receive
+refuses a sequence beyond its bound before it reads, so a receiver thread
+that exited first closed its endpoint and the parent's send reported
+`BrokenPipe` over the real refusal. `40d0571` reworked the helpers and
+`ea44547` split them into two layers - a fixture failure that must not
+happen and the receiver's verdict that a refusal case asserts - so a
+broken fixture can no longer pass as a refusal.
+
+Every later round that stopped mid-flight did so at 10.1-10.4 minutes in
+exactly the two `linux-manager-evidence` jobs while other jobs in the same
+runs finished later, so no run-level cancellation existed; the job's own
+10-minute cap was the canceller (`c3862e6` run 45539037326, `576811d` run
+45542168722, docs head `56f1911` run 45542346656). With the cap at 30
+minutes the round went green: `40d0571`
+([45710066875](https://github.com/shahzadlone/agent-swapper/actions/runs/45710066875))
+concluded `success` on every job, with `linux-manager-evidence` taking
+14m22s on ubuntu-22.04 and 13m46s on ubuntu-24.04 - the lifecycle step
+464 s and 452 s, fixed-user socket activation 229 s and 218 s - and
+`test (ubuntu-latest)` green in 4m23s. Those durations are two to five
+times the observed steps' budgets under the old cap, which is why the cap
+and not the step budgets was the ceiling; `259aff3` then trimmed the
+lifecycle budget to twice its slowest observed run.
 
 Cleanup at this checkpoint: the diagnostic strace/annotation
 scaffolding is gone from `.github/workflows/ci.yml`; the master-residue

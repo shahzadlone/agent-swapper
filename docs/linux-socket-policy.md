@@ -4,7 +4,9 @@ This candidate verifies the socket configuration reported by the authenticated
 system manager against a retained installation selection. Observing that policy
 does not connect or start a service. A separate checked connection operation may
 activate the ordinary guardian, but sends no bytes and establishes no process
-custody. Production managed launch remains disabled.
+custody. Production managed launch remains disabled for users and release: no
+user-facing path or release artifact enables it, although the experimental
+`aswp managed-launch` CLI entry exists and hosted CI drives it end to end.
 
 `SocketPolicy::installed` derives the unit, endpoint and ordinary UID/GID from
 the selection. The socket and service template must share the same installed

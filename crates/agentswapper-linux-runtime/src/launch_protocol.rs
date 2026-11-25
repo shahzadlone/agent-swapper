@@ -667,9 +667,9 @@ mod tests {
     /// delivery into `BrokenPipe` while the refusal stays the receiver's error.
     ///
     /// This models the shape both production peers actually use: the record may
-    /// already be queued when the receive starts (`control_event` peeks it at
-    /// `crates/agentswapper-linux-install/src/client.rs`, and the guardian's
-    /// readiness check precedes its grant receive), so a valid frame must be
+    /// already be queued when the receive starts (`peek_queued_control` reads
+    /// it at `crates/agentswapper-linux-install/src/client.rs`, and the
+    /// guardian's readiness check precedes its grant receive), so a valid frame must be
     /// accepted whether it was queued first or raced the receive. That a
     /// receive was *already blocked* before the peer sent is not observable
     /// from inside the process, so no control here claims it.

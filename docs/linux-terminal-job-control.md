@@ -1,5 +1,12 @@
 # Linux inner-session job control
 
+> Historical fixture record. This page describes the provider-free evaluation
+> fixture. Its topology was ported into the production launch path on
+> 2026-11-25 (see [managed terminal relay](linux-managed-terminal-relay.md) and
+> the [2026-11-25 continuation section](continuation.md)). The test counts, run
+> numbers and open gates below are historical evidence of the fixture, not
+> statements about the production channel.
+
 Status: provider-free topology experiment. It does not enable a production
 launch backend, install a service, change the caller's terminal, or complete a
 launch journal. The separately qualified `PTY1` activation fixture still gives
@@ -89,11 +96,11 @@ cases keep an independent PTY master open. Original and reopened Stores must
 still retain unresolved journal policy after the raw lease lock is released.
 These checks do not claim that terminal hangup alone proves scope retirement.
 
-Local validation passes 39 library tests, 27 binary tests, 12 coordinator guard
-tests, the extracted shared job-control example and strict Clippy. New tests
-cover stop identity/sequence validation and resume withdrawal, replay, rights
-cleanup and timeout restoration. The initial PTY2 revision at `10bd84c` passed
-both Ubuntu manager jobs in
+Local validation passed 39 library tests, 27 binary tests, 12 coordinator guard
+tests, the extracted shared job-control example and strict Clippy (historical
+fixture counts). New tests cover stop identity/sequence validation and resume
+withdrawal, replay, rights cleanup and timeout restoration. The initial PTY2
+revision at `10bd84c` passed both Ubuntu manager jobs in
 [run 41270937633](https://github.com/shahzadlone/agent-swapper/actions/runs/41270937633).
 Its full platform/package pipeline subsequently passed. Independent
 implementation review remains separately tracked.
@@ -107,7 +114,8 @@ resume locally. Its temporary SIGTTOU mask is restored on success and error;
 neither the guardian nor the outer caller's terminal is modified by this handoff.
 
 The hosted case requires the nested child's stopped state while the direct
-target remains running. The guardian's stop-notice wait must expire for its
+target remains running. The caller's own wait for the target to stop
+(`wait_stopped`, the client-side wait this fixture drove) must expire for its
 specific no-packet reason, and the other descendant must continue writing.
 The target then foregrounds/resumes its nested child, waits for normal exit,
 restores its own group and returns to the existing direct-target stop/resume
@@ -173,9 +181,11 @@ it still supplies no production launch backend or journal-completion authority.
 
 The fixed fixtures now qualify the manager-owned guardian, authenticated
 stop/resume framing, durable launch ordering and retirement of stopped or
-regrouped descendants. Remaining production integration includes arbitrary
-target signal policy, a caller-facing relay, outer-shell restoration,
-redirected streams and continued execution after handover. The separate
+regrouped descendants. Of that integration list, only the arbitrary target
+signal policy remains: the caller-facing relay, outer-shell restoration,
+redirected streams and continued execution after handover all exist in
+production now (see [managed terminal relay](linux-managed-terminal-relay.md)
+and the [2026-11-25 continuation section](continuation.md)). The separate
 [outer-terminal component](linux-outer-terminal.md) qualifies modes and shell
 job control without attaching a provider. An EIO observation alone does not
 establish retirement of every writer or safe subscription reuse.
