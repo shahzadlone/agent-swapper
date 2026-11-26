@@ -3,9 +3,14 @@
 //! run intent commits the one-use key into the durable scope association
 //! before the launch gate, the spawn observation precedes the held-exec
 //! release, and the authenticated target exit commits together with the
-//! independently observed scope retirement. A failed commit leaves the run
-//! unresolved and blocks profile reuse; the review's retry contract retains
-//! the original retirement value for in-place retry.
+//! independently observed scope retirement. A commit that reports an error
+//! leaves the run unresolved and blocks profile reuse; the error may also be
+//! a lost acknowledgement of a commit that landed, which the retry contract
+//! resolves by repeating the identical commit against the original
+//! retirement value. The adapter is bound to the invocation its own intent
+//! was committed for: it neither accepts a second intent nor settles another
+//! invocation's run, and it refuses a receipt that does not belong to its
+//! own association before consuming it.
 use agentswapper_core::Error;
 use agentswapper_core::domain::{Alias, Harness};
 use agentswapper_core::store::linux_scope::{PendingLinuxScope, TargetExit};
@@ -55,8 +60,9 @@ pub struct StoreJournal {
     // The run id exists only once the intent commits; it survives resolution
     // so the caller can report which durable run this launch was.
     run: RefCell<Option<String>>,
-    // The Store's instance identity is retained through the pending scope's
-    // own Arc; this binding keeps the adapter self-contained.
+    // A fresh `Arc` of this adapter's own, not the Store's identity: the
+    // pending scope's Arc is what keeps the Store side alive. This field only
+    // keeps the adapter self-contained.
     _instance: Arc<()>,
 }
 
@@ -165,6 +171,20 @@ impl Journal for StoreJournal {
         if !live.invocation.is_empty() || live.pending.is_some() || live.retiring.is_some() {
             return Err(io::Error::other("the journal already began its run"));
         }
+        // The invocation this adapter settles is the bound service's own, not
+        // the caller's word for it: the key it is about to consume carries
+        // the identity systemd reported.
+        let bound: String = key
+            .identity()
+            .invocation
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if invocation != bound {
+            return Err(io::Error::other(
+                "the invocation does not match the bound service identity",
+            ));
+        }
         let lease = live
             .lease
             .as_ref()
@@ -173,7 +193,7 @@ impl Journal for StoreJournal {
             .begin_linux_run(lease, live.scope, key)
             .map_err(other)?;
         *self.run.borrow_mut() = Some(pending.run_id().to_owned());
-        live.invocation = invocation.to_owned();
+        live.invocation = bound;
         live.pending = Some(pending);
         Ok(())
     }
@@ -214,13 +234,23 @@ impl Journal for StoreJournal {
             match live.retiring.take() {
                 // A retry runs on the retained tuple, whatever the caller passes.
                 Some(retained) => retained,
-                None => (
-                    live.pending
+                None => {
+                    let pending = live
+                        .pending
                         .take()
-                        .ok_or_else(|| io::Error::other("the scope was never bound"))?,
-                    retired,
-                    mapped(exit),
-                ),
+                        .ok_or_else(|| io::Error::other("the scope was never bound"))?;
+                    // The receipt must belong to this run's own association.
+                    // A foreign one is refused before the pending authority is
+                    // consumed, so it cannot poison the retained tuple and be
+                    // retried in place of the real observation.
+                    if !retired.matches(pending.key()) {
+                        live.pending = Some(pending);
+                        return Err(io::Error::other(
+                            "the retirement does not belong to this run",
+                        ));
+                    }
+                    (pending, retired, mapped(exit))
+                }
             }
         };
         let (pending, retired, exit) = retained;

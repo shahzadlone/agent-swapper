@@ -1045,7 +1045,7 @@ line of work; the survey's own authority questions are answered below.
   the scope. Every refusal before the intent - an unclaimable signal owner
   under `nohup`, a refusing endpoint, a terminal that closes - therefore left
   an unfinished run that blocked the profile until an operator attested it
-  stopped (`registry recover --confirm-stopped`). The intent and its scope
+  stopped (`aswp recover RUN --confirm-stopped`). The intent and its scope
   binding now commit in one transaction (`Store::begin_linux_run`,
   `record_events_with_scope`), so the journal's open takes only the lease and
   a launch that never reaches its intent leaves nothing durable behind. This
@@ -1058,9 +1058,11 @@ line of work; the survey's own authority questions are answered below.
   handles, and only then is the relay's error propagated; the retirement
   commits with no authenticated exit. A failed launch now reports its own
   failure after its run resolves, and no path can commit an exit that the
-  nonce-bound report did not authorize. A failing retirement observation is
-  the one case that still leaves the run unresolved, which is the only honest
-  outcome: nothing observed the scope's closure.
+  nonce-bound report did not authorize. Two cases still leave the run
+  unresolved, and both are honest: nothing observed the scope's closure, or
+  the observation succeeded and the commit that writes it never landed. The
+  error names the settlement's failure in the first case and the commit's in
+  the second.
 - **The retry contract was documented but not implemented.** `audit_exit`
   discarded the failed retirement value. The adapter now retains the pending
   association, the original observation and the exit as one tuple, retries
@@ -1094,13 +1096,27 @@ retirement receipt is not constructible by design; that coverage belongs to
 the hosted lifecycle, where the experimental CLI already drives these paths.
 
 This section was written while the review of those commits was still open.
-The review's findings were the retry entry, the second-event rollback
-assertion, the named refusals, the module and trait wording, the review
-record itself, and the production-path coverage above. All but the last are
-closed: `retry_audit` exists, the rollback fixture refuses on the binding
-using a second profile, a journal now refuses any invocation but its own and
-a second intent, and the wording above is the corrected one. Hosted
-production-path coverage is the lifecycle's and is not claimed here.
+Four review rounds followed (2026-11-25). Their findings were the retry
+entry, the second-event rollback assertion, the named refusals, the module
+and trait wording, the adapter's own-launch invariant, this record, and the
+production-path coverage above. All but the last are closed on `main`:
+`retry_audit` exists; the rollback fixture refuses on the binding using a
+second profile; a journal refuses any invocation but its own and a second
+intent; and the adapter now derives that invocation from the bound service
+identity rather than the caller's word, and refuses a receipt that does not
+belong to its own association before consuming the pending authority. The
+wording above is the corrected one.
+
+Hosted production-path coverage is wired but not yet qualified: the
+lifecycle's `installation lifecycle` step now runs
+`tools/check_linux_settlement.py`, which launches a target that cannot be
+executed - a failure committed after the intent, with the helper alive -
+and reads the Store back. It is not evidence until a hosted run of that
+step passes, and no such run had at the time of writing. What has no
+harness on any host is a receipt that belongs to another association and a
+commit that fails after its observation: neither value is constructible
+outside a live manager, so both rest on the type boundary rather than on a
+test.
 
 Recovery of a run whose client died is **not** implemented, and the review
 rejected the boundary the survey proposed. An authenticated "no unit for this
@@ -1111,7 +1127,7 @@ a `RecoveredService` would have been attestation wearing the name of an
 observation. The proof would need root-owned retirement provenance - a
 manager-side record of the closure the user cannot write - which is new
 authority for a root component and a new cross-upgrade durable surface. Until
-that is designed and reviewed, `registry recover --confirm-stopped` stays the
+that is designed and reviewed, `aswp recover RUN --confirm-stopped` stays the
 only way to clear an orphan, and stays attested rather than proved.
 `docs/linux-restart-recovery.md` records the argument, the corrected crash
 windows, and the facts a future design must start from.

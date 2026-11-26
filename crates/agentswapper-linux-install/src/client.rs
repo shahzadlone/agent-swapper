@@ -5,9 +5,12 @@
 //! been withdrawn and the original scope's retirement observed. The
 //! withdrawal precedes the observation on every path, so a failure after the
 //! intent withdraws the channel, observes the retirement and commits it
-//! without an exit; only the manager connection outlives the audit, and the
-//! successful path closes it explicitly before returning, while a failure
-//! returns before that close and leaves it to the connection's drop.
+//! without an exit. The manager connection and the original kernel handles
+//! bound by `Binding::bind` outlive the audit; the successful path closes the
+//! connection explicitly before returning, and a failure returns before that
+//! close and leaves it to the connection's drop. `close()` itself can fail,
+//! as can the signal cleanup that runs after it, so even the successful path
+//! does not promise that every resource was released cooperatively.
 //!
 //! What the client cannot promise is that every failure ends with a settled
 //! run. An observation that failed leaves nothing witnessed to commit, and a

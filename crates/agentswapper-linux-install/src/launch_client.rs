@@ -71,8 +71,9 @@ pub trait Journal {
     /// and is never reissued. `Ok(false)` means this journal retains nothing
     /// to retry, which is the case for a journal that commits in memory or
     /// for one whose run has already resolved. A journal that cannot retry
-    /// must not claim `Ok(true)`, and a retry naming another invocation is an
-    /// error rather than a second settlement.
+    /// must not claim `Ok(true)`. A retry naming another invocation is an
+    /// error for a journal that still holds an active run; a journal that has
+    /// already resolved, like the default implementation, answers `Ok(false)`.
     fn retry_audit(&self, _invocation: &str) -> io::Result<bool> {
         Ok(false)
     }

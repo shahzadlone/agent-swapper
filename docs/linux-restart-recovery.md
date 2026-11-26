@@ -17,7 +17,7 @@ against the durable `LinuxScopeBound` binding
 `crates/agentswapper-linux-manager/src/service.rs`). None of that survives the
 client's death, so the Store can no longer retire its own run: it stays
 unresolved, the profile stays blocked, and the only way out is the operator
-attestation `aswp registry recover RUN --confirm-stopped`, which records
+attestation `aswp recover RUN --confirm-stopped`, which records
 `user_attested_stopped` and proves nothing.
 
 ## What the survey proposed
@@ -61,15 +61,21 @@ only statement about which scope was ever this run's.
 
 ## What would change the answer
 
-Root-owned provenance: a record of the closure made by something the user
-cannot write. The manager and the guardian are the natural authors, because
-they already observe the scope's retirement on their own authenticated
-connection and already run as a separate identity. A design would need:
+Provenance the user cannot write: a record of the closure made by another
+identity and kept out of the user's reach. Root ownership is the obvious
+instance, not the only one - a separate service user with a write-only
+interface would answer the same question - but every variant has the same
+shape requirement. Note who does what today: the manager runs as root and
+answers the authenticated questions, the guardian runs as the launch user,
+and the client is what combines the two with its own retained kernel
+witnesses, none of which survives the client. A design would need:
 
-- the installation shape to name a root-owned, append-only retirement log,
-  bounded and rotated, keyed by the unit's invocation identity and the user;
+- the installation shape to name that append-only retirement log, bounded
+  and rotated, keyed by the unit's invocation identity and the user;
 - the manager to append exactly one record when it observes an instance's
-  scope closed, including enough to bind it to the launch that requested it -
+  scope closed, including enough to bind it to the specific run and launch
+  that asked - a record keyed only by user and invocation would let a
+  genuine receipt from another retired launch be substituted for this one -
   and nothing that would let a user cause records for launches they did not
   make;
 - the recoverer to read it (read-only, unprivileged) and to keep its own
@@ -97,20 +103,27 @@ The survey's crash-window table was wrong in ways that matter:
   not imply a state the code has not reached.
 - **No authenticated exit is durably recoverable before the commit.** The
   exit report exists in the client's memory until `audit_exit`; a crash before
-  it loses it, so any recovered outcome has no exit by construction.
+  it loses it, so any recovered outcome has no exit by construction. The
+  guardian logs a wait status of its own, which is not the nonce-bound
+  authenticated exit and cannot stand in for one.
 - **A successful retirement drops the lease before the helper exits.** The
   lease is a live-file lock, so a helper killed later leaves the profile free;
   the unresolved row is what blocks reuse, not the lock.
-- **`Binding::bind` proves the caller's own namespaces and cgroup2, not the
-  membership of what was recorded.**
+- **`Binding::bind` proves the live launch, not the record.** It checks the
+  caller's own namespaces and cgroup2 and verifies the live guardian's UID,
+  pidfd and membership of the populated scope; it says nothing about a
+  historical Store association, and nothing it binds outlives the client.
 - **Doctor must call a bound run a candidate for attestation**, never
-  "recoverable", and must change nothing.
+  "recoverable", and must change nothing. That is a constraint on any future
+  design, not work to start now.
 
 ## What stays from the survey
 
 The one-way kernel facts still bound what any future evidence must show: the
 scope cannot close out from under a live process, and an invocation identity
-never returns, so a genuinely observed closure is final. The refusals the
+never returns, so a genuinely observed closure is final - final about that
+invocation and the directory it retained, not about a reused path or about
+work a process did outside the scope before it died. The refusals the
 survey listed remain the right refusals - never an exit other than the
 nonce-bound report, never "stopped" from a pid, `/proc`, elapsed time or a
 free lease, never recovery by a system component. They are simply not
@@ -118,7 +131,7 @@ sufficient to constitute proof on their own.
 
 ## Decision
 
-- `aswp registry recover RUN --confirm-stopped` remains the only way to clear
+- `aswp recover RUN --confirm-stopped` remains the only way to clear
   an orphaned run, and it remains attested rather than proved. Nothing in the
   CLI, the helper or the docs may present it as recovery.
 - No `RecoveredService`, no `Store::recover_linux_scope`, no schema 10
