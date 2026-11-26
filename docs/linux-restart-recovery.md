@@ -16,9 +16,10 @@ against the durable `LinuxScopeBound` binding
 (`crates/agentswapper-core/src/store/linux_scope.rs`,
 `crates/agentswapper-linux-manager/src/service.rs`). Of the three, only the
 durable binding outlives the client: the pending association is in-memory, the
-retirement is observed on the client's own authenticated connection, and
-`Binding::bind` closes the handles it checked. So the Store cannot retire its
-own run from what remains: it stays
+retirement is observed on the client's own authenticated connection, and the
+handles `Binding::bind` retains - the cgroup directory, the guardian's pidfd
+and the proc directory - live only until the binding is dropped or the client
+exits. So the Store cannot retire its own run from what remains: it stays
 unresolved, the profile stays blocked, and the only way out is the operator
 attestation `aswp recover RUN --confirm-stopped`, which records
 `user_attested_stopped` and proves nothing.

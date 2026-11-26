@@ -939,10 +939,13 @@ A third pass found one follow-up: a benign stdin end consumed by `drive`
   test once duplicated the combine logic) is covered by the shared
   helper the test now calls.
 
-Next implementation work:
+Next implementation work at the time (item 2 is superseded: restart
+recovery was reviewed and rejected - see "Restart recovery" below, which
+leaves operator attestation as the only supported path and grants no
+recovery authority):
 1. Record the full pipeline evidence for this composition once the run
    completes; address any scenario failures on `main`.
-2. Authenticated restart recovery.
+2. ~~Authenticated restart recovery.~~ Superseded, not started.
 3. The real-provider cells (the deferred disposable-profile request
    triggers once the provider-free gates above close).
 
@@ -1099,13 +1102,13 @@ This section was written while the review of those commits was still open.
 Four review rounds followed (2026-11-25). Their findings were the retry
 entry, the second-event rollback assertion, the named refusals, the module
 and trait wording, the adapter's own-launch invariant, this record, and the
-production-path coverage above. All but the last are closed on `main`:
-`retry_audit` exists; the rollback fixture refuses on the binding using a
-second profile; a journal refuses any invocation but its own and a second
-intent; and the adapter now derives that invocation from the bound service
-identity rather than the caller's word, and refuses a receipt that does not
-belong to its own association before consuming the pending authority. The
-wording above is the corrected one.
+production-path coverage above. All are closed on `main`, the last only as
+of the hosted passes recorded below: `retry_audit` exists; the rollback
+fixture refuses on the binding using a second profile; a journal refuses any
+invocation but its own and a second intent; and the adapter now derives that
+invocation from the bound service identity rather than the caller's word, and
+refuses a receipt that does not belong to its own association before
+consuming the pending authority. The wording above is the corrected one.
 
 Hosted production-path coverage is qualified: the `installation lifecycle`
 step runs `tools/check_linux_settlement.py`, which launches a target that
@@ -1121,9 +1124,11 @@ phase, not the cause, so it does not by itself prove the specific `ENOENT`.
 
 The hosted Store fixtures already cross receipts and fail a commit after a
 successful observation, but they exercise the Store, not the adapter. What
-has no adapter-level harness is exactly that pair: neither value is
-constructible outside a live manager, so the adapter's two refusals rest on
-the type boundary rather than on a test of their own.
+has no adapter-level harness is exactly that pair. Neither value is
+constructible outside a live manager, and the adapter's two refusals are
+runtime identity checks, not type-level ones - a receipt carries the right
+type by construction - so nothing at this boundary is exercised until a
+hosted fixture drives `BoundService` and the adapter together.
 
 Recovery of a run whose client died is **not** implemented, and the review
 rejected the boundary the survey proposed. An authenticated "no unit for this
