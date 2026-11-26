@@ -1107,15 +1107,21 @@ identity rather than the caller's word, and refuses a receipt that does not
 belong to its own association before consuming the pending authority. The
 wording above is the corrected one.
 
-Hosted production-path coverage is wired but not yet qualified: the
-lifecycle's `installation lifecycle` step now runs
-`tools/check_linux_settlement.py`, which launches a target that cannot be
-executed - a failure committed after the intent, with the helper alive -
-and reads the Store back. It is not evidence until a hosted run of that
-step passes, and no such run had at the time of writing. The hosted Store
-fixtures already cross receipts and fail a commit after a successful
-observation, but they exercise the Store, not the adapter. What has no
-adapter-level harness on any host is exactly that pair: neither value is
+Hosted production-path coverage is qualified: the `installation lifecycle`
+step runs `tools/check_linux_settlement.py`, which launches a target that
+cannot be executed - a failure committed after the intent, with the helper
+alive - and reads the Store back. It requires the helper's own refusal status
+and exec-event diagnostic, exactly one new run settled with the local scope
+empty, no observed spawn and no authenticated exit, a three-event journal
+delta (intent, binding, retirement), nothing unfinished, and a second launch
+on the same profile reaching its target. The step passed in the runs for
+`725de95` (45726621377) and `9db2c94` (45727788440). What that supports is
+post-intent settlement without an observed exec; the diagnostic names the
+phase, not the cause, so it does not by itself prove the specific `ENOENT`.
+
+The hosted Store fixtures already cross receipts and fail a commit after a
+successful observation, but they exercise the Store, not the adapter. What
+has no adapter-level harness is exactly that pair: neither value is
 constructible outside a live manager, so the adapter's two refusals rest on
 the type boundary rather than on a test of their own.
 
