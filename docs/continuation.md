@@ -1218,6 +1218,11 @@ already exist in `crates/agentswapper-core/src/store/linux_activated_journal_tes
 
 ## How to verify a change here
 
+- Local gates need only a Linux box, rustup and python3: the toolchain comes
+  from `rust-toolchain.toml`, so a plain `cargo` is equivalent. The
+  `setpriv --inh-caps=-all` prefix in the commands below is a local hardening
+  convention, not a project requirement. The hosted-only fixtures additionally
+  need root, systemd and the manager-evidence build.
 - Local gates: `setpriv --inh-caps=-all cargo +1.98.0 fmt --all --check`,
   `... clippy --locked --workspace --all-targets -- -D warnings`,
   `... test --locked --workspace`, plus
