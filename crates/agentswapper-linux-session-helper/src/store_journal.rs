@@ -3,10 +3,10 @@
 //! run intent commits the one-use key into the durable scope association
 //! before the launch gate, the spawn observation precedes the held-exec
 //! release, and the authenticated target exit commits together with the
-//! independently observed scope retirement. A commit that reports an error
-//! leaves the run unresolved and blocks profile reuse; the error may also be
-//! a lost acknowledgement of a commit that landed, which the retry contract
-//! resolves by repeating the identical commit against the original
+//! independently observed scope retirement. A commit that did not land
+//! leaves the run unresolved and blocks profile reuse. A reported error may
+//! also be a lost acknowledgement of a commit that did land, which the retry
+//! contract resolves by repeating the identical commit against the original
 //! retirement value. The adapter is bound to the invocation its own intent
 //! was committed for: it neither accepts a second intent nor settles another
 //! invocation's run, and it refuses a receipt that does not belong to its
@@ -60,9 +60,9 @@ pub struct StoreJournal {
     // The run id exists only once the intent commits; it survives resolution
     // so the caller can report which durable run this launch was.
     run: RefCell<Option<String>>,
-    // A fresh `Arc` of this adapter's own, not the Store's identity: the
-    // pending scope's Arc is what keeps the Store side alive. This field only
-    // keeps the adapter self-contained.
+    // A token of the adapter's own, carrying no authority. The Store's
+    // instance identity travels in the pending scope's `store` field, and the
+    // `Mutex<Store>` above keeps the Store itself alive.
     _instance: Arc<()>,
 }
 

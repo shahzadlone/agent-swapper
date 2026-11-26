@@ -14,8 +14,11 @@ together. `Store::retire_linux_scope` accepts only the in-memory
 `RetiredService` the manager observed on its own authenticated connection and
 against the durable `LinuxScopeBound` binding
 (`crates/agentswapper-core/src/store/linux_scope.rs`,
-`crates/agentswapper-linux-manager/src/service.rs`). None of that survives the
-client's death, so the Store can no longer retire its own run: it stays
+`crates/agentswapper-linux-manager/src/service.rs`). Of the three, only the
+durable binding outlives the client: the pending association is in-memory, the
+retirement is observed on the client's own authenticated connection, and
+`Binding::bind` closes the handles it checked. So the Store cannot retire its
+own run from what remains: it stays
 unresolved, the profile stays blocked, and the only way out is the operator
 attestation `aswp recover RUN --confirm-stopped`, which records
 `user_attested_stopped` and proves nothing.
@@ -109,7 +112,7 @@ The survey's crash-window table was wrong in ways that matter:
 - **A successful retirement drops the lease before the helper exits.** The
   lease is a live-file lock, so a helper killed later leaves the profile free;
   the unresolved row is what blocks reuse, not the lock.
-- **`Binding::bind` proves the live launch, not the record.** It checks the
+- **`Binding::bind` authenticates the live launch, not its history.** It checks the
   caller's own namespaces and cgroup2 and verifies the live guardian's UID,
   pidfd and membership of the populated scope; it says nothing about a
   historical Store association, and nothing it binds outlives the client.
@@ -138,7 +141,8 @@ sufficient to constitute proof on their own.
   `LinuxScopeRecovered` event. The proposed events stay unimplemented, so no
   migration and no schema bump is owed.
 - The next step, if crash recovery is wanted, is a reviewed design for
-  root-owned retirement provenance. It is not started.
+  retirement provenance the user cannot write - root-owned, or held by a
+  separate identity with a write-only interface. It is not started.
 
 ## Evidence for this document
 

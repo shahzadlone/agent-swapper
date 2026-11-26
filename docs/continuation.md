@@ -1112,11 +1112,12 @@ lifecycle's `installation lifecycle` step now runs
 `tools/check_linux_settlement.py`, which launches a target that cannot be
 executed - a failure committed after the intent, with the helper alive -
 and reads the Store back. It is not evidence until a hosted run of that
-step passes, and no such run had at the time of writing. What has no
-harness on any host is a receipt that belongs to another association and a
-commit that fails after its observation: neither value is constructible
-outside a live manager, so both rest on the type boundary rather than on a
-test.
+step passes, and no such run had at the time of writing. The hosted Store
+fixtures already cross receipts and fail a commit after a successful
+observation, but they exercise the Store, not the adapter. What has no
+adapter-level harness on any host is exactly that pair: neither value is
+constructible outside a live manager, so the adapter's two refusals rest on
+the type boundary rather than on a test of their own.
 
 Recovery of a run whose client died is **not** implemented, and the review
 rejected the boundary the survey proposed. An authenticated "no unit for this
@@ -1124,9 +1125,11 @@ invocation" plus a missing or different cgroup directory are negatives about
 identifiers the caller chose, checked against a Store the same user can
 write; they cannot distinguish a closed scope from a record that says so, so
 a `RecoveredService` would have been attestation wearing the name of an
-observation. The proof would need root-owned retirement provenance - a
-manager-side record of the closure the user cannot write - which is new
-authority for a root component and a new cross-upgrade durable surface. Until
+observation. The proof would need retirement provenance the user cannot
+write, held by another identity: root-owned, or a separate service user with a
+write-only interface. Any such record is new authority for a privileged
+component and a new cross-upgrade durable surface, and it must be bound to the
+specific run and launch, not just to the user and invocation. Until
 that is designed and reviewed, `aswp recover RUN --confirm-stopped` stays the
 only way to clear an orphan, and stays attested rather than proved.
 `docs/linux-restart-recovery.md` records the argument, the corrected crash
