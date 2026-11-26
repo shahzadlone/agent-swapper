@@ -1175,6 +1175,10 @@ Evidence recorded for the settlement gate:
   four connection-race controls on both images.
 - `45742793962` also ran the `installation lifecycle` step green on both
   `linux-manager-evidence` legs after the settlement control was wired.
+- `45748062334` (`34d054c`): the whole pipeline green on the handoff commit,
+  18/18 jobs, both manager legs, including the new unit control for a pathname
+  redirected under an untouched inode. Any later docs-only commit carries no
+  code change; check its own run before citing the tree.
 
 Settlement invariants worth knowing before touching that code: the intent and
 its scope bind atomically (`Store::begin_linux_run`); every post-intent failure
