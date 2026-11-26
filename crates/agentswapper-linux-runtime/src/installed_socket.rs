@@ -60,12 +60,23 @@ impl ProtectedSocket {
     pub fn require_current(&self, path: &Path) -> io::Result<()> {
         self.require_unchanged()?;
         let current = Self::open(path, self.user, self.group)?;
+        self.require_names(&current)?;
+        self.require_unchanged()
+    }
+    /// The independent observation must be the retained inode. This is a
+    /// separate decision from [`Self::require_unchanged`] rather than a
+    /// consequence of it: the retained inode can stay untouched while the
+    /// pathname is redirected, because replacing an ancestor directory moves
+    /// the leaf entry without modifying the socket itself. The comparison
+    /// proves the pathname named the retained inode at some instant during
+    /// this call; it cannot pin that mapping after returning.
+    fn require_names(&self, current: &Self) -> io::Result<()> {
         if current.stamp != self.stamp {
             return Err(io::Error::other(
                 "socket path no longer names the retained endpoint",
             ));
         }
-        self.require_unchanged()
+        Ok(())
     }
     fn require_unchanged(&self) -> io::Result<()> {
         if Stamp::read(&self.file)? != self.stamp {
@@ -131,6 +142,41 @@ mod tests {
         assert_ne!(before_unlink.stamp, replacement.stamp);
         // The public reader must reject this unprotected temporary ancestry,
         // even though the leaf itself has the expected identity and mode.
+        assert!(ProtectedSocket::open(&path, user, group).is_err());
+        Ok(())
+    }
+    #[test]
+    fn refuses_a_pathname_redirected_under_an_untouched_inode() -> io::Result<()> {
+        // The strongest replacement: the retained socket is never modified, so
+        // its own handle still matches. Only replacing an ancestor directory
+        // moves the leaf entry - here `run/` is renamed and recreated with an
+        // impostor - which leaves every field of the retained inode as it was.
+        let root = tempfile::tempdir()?;
+        let directory = root.path().join("run");
+        std::fs::create_dir(&directory)?;
+        let path = directory.join("endpoint");
+        let _original = UnixListener::bind(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let (user, group) = (
+            rustix::process::getuid().as_raw(),
+            rustix::process::getgid().as_raw(),
+        );
+        let retained = ProtectedSocket::from_file(leaf(&path)?, user, group)?;
+        retained.require_names(&retained)?;
+        let untouched = retained.stamp;
+        std::fs::rename(&directory, root.path().join("moved"))?;
+        std::fs::create_dir(&directory)?;
+        let _impostor = UnixListener::bind(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        // The retained handle cannot see the redirect at all.
+        retained.require_unchanged()?;
+        assert_eq!(retained.stamp, untouched);
+        let impostor = ProtectedSocket::from_file(leaf(&path)?, user, group)?;
+        assert_ne!(impostor.stamp, untouched);
+        assert!(retained.require_names(&impostor).is_err());
+        // `require_current` itself needs protected ancestry, which a temporary
+        // directory cannot provide: this control covers the decision it makes,
+        // and the hosted bind-mount controls cover the resolution end to end.
         assert!(ProtectedSocket::open(&path, user, group).is_err());
         Ok(())
     }

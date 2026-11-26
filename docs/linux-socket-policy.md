@@ -71,6 +71,17 @@ selected unit/endpoint/identity/invocation. The controller independently checks
 the invocation against the manager, and requires zero accepted connections and
 an empty worker directory throughout the observation controls.
 
+An ordinary unit control covers the same redirect without administrator
+privileges: it retains a socket, renames the directory that holds it and
+recreates that directory with an impostor of identical identity and mode. The
+retained inode is never modified, so its own handle still matches; only the
+pathname moved. The retained observation passes, the impostor's observation
+differs, and the pathname-to-inode comparison refuses. That comparison is a
+separate decision in `ProtectedSocket`, not a consequence of re-reading the
+handle, and the control fails if it collapses back into one. The resolution
+end to end needs conforming root-owned ancestry, so the hosted controls above
+remain the evidence for it.
+
 The hosted controller changes only its owned unit's timestamp, then opens a
 fresh selection. The retained contents still match the manifest, but stale
 loaded configuration must refuse until a daemon reload. A second control holds
