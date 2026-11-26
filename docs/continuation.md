@@ -51,8 +51,10 @@ next required check, retain only active caches, and clean them after use.
 
 ## Next implementation work
 
-After assessing the pending CI evidence, add adversarial endpoint-path replacement
-coverage, including cases where the retained inode itself remains unchanged.
+~~Add adversarial endpoint-path replacement coverage, including cases where the
+retained inode itself remains unchanged.~~ Closed: the hosted bind-mount
+controls cover the resolution end to end, and an ordinary unit control covers
+the decision (`bffbecf`). See the [socket policy](linux-socket-policy.md).
 Then complete the production guardian/helper/shim and fresh CLI entry composition,
 real launch-plan/Store/terminal integration, installation/update/removal with
 active-generation preservation, and authenticated restart recovery. See
@@ -1145,3 +1147,101 @@ that is designed and reviewed, `aswp recover RUN --confirm-stopped` stays the
 only way to clear an orphan, and stays attested rather than proved.
 `docs/linux-restart-recovery.md` records the argument, the corrected crash
 windows, and the facts a future design must start from.
+
+# Session continuation: 2026-11-26 (settlement accepted, handoff)
+
+Read this section first, then the project `AGENTS.md`. Work directly on
+`main`; no branch and no worktree is needed, and none exists. Everything
+required to resume lives in git and in hosted CI, so this transfers to another
+machine. Nothing on this machine is authoritative: the workspace target was
+cleaned (see "Local environment" below) and no local artifact is evidence.
+
+## State
+
+`main` is at `bffbecf`. The full hosted pipeline is green on it and on the
+three commits before it. The Linux managed-launch composition
+is qualified end to end on hosted Ubuntu 22.04 and 24.04 through the
+experimental `aswp managed-launch` entry, and durable run settlement is
+accepted by independent review - see "Restart-recovery groundwork review"
+above for the four rounds and their findings.
+
+Evidence recorded for the settlement gate:
+
+- `45726621377` (`725de95`) and `45727788440` (`9db2c94`): the
+  `installation lifecycle` step ran `tools/check_linux_settlement.py` and
+  passed, which is what qualifies post-intent settlement on the hosted path.
+- `45742793962` (`82cf291`): both `linux-manager-evidence` legs green,
+  including the `Evaluate fixed-user socket activation` step, which runs the
+  four connection-race controls on both images.
+- `45742793962` also ran the `installation lifecycle` step green on both
+  `linux-manager-evidence` legs after the settlement control was wired.
+
+Settlement invariants worth knowing before touching that code: the intent and
+its scope bind atomically (`Store::begin_linux_run`); every post-intent failure
+settles (drop the socket, observe retirement, `audit_exit(..., None, ...)`,
+propagate the relay error); `Journal::retry_audit` accepts no new receipt or
+exit; the adapter retains `(PendingLinuxScope, RetiredService,
+Option<TargetExit>)`, is bound to one invocation, derives that invocation from
+the bound service identity, refuses a foreign receipt before consuming the
+pending authority, refuses a second intent, and answers `Ok(false)` when
+already resolved. The two cases with no harness are recorded in
+`docs/linux-restart-recovery.md`: a receipt belonging to another association
+(not constructible outside a live manager) and a commit that fails after its
+observation. The adapter-level controls for both need a hosted fixture that
+drives `BoundService` and the adapter together; the Store-level versions
+already exist in `crates/agentswapper-core/src/store/linux_activated_journal_tests.rs`.
+
+## What is open
+
+1. Production helper installation and the real launcher composition
+   ([socket policy](linux-socket-policy.md),
+   [production integration](linux-production-integration.md)). This is the
+   remaining Linux work that is not a credentials or release gate.
+2. The namespace-origin implementation's independent review, which returned a
+   classifier refusal without a usable audit. It is not approval, and it must
+   not be resubmitted to bypass the refusal.
+3. Real-provider cells (14 deferred). The user asked to defer requesting
+   disposable profiles until the provider-free work is finished; do not ask for
+   credentials or run provider qualification unprompted.
+4. Windows, macOS containment; gents runtime ownership and cross-engine replay;
+   quota/fallback; release packaging, signing and notarization
+   ([release candidates](release-candidates.md)).
+5. Restart recovery stays unimplemented **by decision**. `aswp recover RUN
+   --confirm-stopped` records operator attestation and proves nothing. Any
+   provenance design must be user-unwritable, held by another identity, bound
+   to the specific run and launch, and pass its own review. Doctor must call
+   such a run a candidate for attestation and change nothing.
+
+## How to verify a change here
+
+- Local gates: `setpriv --inh-caps=-all cargo +1.98.0 fmt --all --check`,
+  `... clippy --locked --workspace --all-targets -- -D warnings`,
+  `... test --locked --workspace`, plus
+  `python3 -m unittest discover -s tools -p test_*.py` for the tool controls.
+  The workspace forbids unsafe code and denies clippy warnings; test modules
+  carry `#![allow(clippy::unwrap_used)]` and production code must not unwrap.
+  Most of the 43 hosted-only tests need the activation fixture and stay
+  ignored locally.
+- Hosted evidence: unauthenticated GitHub API only
+  (`/repos/shahzadlone/agent-swapper/actions/runs`, and `.../runs/<id>/jobs`
+  for per-step conclusions). Raw logs return 403. Record run ids next to the
+  claim they support, as the paragraphs above do.
+- Review: dispatch `audit-sol62` (read-only) for settlement, socket and
+  identity work. Sub-agents never commit or push; the dispatcher commits.
+  DeepSeek-backed agents often return 503 and `audit-fable` is out of credits.
+- A hosted control that cannot pass for the wrong reason is the norm to aim
+  for: assert the exact refusal status and diagnostic, the exact journal delta,
+  the absent observation, and reuse afterwards. Never add a sleeping wait to
+  observe an ordering; withdraw the claim instead.
+
+## Local environment
+
+The workspace target directory was cleaned at the end of this session
+(`cargo clean`, 9.6 GiB reclaimed), as `AGENTS.md` requires at checkpoints, so
+the first build is cold. `tools/linux-manager-evaluation/target` was already
+absent; recreate it only for the socket/manager controls. `/tmp` on this
+machine is at 95% with ~900 MiB free, mostly other sessions' probe and harness
+directories from 2026-11-25; a concurrent relink failed once under that
+pressure and succeeded on retry. If a link step fails without a clear reason,
+re-run before investigating the code, and do not delete another session's
+scratch to recover space.
